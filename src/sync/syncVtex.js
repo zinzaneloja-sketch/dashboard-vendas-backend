@@ -124,14 +124,30 @@ async function replaceItems(orderId, items) {
   }
 }
 
+// A API de listagem de pedidos da Vtex não deixa paginar além de ~3000 resultados
+// (page * per_page tem um teto). Para contas com muitos pedidos, quebramos o período
+// em janelas menores (7 dias) e buscamos cada janela separadamente.
+async function listOrdersInChunks(dateFrom, dateTo, chunkDays = 7) {
+  const summaries = [];
+  let windowStart = new Date(dateFrom);
+
+  while (windowStart < dateTo) {
+    const windowEnd = new Date(Math.min(windowStart.getTime() + chunkDays * 24 * 60 * 60 * 1000, dateTo.getTime()));
+    const chunk = await vtex.listOrders({ dateFrom: windowStart, dateTo: windowEnd });
+    summaries.push(...chunk);
+    windowStart = windowEnd;
+  }
+
+  return summaries;
+}
+
 async function syncOrders({ daysBack = DAYS_BACK } = {}) {
   const dateTo = new Date();
   const dateFrom = new Date(dateTo.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
   console.log(`[sync] buscando pedidos de ${dateFrom.toISOString()} até ${dateTo.toISOString()}`);
-  const summaries = await vtex.listOrders({ dateFrom, dateTo });
+  const summaries = await listOrdersInChunks(dateFrom, dateTo);
   console.log(`[sync] ${summaries.length} pedidos encontrados, buscando detalhes...`);
-
   let processed = 0;
   await mapWithConcurrency(summaries, CONCURRENCY, async (summary) => {
     const detail = await vtex.getOrderDetail(summary.orderId);
