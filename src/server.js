@@ -76,11 +76,20 @@ app.get("/api/overview/itens-por-pedido", handle((req) => overview.itensPorPedid
 app.get("/api/overview/ltv-categoria", handle((req) => overview.ltvPorCategoria(parseDateRange(req))));
 
 // ---- Sync manual (útil para forçar atualização ou popular pela primeira vez) ----
+// Aceita GET também (além de POST) para poder disparar direto pelo navegador.
 app.post("/api/sync/orders", handle(async (req) => {
   await syncOrders({ daysBack: req.body?.daysBack });
   return { ok: true };
 }));
+app.get("/api/sync/orders", handle(async (req) => {
+  await syncOrders({ daysBack: req.query?.daysBack ? Number(req.query.daysBack) : undefined });
+  return { ok: true };
+}));
 app.post("/api/sync/inventory", handle(async () => {
+  await syncInventory();
+  return { ok: true };
+}));
+app.get("/api/sync/inventory", handle(async () => {
   await syncInventory();
   return { ok: true };
 }));
