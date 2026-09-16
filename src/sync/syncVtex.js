@@ -1,7 +1,6 @@
 const { pool } = require("../db");
 const vtex = require("../connectors/vtex");
 
-// Vtex costuma tolerar bem paralelismo moderado; ajuste se receber 429 (Too Many Requests).
 const CONCURRENCY = Number(process.env.VTEX_SYNC_CONCURRENCY || 5);
 const DAYS_BACK = Number(process.env.VTEX_SYNC_DAYS_BACK || 90);
 
@@ -9,7 +8,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Executa `fn` para cada item de `items`, com no máximo `limit` chamadas em paralelo. */
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let index = 0;
@@ -30,7 +28,6 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-/** Extrai dias úteis/corridos de uma string de shippingEstimate da Vtex, ex: "5bd", "3d", "1h". */
 function parseShippingEstimateToDays(estimate) {
   if (!estimate) return null;
   const match = String(estimate).match(/(\d+)(bd|d|h)/i);
@@ -38,10 +35,9 @@ function parseShippingEstimateToDays(estimate) {
   const value = Number(match[1]);
   const unit = match[2].toLowerCase();
   if (unit === "h") return value / 24;
-  return value; // trata "bd" (dias úteis) e "d" (dias corridos) de forma equivalente, aproximação
+  return value;
 }
 
-/** Procura no histórico de status um evento de entrega efetiva. */
 function findDeliveredAt(orderDetail) {
   const history = orderDetail.statusHistory || orderDetail.changesAttachment?.changesData || [];
   for (const entry of history) {
@@ -85,14 +81,26 @@ function extractOrderFields(orderDetail) {
   };
 }
 
-function extractItems(orderDetail) {
+/**
+ * A Vtex retorna em `additionalInfo.categoriesIds` algo como "/14/28/", uma pilha de IDs
+ * numéricos (não nomes). Resolvemos o ID mais específico (o último) para o nome real da
+ * categoria usando o mapa vindo de `vtex.getCategoryMap()`. Se não encontrar no mapa,
+ * cai para o ID como último recurso.
+ */
+function resolveCategoryName(item, categoryMap = {}) {
+  const categoryId = item.additionalInfo?.categoriesIds?.split("/").filter(Boolean).pop();
+  if (categoryId && categoryMap[categoryId]) return categoryMap[categoryId];
+  return categoryId || item.productCategoryIds || null;
+}
+
+function extractItems(orderDetail, categoryMap = {}) {
   const items = orderDetail.items || [];
   return items.map((item) => ({
     order_id: orderDetail.orderId,
     product_id: String(item.productId),
     sku: String(item.id),
     product_name: item.name,
-    category: item.additionalInfo?.categoriesIds?.split("/").filter(Boolean).pop() || item.productCategoryIds || null,
+    category: resolveCategoryName(item, categoryMap),
     quantity: item.quantity,
     unit_price: (item.price || 0) / 100,
     total_price: ((item.price || 0) * (item.quantity || 0)) / 100,
@@ -124,9 +132,6 @@ async function replaceItems(orderId, items) {
   }
 }
 
-// A API de listagem de pedidos da Vtex não deixa paginar além de ~3000 resultados
-// (page * per_page tem um teto). Para contas com muitos pedidos, quebramos o período
-// em janelas menores (7 dias) e buscamos cada janela separadamente.
 async function listOrdersInChunks(dateFrom, dateTo, chunkDays = 7) {
   const summaries = [];
   let windowStart = new Date(dateFrom);
@@ -145,14 +150,20 @@ async function syncOrders({ daysBack = DAYS_BACK } = {}) {
   const dateTo = new Date();
   const dateFrom = new Date(dateTo.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
+  const categoryMap = await vtex.getCategoryMap().catch((err) => {
+    console.error("[sync] falha ao buscar árvore de categorias, usando IDs como fallback:", err.message);
+    return {};
+  });
+
   console.log(`[sync] buscando pedidos de ${dateFrom.toISOString()} até ${dateTo.toISOString()}`);
   const summaries = await listOrdersInChunks(dateFrom, dateTo);
   console.log(`[sync] ${summaries.length} pedidos encontrados, buscando detalhes...`);
+
   let processed = 0;
   await mapWithConcurrency(summaries, CONCURRENCY, async (summary) => {
     const detail = await vtex.getOrderDetail(summary.orderId);
     const fields = extractOrderFields(detail);
-    const items = extractItems(detail);
+    const items = extractItems(detail, categoryMap);
     await upsertOrder(fields);
     await replaceItems(fields.order_id, items);
     processed += 1;
@@ -165,6 +176,30 @@ async function syncOrders({ daysBack = DAYS_BACK } = {}) {
      ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
     [new Date().toISOString()]
   );
+}
+
+/**
+ * Backfill rápido: recalcula a categoria (nome real, não ID) dos itens de todos os pedidos
+ * já sincronizados, reaproveitando o JSON bruto (`raw`) já salvo no banco — sem precisar
+ * buscar cada pedido de novo na Vtex.
+ */
+async function backfillCategories() {
+  const categoryMap = await vtex.getCategoryMap();
+  console.log(`[backfill] mapa de categorias carregado: ${Object.keys(categoryMap).length} categorias.`);
+
+  const { rows } = await pool.query("SELECT order_id, raw FROM orders");
+  console.log(`[backfill] recalculando categorias de ${rows.length} pedidos...`);
+
+  let processed = 0;
+  await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
+    const orderDetail = typeof row.raw === "string" ? JSON.parse(row.raw) : row.raw;
+    const items = extractItems(orderDetail, categoryMap);
+    await replaceItems(row.order_id, items);
+    processed += 1;
+    if (processed % 200 === 0) console.log(`[backfill] ${processed}/${rows.length} pedidos recalculados`);
+  });
+
+  console.log(`[backfill] concluído: ${processed} pedidos recalculados.`);
 }
 
 async function syncInventory() {
@@ -195,10 +230,10 @@ async function syncInventory() {
     });
 
     page += 1;
-    if (page > 200) break; // trava de segurança
+    if (page > 200) break;
   }
 
   console.log(`[sync] estoque sincronizado: ${totalSynced} SKUs.`);
 }
 
-module.exports = { syncOrders, syncInventory };
+module.exports = { syncOrders, syncInventory, backfillCategories };
