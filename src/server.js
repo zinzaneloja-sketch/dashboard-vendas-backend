@@ -33,8 +33,9 @@ function handle(fn) {
       const result = await fn(req);
       res.json(result);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: err.message });
+      const details = err.response?.data || err.message;
+      console.error("[api]", JSON.stringify(details));
+      res.status(500).json({ error: err.message, details });
     }
   };
 }
