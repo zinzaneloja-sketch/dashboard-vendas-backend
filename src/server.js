@@ -99,10 +99,10 @@ app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
 
 // Sincroniza pedidos a cada 30 minutos e estoque a cada 6 horas.
 if (process.env.DISABLE_CRON !== "true") {
-  cron.schedule("*/30 * * * *", () => {
-    syncOrders().catch((err) => console.error("[cron] erro ao sincronizar pedidos:", err));
+    cron.schedule("*/30 * * * *", () => {
+    syncOrders().catch((err) => console.error("[cron] erro ao sincronizar pedidos:", err.response?.data || err.message));
   });
   cron.schedule("0 */6 * * *", () => {
-    syncInventory().catch((err) => console.error("[cron] erro ao sincronizar estoque:", err));
+    syncInventory().catch((err) => console.error("[cron] erro ao sincronizar estoque:", err.response?.data || err.message));
   });
 }
