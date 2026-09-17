@@ -113,9 +113,31 @@ function resolveCategoryName(item, categoryMap = {}) {
   return categoryId || item.productCategoryIds || null;
 }
 
+/**
+ * Monta um mapa { itemIndex -> warehouseId } a partir de `shippingData.logisticsInfo`.
+ * Cada entrada de `logisticsInfo` tem um `itemIndex` que indica a posição do item
+ * correspondente dentro do array `items` do pedido, e `deliveryIds[].warehouseId`
+ * identifica de qual depósito/loja (estratégia OMNI) aquele item foi expedido.
+ * Quando há mais de um `deliveryId` (fulfillment dividido entre lojas), usamos o
+ * primeiro — cobre a grande maioria dos casos; pedidos com split parcial de estoque
+ * ficam com uma pequena imprecisão aqui, mas não afeta o total de receita, só a
+ * atribuição de qual loja fez o envio.
+ */
+function buildWarehouseIndex(orderDetail) {
+  const map = {};
+  const logisticsInfo = orderDetail.shippingData?.logisticsInfo || [];
+  for (const li of logisticsInfo) {
+    if (li.itemIndex === undefined || li.itemIndex === null) continue;
+    const warehouseId = li.deliveryIds?.[0]?.warehouseId || null;
+    if (warehouseId) map[li.itemIndex] = warehouseId;
+  }
+  return map;
+}
+
 function extractItems(orderDetail, categoryMap = {}) {
   const items = orderDetail.items || [];
-  return items.map((item) => ({
+  const warehouseByIndex = buildWarehouseIndex(orderDetail);
+  return items.map((item, index) => ({
     order_id: orderDetail.orderId,
     product_id: String(item.productId),
     sku: String(item.id),
@@ -124,6 +146,7 @@ function extractItems(orderDetail, categoryMap = {}) {
     quantity: item.quantity,
     unit_price: (item.price || 0) / 100,
     total_price: ((item.price || 0) * (item.quantity || 0)) / 100,
+    warehouse_id: warehouseByIndex[index] || null,
   }));
 }
 
@@ -145,11 +168,52 @@ async function replaceItems(orderId, items) {
   await pool.query("DELETE FROM order_items WHERE order_id = $1", [orderId]);
   for (const item of items) {
     await pool.query(
-      `INSERT INTO order_items (order_id, product_id, sku, product_name, category, quantity, unit_price, total_price)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [item.order_id, item.product_id, item.sku, item.product_name, item.category, item.quantity, item.unit_price, item.total_price]
+      `INSERT INTO order_items (order_id, product_id, sku, product_name, category, quantity, unit_price, total_price, warehouse_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [item.order_id, item.product_id, item.sku, item.product_name, item.category, item.quantity, item.unit_price, item.total_price, item.warehouse_id]
     );
   }
+}
+
+/**
+ * Extrai os campos de um depósito/loja retornado por `vtex.listWarehouses()`.
+ * O formato exato do endpoint de configuração de depósitos pode variar um pouco
+ * por conta/versão da Vtex, então tentamos alguns caminhos alternativos e sempre
+ * guardamos o JSON bruto em `raw` — se o estado/cidade não vier certo, dá pra
+ * inspecionar `raw` direto no banco pra ajustar a extração sem precisar buscar de novo.
+ */
+function extractWarehouseFields(w) {
+  const address = w.address || w.Address || {};
+  return {
+    warehouse_id: String(w.id ?? w.warehouseId ?? w.Id ?? ""),
+    name: w.name ?? w.Name ?? null,
+    state: address.state ?? address.State ?? address.uf ?? address.Uf ?? null,
+    city: address.city ?? address.City ?? null,
+    is_active: w.isActive ?? w.IsActive ?? null,
+    raw: w,
+  };
+}
+
+/** Sincroniza a lista de depósitos/lojas (warehouses) cadastrados na Vtex. */
+async function syncWarehouses() {
+  const list = await vtex.listWarehouses();
+  console.log(`[sync] ${list.length} depósitos/lojas encontrados na Vtex.`);
+
+  let processed = 0;
+  for (const w of list) {
+    const f = extractWarehouseFields(w);
+    if (!f.warehouse_id) continue;
+    await pool.query(
+      `INSERT INTO warehouses (warehouse_id, name, state, city, is_active, raw, synced_at)
+       VALUES ($1,$2,$3,$4,$5,$6, now())
+       ON CONFLICT (warehouse_id) DO UPDATE SET name = $2, state = $3, city = $4, is_active = $5, raw = $6, synced_at = now()`,
+      [f.warehouse_id, f.name, f.state, f.city, f.is_active, JSON.stringify(f.raw)]
+    );
+    processed += 1;
+  }
+
+  console.log(`[sync] depósitos/lojas sincronizados: ${processed}.`);
+  return processed;
 }
 
 // A API de listagem de pedidos da Vtex não deixa paginar além de ~3000 resultados
@@ -207,9 +271,10 @@ async function syncOrders({ daysBack = DAYS_BACK, dateFrom: explicitFrom, dateTo
 }
 
 /**
- * Backfill rápido: recalcula a categoria (nome real, não ID) dos itens de todos os pedidos
- * já sincronizados, reaproveitando o JSON bruto (`raw`) já salvo no banco — sem precisar
- * buscar cada pedido de novo na Vtex. Útil depois de corrigir a resolução de categoria.
+ * Backfill rápido: recalcula a categoria (nome real, não ID) e a loja/depósito (warehouse_id)
+ * dos itens de todos os pedidos já sincronizados, reaproveitando o JSON bruto (`raw`) já salvo
+ * no banco — sem precisar buscar cada pedido de novo na Vtex. Roda `extractItems` de novo, então
+ * também é o jeito de popular `warehouse_id` em pedidos sincronizados antes dessa coluna existir.
  */
 async function backfillCategories() {
   const categoryMap = await vtex.getCategoryMap();
@@ -253,6 +318,14 @@ async function backfillOrderFields() {
 
 async function syncInventory() {
   console.log("[sync] sincronizando estoque...");
+
+  // Mantém a lista de lojas/depósitos (usada pra atribuir cada item vendido à loja OMNI
+  // que o expediu) sempre atualizada junto com o estoque. Erro aqui não deve travar a
+  // sincronização de estoque em si.
+  await syncWarehouses().catch((err) => {
+    console.error("[sync] falha ao sincronizar depósitos/lojas:", err.response?.data || err.message);
+  });
+
   let page = 1;
   let totalSynced = 0;
 
@@ -285,4 +358,4 @@ async function syncInventory() {
   console.log(`[sync] estoque sincronizado: ${totalSynced} SKUs.`);
 }
 
-module.exports = { syncOrders, syncInventory, backfillCategories, backfillOrderFields };
+module.exports = { syncOrders, syncInventory, syncWarehouses, backfillCategories, backfillOrderFields };
