@@ -38,7 +38,24 @@ function parseShippingEstimateToDays(estimate) {
   return value;
 }
 
+/**
+ * Procura a data de entrega efetiva do pedido. Nesta conta a Vtex não preenche
+ * `statusHistory` — quem carrega essa informação é `packageAttachment.packages[].courierStatus`
+ * (populado pela transportadora/Correios). Damos preferência a isso e caímos para o
+ * histórico de status como alternativa, caso outra conta/transportadora exponha por lá.
+ */
 function findDeliveredAt(orderDetail) {
+  const packages = orderDetail.packageAttachment?.packages || [];
+  for (const pkg of packages) {
+    const courierStatus = pkg.courierStatus;
+    if (!courierStatus) continue;
+    if (courierStatus.deliveredDate) return courierStatus.deliveredDate;
+    if (courierStatus.finished && Array.isArray(courierStatus.data)) {
+      const deliveredEntry = courierStatus.data.find((d) => (d.description || "").toLowerCase().includes("entreg"));
+      if (deliveredEntry) return deliveredEntry.lastChange || deliveredEntry.createDate || null;
+    }
+  }
+
   const history = orderDetail.statusHistory || orderDetail.changesAttachment?.changesData || [];
   for (const entry of history) {
     const status = (entry.status || entry.newState || "").toLowerCase();
@@ -132,6 +149,9 @@ async function replaceItems(orderId, items) {
   }
 }
 
+// A API de listagem de pedidos da Vtex não deixa paginar além de ~3000 resultados
+// (page * per_page tem um teto). Para contas com muitos pedidos, quebramos o período
+// em janelas menores (7 dias) e buscamos cada janela separadamente.
 async function listOrdersInChunks(dateFrom, dateTo, chunkDays = 7) {
   const summaries = [];
   let windowStart = new Date(dateFrom);
@@ -202,6 +222,27 @@ async function backfillCategories() {
   console.log(`[backfill] concluído: ${processed} pedidos recalculados.`);
 }
 
+/**
+ * Backfill rápido: recalcula os campos de entrega/logística (delivered_at, dias reais e
+ * prometidos de frete) de todos os pedidos já sincronizados, reaproveitando o `raw` salvo
+ * no banco. Útil depois de corrigir `findDeliveredAt` para achar a data de entrega certa.
+ */
+async function backfillOrderFields() {
+  const { rows } = await pool.query("SELECT order_id, raw FROM orders");
+  console.log(`[backfill-orders] recalculando campos de ${rows.length} pedidos...`);
+
+  let processed = 0;
+  await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
+    const orderDetail = typeof row.raw === "string" ? JSON.parse(row.raw) : row.raw;
+    const fields = extractOrderFields(orderDetail);
+    await upsertOrder(fields);
+    processed += 1;
+    if (processed % 200 === 0) console.log(`[backfill-orders] ${processed}/${rows.length} pedidos recalculados`);
+  });
+
+  console.log(`[backfill-orders] concluído: ${processed} pedidos recalculados.`);
+}
+
 async function syncInventory() {
   console.log("[sync] sincronizando estoque...");
   let page = 1;
@@ -236,4 +277,4 @@ async function syncInventory() {
   console.log(`[sync] estoque sincronizado: ${totalSynced} SKUs.`);
 }
 
-module.exports = { syncOrders, syncInventory, backfillCategories };
+module.exports = { syncOrders, syncInventory, backfillCategories, backfillOrderFields };
