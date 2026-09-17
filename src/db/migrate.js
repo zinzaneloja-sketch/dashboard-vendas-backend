@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS order_items (
   warehouse_id        TEXT
 );
 
+-- order_items já existia em produção antes da coluna warehouse_id existir, então o
+-- CREATE TABLE IF NOT EXISTS acima não a adiciona sozinho — garantimos aqui, ANTES de
+-- qualquer índice que use essa coluna (senão o CREATE INDEX abaixo falha na coluna que
+-- ainda não existe nessa tabela já existente).
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_id TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_orders_creation_date ON orders (creation_date);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);
@@ -56,10 +62,6 @@ CREATE TABLE IF NOT EXISTS warehouses (
   raw                 JSONB,
   synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- order_items já existia em produção antes da coluna warehouse_id existir, então o
--- CREATE TABLE IF NOT EXISTS acima não a adiciona sozinho — garantimos aqui.
-ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_id TEXT;
 
 CREATE TABLE IF NOT EXISTS inventory (
   product_id          TEXT NOT NULL,
