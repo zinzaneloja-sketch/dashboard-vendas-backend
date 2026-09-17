@@ -44,7 +44,7 @@ async function desempenhoLojas({ dateFrom, dateTo } = {}) {
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND o.status NOT IN ('canceled','cancelled')
-     GROUP BY warehouse_id, loja, loja_estado
+     GROUP BY oi.warehouse_id, w.name, w.state
      ORDER BY receita DESC`,
     [dateFrom || null, dateTo || null]
   );
@@ -80,7 +80,7 @@ async function lojaPorEstadoDestino({ dateFrom, dateTo } = {}) {
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND o.status NOT IN ('canceled','cancelled')
-     GROUP BY warehouse_id, loja, loja_estado, estado_destino
+     GROUP BY oi.warehouse_id, w.name, w.state, o.region_state
      ORDER BY loja, receita DESC`,
     [dateFrom || null, dateTo || null]
   );
