@@ -49,34 +49,60 @@ async function vendaPorCategoria({ dateFrom, dateTo } = {}) {
   return rows.map((r) => ({ categoria: r.category || "Sem categoria", receita: Number(r.receita), unidades: Number(r.unidades) }));
 }
 
-async function curvaAbcProdutos({ dateFrom, dateTo } = {}) {
+/**
+ * Curva ABC de produtos.
+ * @param {object} opts
+ * @param {Date}   opts.dateFrom
+ * @param {Date}   opts.dateTo
+ * @param {string} [opts.categoria]  Filtra por categoria de produto. "todas"/undefined = todas as categorias.
+ * @param {string} [opts.metric]     'receita' (padrão) ou 'quantidade' — base de cálculo da curva.
+ * @param {string[]} [opts.classes]  Subconjunto de classes a retornar, ex. ['A','B']. undefined = todas.
+ */
+async function curvaAbcProdutos({ dateFrom, dateTo, categoria, metric, classes } = {}) {
+  const useQuantidade = metric === "quantidade";
+  const categoriaFiltro = categoria && categoria !== "todas" ? categoria : null;
+
   const { rows } = await pool.query(
-    `SELECT oi.product_name, oi.category, SUM(oi.total_price) AS receita
+    `SELECT oi.product_name, oi.category,
+            SUM(oi.total_price) AS receita,
+            SUM(oi.quantity) AS unidades
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND o.status NOT IN ('canceled','cancelled')
+       AND ($3::text IS NULL OR oi.category = $3)
      GROUP BY oi.product_name, oi.category
-     ORDER BY receita DESC`,
-    [dateFrom || null, dateTo || null]
+     ORDER BY ${useQuantidade ? "unidades" : "receita"} DESC`,
+    [dateFrom || null, dateTo || null, categoriaFiltro]
   );
 
-  const total = rows.reduce((sum, r) => sum + Number(r.receita), 0) || 1;
+  const valorDe = (r) => Number(useQuantidade ? r.unidades : r.receita);
+  const total = rows.reduce((sum, r) => sum + valorDe(r), 0) || 1;
   let cumulative = 0;
-  return rows.map((r) => {
-    cumulative += Number(r.receita);
-    const cumulativePct = (cumulative / total) * 100;
-    const classe = cumulativePct <= 80 ? "A" : cumulativePct <= 95 ? "B" : "C";
+  const resultado = rows.map((r) => {
+    const valor = valorDe(r);
+    cumulative += valor;
+    const cumulativoPct = (cumulative / total) * 100;
+    const classe = cumulativoPct <= 80 ? "A" : cumulativoPct <= 95 ? "B" : "C";
     return {
       produto: r.product_name,
       categoria: r.category,
       receita: Number(r.receita),
-      participacaoPct: (Number(r.receita) / total) * 100,
-      cumulativoPct: cumulativePct,
+      unidades: Number(r.unidades),
+      metrica: useQuantidade ? "quantidade" : "receita",
+      valorBase: valor,
+      participacaoPct: (valor / total) * 100,
+      cumulativoPct,
       classe,
     };
   });
+
+  if (Array.isArray(classes) && classes.length > 0) {
+    const setClasses = new Set(classes.map((c) => String(c).toUpperCase()));
+    return resultado.filter((r) => setClasses.has(r.classe));
+  }
+  return resultado;
 }
 
 async function meiosDePagamento({ dateFrom, dateTo } = {}) {
@@ -166,12 +192,22 @@ async function giroDeEstoque({ dateFrom, dateTo } = {}) {
   });
 }
 
-async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50 } = {}) {
+/**
+ * Ranking de produtos por vendas x estoque, com giro e sugestão de reposição.
+ * @param {object} opts
+ * @param {Date}   opts.dateFrom
+ * @param {Date}   opts.dateTo
+ * @param {number} [opts.limit]         Limite de linhas (padrão 50; passe um valor alto/undefined a partir da rota "ver tudo").
+ * @param {number} [opts.coverageDays]  Dias de cobertura de estoque alvo para a sugestão de reposição (padrão 30).
+ */
+async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageDays = 30 } = {}) {
   const { rows } = await pool.query(
     `SELECT oi.product_name, oi.sku, oi.category,
             SUM(oi.quantity) AS unidades_vendidas,
             SUM(oi.total_price) AS receita,
-            COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel
+            COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel,
+            MIN(o.creation_date) AS primeira_venda,
+            MAX(o.creation_date) AS ultima_venda
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN inventory inv ON inv.sku = oi.sku
@@ -181,16 +217,41 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50 } = {}) {
      GROUP BY oi.product_name, oi.sku, oi.category
      ORDER BY unidades_vendidas DESC
      LIMIT $3`,
-    [dateFrom || null, dateTo || null, limit]
+    [dateFrom || null, dateTo || null, limit || null]
   );
-  return rows.map((r) => ({
-    produto: r.product_name,
-    sku: r.sku,
-    categoria: r.category,
-    unidadesVendidas: Number(r.unidades_vendidas),
-    receita: Number(r.receita),
-    estoqueDisponivel: Number(r.estoque_disponivel),
-  }));
+
+  // Duração do período analisado, em dias, para calcular a velocidade de vendas.
+  // Quando não há filtro de data explícito, usamos o intervalo real observado nos dados.
+  const periodoMs = dateFrom && dateTo ? dateTo.getTime() - dateFrom.getTime() : null;
+
+  return rows.map((r) => {
+    const unidadesVendidas = Number(r.unidades_vendidas);
+    const estoqueDisponivel = Number(r.estoque_disponivel);
+
+    let diasPeriodo = periodoMs ? periodoMs / 86400000 : null;
+    if (!diasPeriodo && r.primeira_venda && r.ultima_venda) {
+      const observado = (new Date(r.ultima_venda).getTime() - new Date(r.primeira_venda).getTime()) / 86400000;
+      diasPeriodo = observado > 0 ? observado : 1;
+    }
+    if (!diasPeriodo || diasPeriodo <= 0) diasPeriodo = 30;
+
+    const velocidadeDiaria = unidadesVendidas / diasPeriodo;
+    const giro = estoqueDisponivel > 0 ? unidadesVendidas / estoqueDisponivel : null;
+    const estoqueAlvo = velocidadeDiaria * coverageDays;
+    const sugestaoReposicao = Math.max(0, Math.ceil(estoqueAlvo - estoqueDisponivel));
+
+    return {
+      produto: r.product_name,
+      sku: r.sku,
+      categoria: r.category,
+      unidadesVendidas,
+      receita: Number(r.receita),
+      estoqueDisponivel,
+      giro,
+      velocidadeDiaria: Number(velocidadeDiaria.toFixed(2)),
+      sugestaoReposicao,
+    };
+  });
 }
 
 module.exports = {
