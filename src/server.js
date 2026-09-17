@@ -7,7 +7,7 @@ const vendas = require("./metrics/vendas");
 const logistica = require("./metrics/logistica");
 const marketing = require("./metrics/marketing");
 const overview = require("./metrics/overview");
-const { syncOrders, syncInventory, backfillCategories, backfillOrderFields } = require("./sync/syncVtex");
+const { syncOrders, syncInventory, syncWarehouses, backfillCategories, backfillOrderFields } = require("./sync/syncVtex");
 const { pool } = require("./db");
 const bcrypt = require("bcryptjs");
 const {
@@ -172,6 +172,8 @@ app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => ven
 // ---- Logística ----
 app.get("/api/logistica/sla-entrega", requireAuth, handle((req) => logistica.slaDeEntrega(parseDateRange(req))));
 app.get("/api/logistica/eficiencia-frete-regiao", requireAuth, handle((req) => logistica.eficienciaFretePorRegiao(parseDateRange(req))));
+app.get("/api/logistica/lojas", requireAuth, handle((req) => logistica.desempenhoLojas(parseDateRange(req))));
+app.get("/api/logistica/lojas-regiao", requireAuth, handle((req) => logistica.lojaPorEstadoDestino(parseDateRange(req))));
 
 // ---- Marketing ----
 app.get("/api/marketing/sessoes-categoria-produto", requireAuth, handle((req) => marketing.sessoesPorCategoriaEProduto({ dateRanges: parseGa4DateRanges(req) })));
@@ -211,8 +213,20 @@ app.get("/api/sync/inventory", requireAuth, requireAdmin, handle(async () => {
   await syncInventory();
   return { ok: true };
 }));
-// Backfill único: recalcula os nomes de categoria dos pedidos já sincronizados
-// (corrige o bug em que a categoria ficava salva como ID numérico da Vtex).
+// Sincroniza só a lista de lojas/depósitos (warehouses) — já roda sozinho junto com o
+// estoque a cada 6h, mas dá pra disparar na hora sem esperar o próximo ciclo.
+app.post("/api/sync/warehouses", requireAuth, requireAdmin, handle(async () => {
+  const total = await syncWarehouses();
+  return { ok: true, total };
+}));
+app.get("/api/sync/warehouses", requireAuth, requireAdmin, handle(async () => {
+  const total = await syncWarehouses();
+  return { ok: true, total };
+}));
+// Backfill único: recalcula os nomes de categoria e a loja/depósito (warehouse_id) dos
+// itens de todos os pedidos já sincronizados (corrige o bug em que a categoria ficava
+// salva como ID numérico da Vtex, e também popula warehouse_id em pedidos sincronizados
+// antes dessa coluna existir — rode depois de sincronizar as lojas pelo menos uma vez).
 app.get("/api/sync/backfill-categories", requireAuth, requireAdmin, handle(async () => {
   await backfillCategories();
   return { ok: true };
