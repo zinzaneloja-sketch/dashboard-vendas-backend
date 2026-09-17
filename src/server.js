@@ -52,7 +52,13 @@ function handle(fn) {
   };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+const PROCESS_STARTED_AT = new Date().toISOString();
+app.get("/health", (req, res) => res.json({
+  ok: true,
+  time: new Date().toISOString(),
+  processStartedAt: PROCESS_STARTED_AT,
+  uptimeSeconds: Math.round(process.uptime()),
+}));
 
 // ---- DEBUG TEMPORÁRIO: diagnosticar o login do admin. Remover depois de usar. ----
 app.get("/api/debug/admin-check", handle(async () => {
@@ -63,7 +69,14 @@ app.get("/api/debug/admin-check", handle(async () => {
   if (user && envPassword) {
     passwordMatchesEnv = await bcrypt.compare(envPassword, user.password_hash);
   }
+  const railwayVars = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("RAILWAY_")) railwayVars[key] = process.env[key];
+  }
   return {
+    processStartedAt: PROCESS_STARTED_AT,
+    uptimeSeconds: Math.round(process.uptime()),
+    railwayVars,
     adminEmailEnv: process.env.ADMIN_EMAIL || null,
     hasAdminPasswordEnv: !!envPassword,
     adminPasswordEnvLength: envPassword ? envPassword.length : null,
