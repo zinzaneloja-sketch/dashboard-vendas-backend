@@ -8,6 +8,7 @@ const logistica = require("./metrics/logistica");
 const marketing = require("./metrics/marketing");
 const overview = require("./metrics/overview");
 const { syncOrders, syncInventory, syncWarehouses, backfillCategories, backfillOrderFields } = require("./sync/syncVtex");
+const { runJobInBackground, getAllJobStatuses } = require("./sync/jobRunner");
 const { pool } = require("./db");
 const bcrypt = require("bcryptjs");
 const {
@@ -201,50 +202,53 @@ app.get("/api/overview/ltv-categoria", requireAuth, handle((req) => overview.ltv
 // ---- Sync manual (útil para forçar atualização ou popular pela primeira vez) ----
 // Aceita GET também (além de POST) para poder disparar direto pelo navegador.
 // Restrito ao admin: dispara chamadas pesadas na Vtex e reescreve dados sincronizados.
+//
+// IMPORTANTE: todas essas rotas disparam o trabalho pesado em segundo plano
+// (runJobInBackground) e respondem na hora, em vez de esperar o job inteiro
+// terminar. Isso evita "Failed to fetch" no navegador quando a sincronização
+// demora mais que o timeout do proxy/Railway (catálogo grande, período histórico
+// longo etc.) — o job continua rodando no servidor mesmo depois da resposta ter
+// sido enviada. O frontend consulta /api/sync/status pra saber quando terminou.
 app.post("/api/sync/orders", requireAuth, requireAdmin, handle(async (req) => {
-  await syncOrders({ daysBack: req.body?.daysBack, dateFrom: req.body?.dateFrom, dateTo: req.body?.dateTo });
-  return { ok: true };
+  const { daysBack, dateFrom, dateTo } = req.body || {};
+  return runJobInBackground("orders", () => syncOrders({ daysBack, dateFrom, dateTo }));
 }));
 app.get("/api/sync/orders", requireAuth, requireAdmin, handle(async (req) => {
-  await syncOrders({
+  return runJobInBackground("orders", () => syncOrders({
     daysBack: req.query?.daysBack ? Number(req.query.daysBack) : undefined,
     dateFrom: req.query?.dateFrom,
     dateTo: req.query?.dateTo,
-  });
-  return { ok: true };
+  }));
 }));
 app.post("/api/sync/inventory", requireAuth, requireAdmin, handle(async () => {
-  await syncInventory();
-  return { ok: true };
+  return runJobInBackground("inventory", () => syncInventory());
 }));
 app.get("/api/sync/inventory", requireAuth, requireAdmin, handle(async () => {
-  await syncInventory();
-  return { ok: true };
+  return runJobInBackground("inventory", () => syncInventory());
 }));
 // Sincroniza só a lista de lojas/depósitos (warehouses) — já roda sozinho junto com o
 // estoque a cada 6h, mas dá pra disparar na hora sem esperar o próximo ciclo.
 app.post("/api/sync/warehouses", requireAuth, requireAdmin, handle(async () => {
-  const total = await syncWarehouses();
-  return { ok: true, total };
+  return runJobInBackground("warehouses", () => syncWarehouses());
 }));
 app.get("/api/sync/warehouses", requireAuth, requireAdmin, handle(async () => {
-  const total = await syncWarehouses();
-  return { ok: true, total };
+  return runJobInBackground("warehouses", () => syncWarehouses());
 }));
 // Backfill único: recalcula os nomes de categoria e a loja/depósito (warehouse_id) dos
 // itens de todos os pedidos já sincronizados (corrige o bug em que a categoria ficava
 // salva como ID numérico da Vtex, e também popula warehouse_id em pedidos sincronizados
 // antes dessa coluna existir — rode depois de sincronizar as lojas pelo menos uma vez).
 app.get("/api/sync/backfill-categories", requireAuth, requireAdmin, handle(async () => {
-  await backfillCategories();
-  return { ok: true };
+  return runJobInBackground("backfill-categories", () => backfillCategories());
 }));
 // Backfill único: recalcula delivered_at / dias de frete real e prometido de todos os
 // pedidos já sincronizados (corrige o bug em que a entrega não era detectada).
 app.get("/api/sync/backfill-order-fields", requireAuth, requireAdmin, handle(async () => {
-  await backfillOrderFields();
-  return { ok: true };
+  return runJobInBackground("backfill-order-fields", () => backfillOrderFields());
 }));
+// Consultado pelo frontend depois de disparar um sync/backfill, pra saber quando o job
+// que ficou rodando em segundo plano terminou (e se deu certo ou não).
+app.get("/api/sync/status", requireAuth, requireAdmin, handle(async () => ({ jobs: await getAllJobStatuses() })));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
