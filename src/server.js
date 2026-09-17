@@ -7,9 +7,7 @@ const vendas = require("./metrics/vendas");
 const logistica = require("./metrics/logistica");
 const marketing = require("./metrics/marketing");
 const overview = require("./metrics/overview");
-const { syncOrders, syncInventory, backfillCategories } = require("./sync/syncVtex");
-const vtex = require("./connectors/vtex");
-const { pool } = require("./db");
+const { syncOrders, syncInventory, backfillCategories, backfillOrderFields } = require("./sync/syncVtex");
 
 const app = express();
 app.use(cors());
@@ -100,50 +98,11 @@ app.get("/api/sync/backfill-categories", handle(async () => {
   await backfillCategories();
   return { ok: true };
 }));
-
-// Endpoint temporário de diagnóstico: mostra a árvore de categorias e o formato bruto
-// de alguns itens de pedido, para entender por que a categoria não está resolvendo.
-app.get("/api/debug/category-check", handle(async () => {
-  const categoryMap = await vtex.getCategoryMap();
-  const { rows } = await pool.query("SELECT raw FROM orders LIMIT 3");
-  const samples = rows.map((r) => {
-    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
-    const item = (raw.items || [])[0] || {};
-    return {
-      productCategoryIds: item.productCategoryIds,
-      additionalInfo: item.additionalInfo,
-    };
-  });
-  return {
-    categoryMapSize: Object.keys(categoryMap).length,
-    categoryMapSample: Object.fromEntries(Object.entries(categoryMap).slice(0, 20)),
-    samples,
-  };
-}));
-
-// Diagnóstico temporário: por que SLA de Entrega / Eficiência de Frete vêm vazios.
-// Olha o histórico de status de pedidos antigos e já faturados, para achar como a Vtex
-// marca a entrega efetiva nesta conta (o nome do status pode não ser "delivered"/"entreg").
-app.get("/api/debug/delivery-check", handle(async () => {
-  const { rows } = await pool.query(
-    `SELECT order_id, status, creation_date, raw FROM orders
-     WHERE status = 'invoiced'
-     ORDER BY creation_date ASC
-     LIMIT 3`
-  );
-  const samples = rows.map((r) => {
-    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
-    return {
-      orderId: r.order_id,
-      status: r.status,
-      creationDate: r.creation_date,
-      statusHistory: raw.statusHistory || null,
-      changesAttachmentKeys: raw.changesAttachment ? Object.keys(raw.changesAttachment) : null,
-      packageAttachment: raw.packageAttachment || null,
-      shippingEstimate: raw.shippingData?.logisticsInfo?.[0]?.shippingEstimate || null,
-    };
-  });
-  return { samples };
+// Backfill único: recalcula delivered_at / dias de frete real e prometido de todos os
+// pedidos já sincronizados (corrige o bug em que a entrega não era detectada).
+app.get("/api/sync/backfill-order-fields", handle(async () => {
+  await backfillOrderFields();
+  return { ok: true };
 }));
 
 const PORT = process.env.PORT || 8080;
