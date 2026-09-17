@@ -145,7 +145,7 @@ app.delete("/api/auth/users/:id", requireAuth, requireAdmin, handle(async (req) 
 }));
 
 // ---- Vendas ----
-app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month })));
+app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo })));
 app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
   await vendas.setRevenueGoal({ month: new Date(req.body.month), goalValue: Number(req.body.goalValue) });
   return { ok: true };
