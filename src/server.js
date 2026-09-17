@@ -192,11 +192,15 @@ app.get("/api/overview/ltv-categoria", requireAuth, handle((req) => overview.ltv
 // Aceita GET também (além de POST) para poder disparar direto pelo navegador.
 // Restrito ao admin: dispara chamadas pesadas na Vtex e reescreve dados sincronizados.
 app.post("/api/sync/orders", requireAuth, requireAdmin, handle(async (req) => {
-  await syncOrders({ daysBack: req.body?.daysBack });
+  await syncOrders({ daysBack: req.body?.daysBack, dateFrom: req.body?.dateFrom, dateTo: req.body?.dateTo });
   return { ok: true };
 }));
 app.get("/api/sync/orders", requireAuth, requireAdmin, handle(async (req) => {
-  await syncOrders({ daysBack: req.query?.daysBack ? Number(req.query.daysBack) : undefined });
+  await syncOrders({
+    daysBack: req.query?.daysBack ? Number(req.query.daysBack) : undefined,
+    dateFrom: req.query?.dateFrom,
+    dateTo: req.query?.dateTo,
+  });
   return { ok: true };
 }));
 app.post("/api/sync/inventory", requireAuth, requireAdmin, handle(async () => {
