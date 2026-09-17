@@ -3,7 +3,21 @@ const vtex = require("../connectors/vtex");
 
 // Vtex costuma tolerar bem paralelismo moderado; ajuste se receber 429 (Too Many Requests).
 const CONCURRENCY = Number(process.env.VTEX_SYNC_CONCURRENCY || 5);
-const DAYS_BACK = Number(process.env.VTEX_SYNC_DAYS_BACK || 90);
+
+// Janela da sincronização de ROTINA (cron a cada 30 min, sem período explícito): só pedidos
+// criados nos últimos N dias. Antes esse valor era 90 e o cron reprocessava os 90 dias
+// inteiros do zero a cada rodada — pesado, e mesmo assim nada além disso se atualizava
+// sozinho. 30 dias já cobre folgado o ciclo normal de pagamento/separação/entrega; pedido
+// mais antigo que isso e que já foi entregue ou cancelado não muda mais, então não precisa
+// ser reprocessado de novo. Pra puxar/atualizar um período mais antigo pontualmente, use o
+// botão "Sincronizar período histórico" no Admin (ou passe dateFrom/dateTo explícitos aqui).
+const DAYS_BACK = Number(process.env.VTEX_SYNC_DAYS_BACK || 30);
+
+// Rede de segurança pra pedido "preso": mesmo fora da janela de rotina acima, se um pedido
+// ainda não foi entregue nem cancelado, vale a pena reconferir o status dele por mais um
+// tempo (atraso de transportadora, troca, etc.) — mas só até esse limite, senão a rotina
+// voltaria a crescer sem fim com pedidos antigos que nunca fecham direito na Vtex.
+const REOPEN_DAYS = Number(process.env.VTEX_SYNC_REOPEN_DAYS || 180);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -233,12 +247,51 @@ async function listOrdersInChunks(dateFrom, dateTo, chunkDays = 7) {
   return summaries;
 }
 
+/** Busca o detalhe de um pedido na Vtex e grava (fields + items) no banco. */
+async function syncOneOrderById(orderId, categoryMap) {
+  const detail = await vtex.getOrderDetail(orderId);
+  const fields = extractOrderFields(detail);
+  const items = extractItems(detail, categoryMap);
+  await upsertOrder(fields);
+  await replaceItems(fields.order_id, items);
+}
+
+/**
+ * Reconfere pedidos mais antigos que a janela de rotina, mas que no nosso banco ainda não
+ * aparecem como "fechados" (nem entregues, nem cancelados) — cobre o caso de um pedido
+ * demorar mais que `daysBack` pra ser entregue/cancelado (atraso de transportadora, troca,
+ * etc.), sem precisar reprocessar TODOS os pedidos antigos de novo. Limitado a `REOPEN_DAYS`
+ * pra não crescer sem fim com pedidos velhos que nunca fecham direito na Vtex.
+ */
+async function reopenPendingOrders(categoryMap, dateFrom) {
+  const reopenSince = new Date(dateFrom.getTime() - REOPEN_DAYS * 24 * 60 * 60 * 1000);
+  const { rows } = await pool.query(
+    `SELECT order_id FROM orders
+     WHERE creation_date < $1 AND creation_date >= $2
+       AND status NOT IN ('canceled','cancelled')
+       AND delivered_at IS NULL`,
+    [dateFrom, reopenSince]
+  );
+  if (!rows.length) return 0;
+
+  console.log(`[sync] reconferindo ${rows.length} pedido(s) mais antigo(s) que ainda não fecharam (nem entregue, nem cancelado)...`);
+  let processed = 0;
+  await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
+    await syncOneOrderById(row.order_id, categoryMap);
+    processed += 1;
+  });
+  console.log(`[sync] reconferência concluída: ${processed} pedido(s) atualizados.`);
+  return processed;
+}
+
 // Aceita um período explícito (dateFrom/dateTo) para backfill de datas específicas do
 // passado — ex: sincronizar só novembro de 2021, sem precisar reprocessar tudo desde então.
 // Sem período explícito, cai no comportamento padrão: últimos `daysBack` dias a partir de hoje
-// (é isso que o cron automático usa a cada 30 minutos, e por isso o painel só enxerga pedidos
-// dentro dessa janela — nada mais antigo que isso chega a ser sincronizado sozinho).
+// (é isso que o cron automático usa a cada 30 minutos). Nesse caso (rotina), também reconfere
+// pedidos mais antigos ainda em aberto — ver `reopenPendingOrders` — pra pegar atualizações
+// tardias sem precisar reprocessar tudo desde sempre a cada rodada.
 async function syncOrders({ daysBack = DAYS_BACK, dateFrom: explicitFrom, dateTo: explicitTo } = {}) {
+  const isRoutine = !explicitFrom && !explicitTo;
   const dateTo = explicitTo ? new Date(explicitTo) : new Date();
   const dateFrom = explicitFrom ? new Date(explicitFrom) : new Date(dateTo.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
@@ -253,16 +306,19 @@ async function syncOrders({ daysBack = DAYS_BACK, dateFrom: explicitFrom, dateTo
 
   let processed = 0;
   await mapWithConcurrency(summaries, CONCURRENCY, async (summary) => {
-    const detail = await vtex.getOrderDetail(summary.orderId);
-    const fields = extractOrderFields(detail);
-    const items = extractItems(detail, categoryMap);
-    await upsertOrder(fields);
-    await replaceItems(fields.order_id, items);
+    await syncOneOrderById(summary.orderId, categoryMap);
     processed += 1;
     if (processed % 50 === 0) console.log(`[sync] ${processed}/${summaries.length} pedidos processados`);
   });
 
   console.log(`[sync] concluído: ${processed} pedidos sincronizados.`);
+
+  if (isRoutine) {
+    await reopenPendingOrders(categoryMap, dateFrom).catch((err) => {
+      console.error("[sync] falha ao reconferir pedidos antigos em aberto:", err.response?.data || err.message);
+    });
+  }
+
   await pool.query(
     `INSERT INTO sync_state (key, value, updated_at) VALUES ('last_order_sync', $1, now())
      ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
