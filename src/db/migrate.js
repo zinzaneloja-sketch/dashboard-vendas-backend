@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS warehouses (
   synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Correção manual do estado de cada loja/depósito OMNI. A API de depósitos da Vtex
+-- (/api/logistics/pvt/configuration/warehouses) nessa conta não retorna endereço/UF —
+-- isso normalmente só vem cadastrado nos "pickup points", não nos warehouses de estoque —
+-- então o estado real de cada loja precisa ser informado manualmente aqui pelo admin
+-- (tela "Estados das lojas" no Admin). Quando existir, esse valor tem prioridade sobre
+-- warehouses.state nas métricas de logística.
+CREATE TABLE IF NOT EXISTS warehouse_state_overrides (
+  warehouse_id        TEXT PRIMARY KEY,
+  state               TEXT NOT NULL,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS inventory (
   product_id          TEXT NOT NULL,
   sku                 TEXT PRIMARY KEY,
