@@ -1,15 +1,33 @@
 const { pool } = require("../db");
 
-async function receitaVsMeta({ month } = {}) {
-  const ref = month ? new Date(month) : new Date();
-  const monthStart = new Date(ref.getFullYear(), ref.getMonth(), 1);
-  const monthEnd = new Date(ref.getFullYear(), ref.getMonth() + 1, 1);
+/**
+ * Receita vs. meta cadastrada. Metas são sempre mensais (`revenue_goals` é indexada por
+ * mês), mas o card de Vendas usa o filtro de período do topo do painel — que pode ser
+ * qualquer intervalo, não só um mês cheio. Por isso: quando vem `dateFrom`/`dateTo` (period
+ * filter selecionado pelo usuário), a receita é calculada exatamente nesse intervalo, e a
+ * meta usada é a do mês em que esse intervalo COMEÇA (já que uma meta só existe por mês).
+ * Sem `dateFrom`/`dateTo` (uso do card de Insights, que não tem filtro de período), cai no
+ * comportamento antigo: mês calendário atual (ou `month`, se informado) por inteiro.
+ */
+async function receitaVsMeta({ dateFrom, dateTo, month } = {}) {
+  const periodFrom = dateFrom ? new Date(dateFrom) : null;
+  const periodTo = dateTo ? new Date(dateTo) : null;
+
+  // Usa os componentes UTC (não os locais) pra achar o 1º dia do mês: dateFrom chega como
+  // ISO em UTC do frontend, e o fuso do processo Node pode não ser UTC — misturar getMonth()
+  // (local) com um valor que é UTC desloca o mês em 1 perto da virada do dia/mês.
+  const monthRef = periodFrom || (month ? new Date(month) : new Date());
+  const monthStart = new Date(Date.UTC(monthRef.getUTCFullYear(), monthRef.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(monthRef.getUTCFullYear(), monthRef.getUTCMonth() + 1, 1));
+
+  const revenueFrom = periodFrom || monthStart;
+  const revenueTo = periodTo || monthEnd;
 
   const { rows: revenueRows } = await pool.query(
     `SELECT COALESCE(SUM(total_value),0) AS receita
      FROM orders
      WHERE creation_date >= $1 AND creation_date < $2 AND status NOT IN ('canceled','cancelled')`,
-    [monthStart, monthEnd]
+    [revenueFrom, revenueTo]
   );
 
   const { rows: goalRows } = await pool.query(
@@ -21,12 +39,15 @@ async function receitaVsMeta({ month } = {}) {
     mes: monthStart.toISOString().slice(0, 7),
     receita: Number(revenueRows[0].receita),
     meta: goalRows[0] ? Number(goalRows[0].goal_value) : null,
+    seguePeriodo: !!(periodFrom && periodTo),
   };
 }
 
 async function setRevenueGoal({ month, goalValue }) {
-  const monthStart = new Date(month.getFullYear ? month : new Date(month));
-  const monthKey = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1).toISOString().slice(0, 10);
+  // Mesmo cuidado de receitaVsMeta acima: usa componentes UTC pra não deslocar o mês
+  // dependendo do fuso do processo Node.
+  const ref = month.getFullYear ? month : new Date(month);
+  const monthKey = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), 1)).toISOString().slice(0, 10);
   await pool.query(
     `INSERT INTO revenue_goals (month, goal_value) VALUES ($1, $2)
      ON CONFLICT (month) DO UPDATE SET goal_value = $2`,
