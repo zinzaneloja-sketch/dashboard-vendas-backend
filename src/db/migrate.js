@@ -76,10 +76,29 @@ CREATE TABLE IF NOT EXISTS users (
 // Garante que o admin master exista. Se ADMIN_PASSWORD não vier configurada,
 // gera uma senha aleatória e a imprime UMA vez nos logs do deploy, para que
 // o dono da conta consiga recuperá-la ali (nunca fica salva em texto puro).
+//
+// Se o admin JÁ existir e a variável ADMIN_PASSWORD estiver definida, a senha
+// é redefinida para o valor da variável a cada deploy — isso permite trocar a
+// senha do admin master a qualquer momento só mudando a variável no Railway,
+// e também corrige o caso em que o usuário foi criado antes de ADMIN_PASSWORD
+// estar configurada (senha aleatória "perdida" nos logs de um deploy anterior).
 async function seedAdmin() {
   const email = (process.env.ADMIN_EMAIL || "tbarone@zinzane.com.br").toLowerCase();
   const { rows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
-  if (rows.length > 0) return;
+
+  if (rows.length > 0) {
+    if (process.env.ADMIN_PASSWORD) {
+      const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
+      await pool.query(
+        "UPDATE users SET password_hash = $2, role = 'admin' WHERE email = $1",
+        [email, hash]
+      );
+      console.log("========================================================");
+      console.log(`[seed] Senha do admin ${email} redefinida a partir da variável ADMIN_PASSWORD.`);
+      console.log("========================================================");
+    }
+    return;
+  }
 
   const password = process.env.ADMIN_PASSWORD || Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6).toUpperCase();
   const hash = await bcrypt.hash(password, 10);
