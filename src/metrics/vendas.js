@@ -187,34 +187,63 @@ async function receitaPorRegiao({ dateFrom, dateTo } = {}) {
   }));
 }
 
-async function giroDeEstoque({ dateFrom, dateTo } = {}) {
+/**
+ * Tempo médio até a 1a venda, por categoria — substitui o antigo "giro de estoque".
+ * Como entram referências novas toda semana dentro de uma mesma categoria (ex: vestidos),
+ * uma média simples por categoria ficaria distorcida se misturasse produto recém-lançado
+ * (que ainda nem teve chance de vender) com produto antigo. Por isso:
+ *   1. Calcula a data da 1a venda de cada SKU (vitalícia, sem filtro de período — é um fato
+ *      fixo do produto, não faz sentido recalcular só dentro da janela).
+ *   2. Só entram na média os SKUs que tiveram QUALQUER venda dentro do período filtrado
+ *      (mesmo critério que o giro antigo usava pra decidir "quais produtos essa categoria
+ *      vendeu no período") — um SKU sem nenhuma venda ainda não entra, então não puxa a
+ *      média artificialmente pra baixo.
+ *   3. "Dias até vender" = data da 1a venda − data em que o produto entrou no site
+ *      (`inventory.date_first_available`, sincronizado da Vtex). SKU sem essa data
+ *      cadastrada, ou com 1a venda anterior à data de entrada (inconsistência de dados),
+ *      fica de fora — não dá pra calcular.
+ */
+async function tempoAteVendaPorCategoria({ dateFrom, dateTo } = {}) {
   const { rows } = await pool.query(
-    `SELECT oi.category,
-            SUM(oi.quantity) AS unidades_vendidas,
-            COALESCE(AVG(inv.available_quantity), 0) AS estoque_medio
-     FROM order_items oi
-     JOIN orders o ON o.order_id = oi.order_id
-     LEFT JOIN inventory inv ON inv.sku = oi.sku
-     WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
-       AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
-     GROUP BY oi.category`,
+    `WITH primeira_venda AS (
+       SELECT oi.sku, MIN(o.creation_date) AS data_primeira_venda
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       WHERE o.status NOT IN ('canceled','cancelled')
+       GROUP BY oi.sku
+     ),
+     skus_no_periodo AS (
+       SELECT DISTINCT oi.sku, oi.category
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       WHERE o.status NOT IN ('canceled','cancelled')
+         AND ($1::timestamptz IS NULL OR o.creation_date >= $1)
+         AND ($2::timestamptz IS NULL OR o.creation_date < $2)
+     )
+     SELECT sp.category,
+            COUNT(*) AS produtos_considerados,
+            AVG(EXTRACT(EPOCH FROM (pv.data_primeira_venda - inv.date_first_available)) / 86400) AS dias_medio
+     FROM skus_no_periodo sp
+     JOIN primeira_venda pv ON pv.sku = sp.sku
+     JOIN inventory inv ON inv.sku = sp.sku
+     WHERE inv.date_first_available IS NOT NULL
+       AND pv.data_primeira_venda >= inv.date_first_available
+     GROUP BY sp.category`,
     [dateFrom || null, dateTo || null]
   );
-  return rows.map((r) => {
-    const estoqueMedio = Number(r.estoque_medio) || 0;
-    const unidades = Number(r.unidades_vendidas);
-    return {
-      categoria: r.category || "Sem categoria",
-      unidadesVendidas: unidades,
-      estoqueMedio,
-      giro: estoqueMedio > 0 ? unidades / estoqueMedio : null,
-    };
-  });
+  return rows.map((r) => ({
+    categoria: r.category || "Sem categoria",
+    produtosConsiderados: Number(r.produtos_considerados),
+    diasMedioAteVenda: r.dias_medio != null ? Number(r.dias_medio) : null,
+  }));
 }
 
 /**
- * Ranking de produtos por vendas x estoque, com giro e sugestão de reposição.
+ * Ranking de produtos por vendas x estoque, com "dias até a 1a venda" e sugestão de
+ * reposição. `diasAteVenda` é um fato vitalício do produto (data da 1a venda de todos os
+ * tempos − data em que entrou no site), calculado à parte do filtro de período — que aqui
+ * só decide QUAIS produtos aparecem no ranking (os que venderam algo na janela), não
+ * recalcula a data da 1a venda em si.
  * @param {object} opts
  * @param {Date}   opts.dateFrom
  * @param {Date}   opts.dateTo
@@ -223,15 +252,25 @@ async function giroDeEstoque({ dateFrom, dateTo } = {}) {
  */
 async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageDays = 30 } = {}) {
   const { rows } = await pool.query(
-    `SELECT oi.product_name, oi.sku, oi.category,
+    `WITH primeira_venda_vida AS (
+       SELECT oi.sku, MIN(o.creation_date) AS data_primeira_venda
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       WHERE o.status NOT IN ('canceled','cancelled')
+       GROUP BY oi.sku
+     )
+     SELECT oi.product_name, oi.sku, oi.category,
             SUM(oi.quantity) AS unidades_vendidas,
             SUM(oi.total_price) AS receita,
             COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel,
             MIN(o.creation_date) AS primeira_venda,
-            MAX(o.creation_date) AS ultima_venda
+            MAX(o.creation_date) AS ultima_venda,
+            MAX(inv.date_first_available) AS data_entrada_site,
+            MAX(pvv.data_primeira_venda) AS data_primeira_venda_vida
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN inventory inv ON inv.sku = oi.sku
+     LEFT JOIN primeira_venda_vida pvv ON pvv.sku = oi.sku
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND o.status NOT IN ('canceled','cancelled')
@@ -257,7 +296,11 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
     if (!diasPeriodo || diasPeriodo <= 0) diasPeriodo = 30;
 
     const velocidadeDiaria = unidadesVendidas / diasPeriodo;
-    const giro = estoqueDisponivel > 0 ? unidadesVendidas / estoqueDisponivel : null;
+    let diasAteVenda = null;
+    if (r.data_entrada_site && r.data_primeira_venda_vida) {
+      const dias = (new Date(r.data_primeira_venda_vida).getTime() - new Date(r.data_entrada_site).getTime()) / 86400000;
+      if (dias >= 0) diasAteVenda = dias;
+    }
     const estoqueAlvo = velocidadeDiaria * coverageDays;
     const sugestaoReposicao = Math.max(0, Math.ceil(estoqueAlvo - estoqueDisponivel));
 
@@ -268,7 +311,7 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
       unidadesVendidas,
       receita: Number(r.receita),
       estoqueDisponivel,
-      giro,
+      diasAteVenda,
       velocidadeDiaria: Number(velocidadeDiaria.toFixed(2)),
       sugestaoReposicao,
     };
@@ -283,6 +326,6 @@ module.exports = {
   meiosDePagamento,
   eficienciaFretePorRegiao,
   receitaPorRegiao,
-  giroDeEstoque,
+  tempoAteVendaPorCategoria,
   rankingProdutosXEstoque,
 };
