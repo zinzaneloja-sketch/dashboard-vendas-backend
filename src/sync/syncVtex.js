@@ -372,6 +372,17 @@ async function backfillOrderFields() {
   console.log(`[backfill-orders] concluído: ${processed} pedidos recalculados.`);
 }
 
+/**
+ * Extrai a data em que o SKU "entrou no site" a partir do detalhe do catálogo da Vtex.
+ * `DateFirstAvailable` é o campo documentado pra isso, mas guardamos algumas variações
+ * defensivamente (e o JSON bruto) porque o nome exato pode variar por conta/versão —
+ * se vier tudo null, dá pra inspecionar a coluna `raw` da tabela `inventory` no banco
+ * pra achar o campo certo, sem precisar buscar de novo na Vtex.
+ */
+function extractDateFirstAvailable(detail) {
+  return detail.DateFirstAvailable || detail.ReleaseDate || detail.Product?.ReleaseDate || null;
+}
+
 async function syncInventory() {
   console.log("[sync] sincronizando estoque...");
 
@@ -397,12 +408,13 @@ async function syncInventory() {
       if (!detail) return;
 
       const available = (inventory?.balance || []).reduce((sum, b) => sum + (b.totalQuantity || 0), 0);
+      const dateFirstAvailable = extractDateFirstAvailable(detail);
 
       await pool.query(
-        `INSERT INTO inventory (product_id, sku, product_name, category, available_quantity, synced_at)
-         VALUES ($1,$2,$3,$4,$5, now())
-         ON CONFLICT (sku) DO UPDATE SET product_id = $1, product_name = $3, category = $4, available_quantity = $5, synced_at = now()`,
-        [String(detail.ProductId), String(skuId), detail.SkuName || detail.NameComplete, detail.CategoryName || null, available]
+        `INSERT INTO inventory (product_id, sku, product_name, category, available_quantity, date_first_available, raw, synced_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+         ON CONFLICT (sku) DO UPDATE SET product_id = $1, product_name = $3, category = $4, available_quantity = $5, date_first_available = $6, raw = $7, synced_at = now()`,
+        [String(detail.ProductId), String(skuId), detail.SkuName || detail.NameComplete, detail.CategoryName || null, available, dateFirstAvailable, JSON.stringify(detail)]
       );
       totalSynced += 1;
     });
