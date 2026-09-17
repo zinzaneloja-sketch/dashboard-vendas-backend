@@ -121,6 +121,31 @@ app.get("/api/debug/category-check", handle(async () => {
   };
 }));
 
+// Diagnóstico temporário: por que SLA de Entrega / Eficiência de Frete vêm vazios.
+// Olha o histórico de status de pedidos antigos e já faturados, para achar como a Vtex
+// marca a entrega efetiva nesta conta (o nome do status pode não ser "delivered"/"entreg").
+app.get("/api/debug/delivery-check", handle(async () => {
+  const { rows } = await pool.query(
+    `SELECT order_id, status, creation_date, raw FROM orders
+     WHERE status = 'invoiced'
+     ORDER BY creation_date ASC
+     LIMIT 3`
+  );
+  const samples = rows.map((r) => {
+    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
+    return {
+      orderId: r.order_id,
+      status: r.status,
+      creationDate: r.creation_date,
+      statusHistory: raw.statusHistory || null,
+      changesAttachmentKeys: raw.changesAttachment ? Object.keys(raw.changesAttachment) : null,
+      packageAttachment: raw.packageAttachment || null,
+      shippingEstimate: raw.shippingData?.logisticsInfo?.[0]?.shippingEstimate || null,
+    };
+  });
+  return { samples };
+}));
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
 
