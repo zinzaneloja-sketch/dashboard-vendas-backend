@@ -8,6 +8,8 @@ const logistica = require("./metrics/logistica");
 const marketing = require("./metrics/marketing");
 const overview = require("./metrics/overview");
 const { syncOrders, syncInventory, backfillCategories } = require("./sync/syncVtex");
+const vtex = require("./connectors/vtex");
+const { pool } = require("./db");
 
 const app = express();
 app.use(cors());
@@ -61,53 +63,4 @@ app.get("/api/logistica/sla-entrega", handle((req) => logistica.slaDeEntrega(par
 app.get("/api/logistica/eficiencia-frete-regiao", handle((req) => logistica.eficienciaFretePorRegiao(parseDateRange(req))));
 
 // ---- Marketing ----
-app.get("/api/marketing/sessoes-categoria-produto", handle((req) => marketing.sessoesPorCategoriaEProduto({ dateRanges: parseGa4DateRanges(req) })));
-app.get("/api/marketing/ticket-medio", handle((req) => marketing.ticketMedio(parseDateRange(req))));
-app.get("/api/marketing/conversao-origem", handle((req) => marketing.conversaoPorOrigem({ dateRanges: parseGa4DateRanges(req) })));
-app.get("/api/marketing/receita-categoria-produto", handle((req) => marketing.receitaPorCategoriaEProduto(parseDateRange(req))));
-app.get("/api/marketing/receita-pagamento-regiao", handle((req) => marketing.receitaPorPagamentoERegiao(parseDateRange(req))));
-
-// ---- Overview ----
-app.get("/api/overview/receita-dispositivo", handle((req) => overview.receitaPorDispositivo({ dateRanges: parseGa4DateRanges(req), source: req.query.source })));
-app.get("/api/overview/taxa-rejeicao", handle((req) => overview.taxaDeRejeicao({ dateRanges: parseGa4DateRanges(req), source: req.query.source })));
-app.get("/api/overview/taxa-conversao", handle((req) => overview.taxaDeConversao({ dateRanges: parseGa4DateRanges(req), source: req.query.source })));
-app.get("/api/overview/tracking-pedido", handle((req) => overview.trackingDePedido(parseDateRange(req))));
-app.get("/api/overview/itens-por-pedido", handle((req) => overview.itensPorPedido(parseDateRange(req))));
-app.get("/api/overview/ltv-categoria", handle((req) => overview.ltvPorCategoria(parseDateRange(req))));
-
-// ---- Sync manual ----
-app.post("/api/sync/orders", handle(async (req) => {
-  await syncOrders({ daysBack: req.body?.daysBack });
-  return { ok: true };
-}));
-app.get("/api/sync/orders", handle(async (req) => {
-  await syncOrders({ daysBack: req.query?.daysBack ? Number(req.query.daysBack) : undefined });
-  return { ok: true };
-}));
-app.post("/api/sync/inventory", handle(async () => {
-  await syncInventory();
-  return { ok: true };
-}));
-app.get("/api/sync/inventory", handle(async () => {
-  await syncInventory();
-  return { ok: true };
-}));
-// Backfill único: recalcula os nomes de categoria dos pedidos já sincronizados
-// (corrige o bug em que a categoria ficava salva como ID numérico da Vtex).
-app.get("/api/sync/backfill-categories", handle(async () => {
-  await backfillCategories();
-  return { ok: true };
-}));
-
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
-
-// Sincroniza pedidos a cada 30 minutos e estoque a cada 6 horas.
-if (process.env.DISABLE_CRON !== "true") {
-  cron.schedule("*/30 * * * *", () => {
-    syncOrders().catch((err) => console.error("[cron] erro ao sincronizar pedidos:", err.response?.data || err.message));
-  });
-  cron.schedule("0 */6 * * *", () => {
-    syncInventory().catch((err) => console.error("[cron] erro ao sincronizar estoque:", err.response?.data || err.message));
-  });
-}
+app.get("/api/marketing/sessoes-categoria-produto", handle((req) =>
