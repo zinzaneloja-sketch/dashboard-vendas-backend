@@ -34,13 +34,32 @@ CREATE TABLE IF NOT EXISTS order_items (
   category            TEXT,
   quantity            NUMERIC(12,2) NOT NULL DEFAULT 0,
   unit_price          NUMERIC(14,2) NOT NULL DEFAULT 0,
-  total_price         NUMERIC(14,2) NOT NULL DEFAULT 0
+  total_price         NUMERIC(14,2) NOT NULL DEFAULT 0,
+  warehouse_id        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_creation_date ON orders (creation_date);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_category ON order_items (category);
+CREATE INDEX IF NOT EXISTS idx_order_items_warehouse_id ON order_items (warehouse_id);
+
+-- Lojas/depósitos OMNI cadastrados na Vtex (de onde o estoque do e-commerce é expedido).
+-- Sincronizado via syncWarehouses(); guardamos o JSON bruto porque o formato exato do
+-- endpoint de configuração de depósitos da Vtex pode variar por conta.
+CREATE TABLE IF NOT EXISTS warehouses (
+  warehouse_id        TEXT PRIMARY KEY,
+  name                TEXT,
+  state               TEXT,
+  city                TEXT,
+  is_active           BOOLEAN,
+  raw                 JSONB,
+  synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- order_items já existia em produção antes da coluna warehouse_id existir, então o
+-- CREATE TABLE IF NOT EXISTS acima não a adiciona sozinho — garantimos aqui.
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_id TEXT;
 
 CREATE TABLE IF NOT EXISTS inventory (
   product_id          TEXT NOT NULL,
