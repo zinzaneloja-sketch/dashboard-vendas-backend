@@ -1,6 +1,7 @@
 const { pool } = require("../db");
 const vtex = require("../connectors/vtex");
 
+// Vtex costuma tolerar bem paralelismo moderado; ajuste se receber 429 (Too Many Requests).
 const CONCURRENCY = Number(process.env.VTEX_SYNC_CONCURRENCY || 5);
 const DAYS_BACK = Number(process.env.VTEX_SYNC_DAYS_BACK || 90);
 
@@ -8,6 +9,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Executa `fn` para cada item de `items`, com no máximo `limit` chamadas em paralelo. */
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let index = 0;
@@ -28,6 +30,7 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
+/** Extrai dias úteis/corridos de uma string de shippingEstimate da Vtex, ex: "5bd", "3d", "1h". */
 function parseShippingEstimateToDays(estimate) {
   if (!estimate) return null;
   const match = String(estimate).match(/(\d+)(bd|d|h)/i);
@@ -35,7 +38,7 @@ function parseShippingEstimateToDays(estimate) {
   const value = Number(match[1]);
   const unit = match[2].toLowerCase();
   if (unit === "h") return value / 24;
-  return value;
+  return value; // trata "bd" (dias úteis) e "d" (dias corridos) de forma equivalente, aproximação
 }
 
 /**
@@ -101,8 +104,8 @@ function extractOrderFields(orderDetail) {
 /**
  * A Vtex retorna em `additionalInfo.categoriesIds` algo como "/14/28/", uma pilha de IDs
  * numéricos (não nomes). Resolvemos o ID mais específico (o último) para o nome real da
- * categoria usando o mapa vindo de `vtex.getCategoryMap()`. Se não encontrar no mapa,
- * cai para o ID como último recurso.
+ * categoria usando o mapa vindo de `vtex.getCategoryMap()`. Se não encontrar no mapa
+ * (categoria removida do catálogo, por ex.), cai para o ID como último recurso.
  */
 function resolveCategoryName(item, categoryMap = {}) {
   const categoryId = item.additionalInfo?.categoriesIds?.split("/").filter(Boolean).pop();
@@ -166,9 +169,14 @@ async function listOrdersInChunks(dateFrom, dateTo, chunkDays = 7) {
   return summaries;
 }
 
-async function syncOrders({ daysBack = DAYS_BACK } = {}) {
-  const dateTo = new Date();
-  const dateFrom = new Date(dateTo.getTime() - daysBack * 24 * 60 * 60 * 1000);
+// Aceita um período explícito (dateFrom/dateTo) para backfill de datas específicas do
+// passado — ex: sincronizar só novembro de 2021, sem precisar reprocessar tudo desde então.
+// Sem período explícito, cai no comportamento padrão: últimos `daysBack` dias a partir de hoje
+// (é isso que o cron automático usa a cada 30 minutos, e por isso o painel só enxerga pedidos
+// dentro dessa janela — nada mais antigo que isso chega a ser sincronizado sozinho).
+async function syncOrders({ daysBack = DAYS_BACK, dateFrom: explicitFrom, dateTo: explicitTo } = {}) {
+  const dateTo = explicitTo ? new Date(explicitTo) : new Date();
+  const dateFrom = explicitFrom ? new Date(explicitFrom) : new Date(dateTo.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
   const categoryMap = await vtex.getCategoryMap().catch((err) => {
     console.error("[sync] falha ao buscar árvore de categorias, usando IDs como fallback:", err.message);
@@ -201,7 +209,7 @@ async function syncOrders({ daysBack = DAYS_BACK } = {}) {
 /**
  * Backfill rápido: recalcula a categoria (nome real, não ID) dos itens de todos os pedidos
  * já sincronizados, reaproveitando o JSON bruto (`raw`) já salvo no banco — sem precisar
- * buscar cada pedido de novo na Vtex.
+ * buscar cada pedido de novo na Vtex. Útil depois de corrigir a resolução de categoria.
  */
 async function backfillCategories() {
   const categoryMap = await vtex.getCategoryMap();
@@ -271,7 +279,7 @@ async function syncInventory() {
     });
 
     page += 1;
-    if (page > 200) break;
+    if (page > 200) break; // trava de segurança
   }
 
   console.log(`[sync] estoque sincronizado: ${totalSynced} SKUs.`);
