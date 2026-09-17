@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS inventory (
   synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Data em que o produto entrou no site (campo "DateFirstAvailable" do catálogo da Vtex),
+-- usada pra calcular "tempo até a 1a venda" no lugar do giro de estoque. Guardamos o JSON
+-- bruto do SKU junto porque o nome exato do campo pode variar por conta/versão da Vtex —
+-- se date_first_available não vier populado, dá pra inspecionar a coluna raw direto no
+-- banco pra achar o campo certo sem precisar buscar de novo na Vtex.
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS date_first_available TIMESTAMPTZ;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS raw JSONB;
+
 CREATE TABLE IF NOT EXISTS sync_state (
   key                 TEXT PRIMARY KEY,
   value                TEXT,
