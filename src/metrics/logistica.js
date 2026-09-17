@@ -34,17 +34,18 @@ async function desempenhoLojas({ dateFrom, dateTo } = {}) {
   const { rows } = await pool.query(
     `SELECT COALESCE(oi.warehouse_id, '(sem-loja)') AS warehouse_id,
             COALESCE(w.name, oi.warehouse_id, 'Não identificado') AS loja,
-            w.state AS loja_estado,
+            COALESCE(ov.state, w.state) AS loja_estado,
             SUM(oi.total_price) AS receita,
             SUM(oi.quantity) AS unidades,
             COUNT(DISTINCT oi.order_id) AS pedidos
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN warehouses w ON w.warehouse_id = oi.warehouse_id
+     LEFT JOIN warehouse_state_overrides ov ON ov.warehouse_id = oi.warehouse_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND o.status NOT IN ('canceled','cancelled')
-     GROUP BY oi.warehouse_id, w.name, w.state
+     GROUP BY oi.warehouse_id, w.name, w.state, ov.state
      ORDER BY receita DESC`,
     [dateFrom || null, dateTo || null]
   );
@@ -69,7 +70,7 @@ async function lojaPorEstadoDestino({ dateFrom, dateTo } = {}) {
   const { rows } = await pool.query(
     `SELECT COALESCE(oi.warehouse_id, '(sem-loja)') AS warehouse_id,
             COALESCE(w.name, oi.warehouse_id, 'Não identificado') AS loja,
-            w.state AS loja_estado,
+            COALESCE(ov.state, w.state) AS loja_estado,
             COALESCE(o.region_state, 'Não informado') AS estado_destino,
             SUM(oi.total_price) AS receita,
             SUM(oi.quantity) AS unidades,
@@ -77,10 +78,11 @@ async function lojaPorEstadoDestino({ dateFrom, dateTo } = {}) {
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN warehouses w ON w.warehouse_id = oi.warehouse_id
+     LEFT JOIN warehouse_state_overrides ov ON ov.warehouse_id = oi.warehouse_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND o.status NOT IN ('canceled','cancelled')
-     GROUP BY oi.warehouse_id, w.name, w.state, o.region_state
+     GROUP BY oi.warehouse_id, w.name, w.state, ov.state, o.region_state
      ORDER BY loja, receita DESC`,
     [dateFrom || null, dateTo || null]
   );
@@ -95,8 +97,71 @@ async function lojaPorEstadoDestino({ dateFrom, dateTo } = {}) {
   }));
 }
 
+/**
+ * Lista todas as lojas/depósitos OMNI já conhecidos (sincronizados da Vtex ou apenas
+ * vistos em pedidos), com o estado que a Vtex informou (quase sempre vazio, ver nota em
+ * syncVtex.js) e o estado corrigido manualmente, se houver. Usado pela tela de admin
+ * "Estados das lojas" — como a Vtex não expõe UF pros warehouses dessa conta, esse é o
+ * jeito de informar (uma vez) de qual estado cada loja física realmente despacha.
+ */
+async function listLojaEstados() {
+  const { rows } = await pool.query(
+    `SELECT w.warehouse_id, w.name, w.city, w.state AS vtex_state, ov.state AS override_state
+     FROM warehouses w
+     LEFT JOIN warehouse_state_overrides ov ON ov.warehouse_id = w.warehouse_id
+     UNION
+     SELECT DISTINCT oi.warehouse_id, oi.warehouse_id AS name, NULL AS city, NULL AS vtex_state, ov.state AS override_state
+     FROM order_items oi
+     LEFT JOIN warehouses w ON w.warehouse_id = oi.warehouse_id
+     LEFT JOIN warehouse_state_overrides ov ON ov.warehouse_id = oi.warehouse_id
+     WHERE oi.warehouse_id IS NOT NULL AND w.warehouse_id IS NULL
+     ORDER BY name`,
+    []
+  );
+  return rows.map((r) => ({
+    warehouseId: r.warehouse_id,
+    nome: r.name || r.warehouse_id,
+    cidade: r.city || null,
+    estadoVtex: r.vtex_state || null,
+    estadoManual: r.override_state || null,
+    estadoAtual: r.override_state || r.vtex_state || null,
+  }));
+}
+
+/** Define (ou remove, se state for vazio) a correção manual de estado de uma loja/depósito. */
+async function setLojaEstado(warehouseId, state) {
+  if (!warehouseId) {
+    const err = new Error("Informe a loja (warehouseId).");
+    err.status = 400;
+    throw err;
+  }
+  const uf = (state || "").trim().toUpperCase();
+  if (!uf) {
+    await pool.query("DELETE FROM warehouse_state_overrides WHERE warehouse_id = $1", [warehouseId]);
+    return { warehouseId, state: null };
+  }
+  if (!/^[A-Z]{2}$/.test(uf)) {
+    const err = new Error("Estado inválido — use a sigla de 2 letras (ex: SP, RJ).");
+    err.status = 400;
+    throw err;
+  }
+  await pool.query(
+    `INSERT INTO warehouse_state_overrides (warehouse_id, state, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (warehouse_id) DO UPDATE SET state = $2, updated_at = now()`,
+    [warehouseId, uf]
+  );
+  return { warehouseId, state: uf };
+}
+
 // Reaproveita a mesma consulta de "Eficiência de Frete por Região" usada em Vendas,
 // pois é a mesma métrica solicitada nas duas seções do dashboard.
 const { eficienciaFretePorRegiao } = require("./vendas");
 
-module.exports = { slaDeEntrega, eficienciaFretePorRegiao, desempenhoLojas, lojaPorEstadoDestino };
+module.exports = {
+  slaDeEntrega,
+  eficienciaFretePorRegiao,
+  desempenhoLojas,
+  lojaPorEstadoDestino,
+  listLojaEstados,
+  setLojaEstado,
+};
