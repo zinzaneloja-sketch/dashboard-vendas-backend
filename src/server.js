@@ -174,6 +174,14 @@ app.get("/api/logistica/sla-entrega", requireAuth, handle((req) => logistica.sla
 app.get("/api/logistica/eficiencia-frete-regiao", requireAuth, handle((req) => logistica.eficienciaFretePorRegiao(parseDateRange(req))));
 app.get("/api/logistica/lojas", requireAuth, handle((req) => logistica.desempenhoLojas(parseDateRange(req))));
 app.get("/api/logistica/lojas-regiao", requireAuth, handle((req) => logistica.lojaPorEstadoDestino(parseDateRange(req))));
+// Correção manual do estado (UF) de cada loja/depósito OMNI — a Vtex não retorna
+// endereço pros warehouses dessa conta, então esse é o jeito de informar de qual
+// estado cada loja realmente despacha (ver nota em syncVtex.js extractWarehouseFields).
+app.get("/api/logistica/lojas-estados", requireAuth, handle(() => logistica.listLojaEstados()));
+app.post("/api/logistica/lojas-estados", requireAuth, requireAdmin, handle(async (req) => {
+  const { warehouseId, state } = req.body || {};
+  return logistica.setLojaEstado(warehouseId, state);
+}));
 
 // ---- Marketing ----
 app.get("/api/marketing/sessoes-categoria-produto", requireAuth, handle((req) => marketing.sessoesPorCategoriaEProduto({ dateRanges: parseGa4DateRanges(req) })));
