@@ -1,5 +1,6 @@
 // Cria o schema do Postgres usado para armazenar os dados sincronizados da Vtex.
 // GA4 não precisa de tabelas próprias: consultamos a Data API sob demanda (com cache em memória).
+const bcrypt = require("bcryptjs");
 const { pool } = require("../db");
 
 const SQL = `
@@ -61,10 +62,46 @@ CREATE TABLE IF NOT EXISTS revenue_goals (
   month               DATE PRIMARY KEY, -- sempre dia 1 do mês
   goal_value          NUMERIC(14,2) NOT NULL
 );
+
+-- Usuários com acesso ao painel (login por email/senha).
+CREATE TABLE IF NOT EXISTS users (
+  id                  BIGSERIAL PRIMARY KEY,
+  email               TEXT UNIQUE NOT NULL,
+  password_hash       TEXT NOT NULL,
+  role                TEXT NOT NULL DEFAULT 'viewer', -- 'admin' ou 'viewer'
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
+
+// Garante que o admin master exista. Se ADMIN_PASSWORD não vier configurada,
+// gera uma senha aleatória e a imprime UMA vez nos logs do deploy, para que
+// o dono da conta consiga recuperá-la ali (nunca fica salva em texto puro).
+async function seedAdmin() {
+  const email = (process.env.ADMIN_EMAIL || "tbarone@zinzane.com.br").toLowerCase();
+  const { rows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+  if (rows.length > 0) return;
+
+  const password = process.env.ADMIN_PASSWORD || Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const hash = await bcrypt.hash(password, 10);
+  await pool.query(
+    "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'admin') ON CONFLICT (email) DO NOTHING",
+    [email, hash]
+  );
+
+  console.log("========================================================");
+  console.log(`[seed] Usuário admin criado: ${email}`);
+  if (!process.env.ADMIN_PASSWORD) {
+    console.log(`[seed] Senha gerada automaticamente: ${password}`);
+    console.log("[seed] Guarde essa senha agora — ela não aparece de novo nos logs.");
+  } else {
+    console.log("[seed] Senha definida pela variável de ambiente ADMIN_PASSWORD.");
+  }
+  console.log("========================================================");
+}
 
 async function migrate() {
   await pool.query(SQL);
+  await seedAdmin();
   console.log("Migração concluída.");
   await pool.end();
 }
