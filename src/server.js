@@ -138,7 +138,6 @@ app.get("/api/vendas/categorias", requireAuth, handle(async () => {
 app.get("/api/vendas/meios-pagamento", requireAuth, handle((req) => vendas.meiosDePagamento(parseDateRange(req))));
 app.get("/api/vendas/eficiencia-frete-regiao", requireAuth, handle((req) => vendas.eficienciaFretePorRegiao(parseDateRange(req))));
 app.get("/api/vendas/receita-por-regiao", requireAuth, handle((req) => vendas.receitaPorRegiao(parseDateRange(req))));
-app.get("/api/vendas/tempo-ate-venda", requireAuth, handle((req) => vendas.tempoAteVendaPorCategoria(parseDateRange(req))));
 app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => vendas.rankingProdutosXEstoque({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined })));
 
 // ---- Logística ----
