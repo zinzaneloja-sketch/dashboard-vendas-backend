@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS order_items (
 -- ainda não existe nessa tabela já existente).
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_id TEXT;
 
+-- Preço de tabela (sem desconto) do item, por unidade, segundo a Vtex (campo listPrice
+-- do pedido). Comparado com unit_price pra saber se o item foi vendido em Liquidação
+-- (preço com desconto) ou Coleção (preço cheio, sem desconto) — ver extractItems() em
+-- syncVtex.js. Pedidos já sincronizados antes dessa coluna existir ficam com ela vazia
+-- até rodar "Recalcular pedidos já sincronizados" no Admin (reaproveita o JSON bruto já
+-- salvo em orders.raw, sem precisar buscar de novo na Vtex).
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS list_unit_price NUMERIC(14,2);
+
 CREATE INDEX IF NOT EXISTS idx_orders_creation_date ON orders (creation_date);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);
