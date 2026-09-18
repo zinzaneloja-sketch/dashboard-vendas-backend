@@ -160,6 +160,10 @@ function extractItems(orderDetail, categoryMap = {}) {
     quantity: item.quantity,
     unit_price: (item.price || 0) / 100,
     total_price: ((item.price || 0) * (item.quantity || 0)) / 100,
+    // Preço de tabela (sem desconto) do item, segundo a Vtex. Quando `listPrice` não vem
+    // no pedido, assumimos igual ao preço cobrado (item.price) — ou seja, sem desconto —
+    // pra não classificar um item errado como "liquidação" por falta de dado.
+    list_unit_price: (item.listPrice != null ? item.listPrice : (item.price || 0)) / 100,
     warehouse_id: warehouseByIndex[index] || null,
   }));
 }
@@ -182,9 +186,9 @@ async function replaceItems(orderId, items) {
   await pool.query("DELETE FROM order_items WHERE order_id = $1", [orderId]);
   for (const item of items) {
     await pool.query(
-      `INSERT INTO order_items (order_id, product_id, sku, product_name, category, quantity, unit_price, total_price, warehouse_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [item.order_id, item.product_id, item.sku, item.product_name, item.category, item.quantity, item.unit_price, item.total_price, item.warehouse_id]
+      `INSERT INTO order_items (order_id, product_id, sku, product_name, category, quantity, unit_price, total_price, list_unit_price, warehouse_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [item.order_id, item.product_id, item.sku, item.product_name, item.category, item.quantity, item.unit_price, item.total_price, item.list_unit_price, item.warehouse_id]
     );
   }
 }
