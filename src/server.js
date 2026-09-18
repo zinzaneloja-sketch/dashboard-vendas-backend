@@ -61,6 +61,30 @@ app.get("/health", (req, res) => res.json({
   uptimeSeconds: Math.round(process.uptime()),
 }));
 
+// ---- DIAGNÓSTICO TEMPORÁRIO: investigar por que nenhum item está sendo classificado
+// como Liquidação. Mostra os campos de preço brutos que a Vtex manda pra alguns
+// pedidos recentes (reaproveita o JSON já salvo em orders.raw, não busca de novo na
+// Vtex). Só admin autenticado consegue chamar. Remover depois de confirmar o campo
+// certo pra usar como "preço de tabela".
+app.get("/api/debug/sample-item-pricing", requireAuth, requireAdmin, handle(async () => {
+  const { rows } = await pool.query(
+    "SELECT order_id, raw FROM orders WHERE raw IS NOT NULL ORDER BY creation_date DESC LIMIT 5"
+  );
+  return rows.map((r) => {
+    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
+    const items = (raw.items || []).map((it) => ({
+      name: it.name,
+      quantity: it.quantity,
+      price: it.price,
+      listPrice: it.listPrice,
+      sellingPrice: it.sellingPrice,
+      manualPrice: it.manualPrice,
+      priceTags: it.priceTags,
+    }));
+    return { order_id: r.order_id, items };
+  });
+}));
+
 // ---- Autenticação ----
 app.post("/api/auth/login", handle(async (req) => {
   const { email, password } = req.body || {};
