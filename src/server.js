@@ -123,6 +123,7 @@ app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
   return { ok: true };
 }));
 app.get("/api/vendas/por-categoria", requireAuth, handle((req) => vendas.vendaPorCategoria(parseDateRange(req))));
+app.get("/api/vendas/por-tipo", requireAuth, handle((req) => vendas.vendaPorTipo(parseDateRange(req))));
 app.get("/api/vendas/curva-abc", requireAuth, handle((req) => vendas.curvaAbcProdutos({
   ...parseDateRange(req),
   categoria: req.query.categoria,
