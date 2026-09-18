@@ -71,6 +71,33 @@ async function vendaPorCategoria({ dateFrom, dateTo } = {}) {
 }
 
 /**
+ * Divide as vendas do período entre "Liquidação" (item vendido com desconto em relação
+ * ao preço de tabela da Vtex) e "Coleção" (vendido a preço cheio, sem desconto). Usa
+ * order_items.list_unit_price (preço de tabela) vs unit_price (preço efetivamente
+ * cobrado) por item — ver extractItems() em syncVtex.js. Pedidos sincronizados antes
+ * dessa coluna existir têm list_unit_price vazio; nesse caso tratamos como "Coleção"
+ * (sem desconto) até rodar o backfill, pra não empurrar tudo pro lado errado.
+ */
+async function vendaPorTipo({ dateFrom, dateTo } = {}) {
+  const { rows } = await pool.query(
+    `SELECT
+       CASE WHEN COALESCE(oi.list_unit_price, oi.unit_price) > oi.unit_price + 0.01
+            THEN 'Liquidação' ELSE 'Coleção' END AS tipo,
+       SUM(oi.total_price) AS receita,
+       SUM(oi.quantity) AS unidades
+     FROM order_items oi
+     JOIN orders o ON o.order_id = oi.order_id
+     WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR o.creation_date < $2)
+       AND o.status NOT IN ('canceled','cancelled')
+     GROUP BY tipo
+     ORDER BY tipo ASC`,
+    [dateFrom || null, dateTo || null]
+  );
+  return rows.map((r) => ({ tipo: r.tipo, receita: Number(r.receita), unidades: Number(r.unidades) }));
+}
+
+/**
  * Curva ABC de produtos.
  * @param {object} opts
  * @param {Date}   opts.dateFrom
@@ -252,6 +279,7 @@ module.exports = {
   receitaVsMeta,
   setRevenueGoal,
   vendaPorCategoria,
+  vendaPorTipo,
   curvaAbcProdutos,
   meiosDePagamento,
   eficienciaFretePorRegiao,
