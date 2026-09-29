@@ -317,6 +317,99 @@ async function sazonalidade({ dateFrom, dateTo, statuses } = {}) {
   };
 }
 
+// Janela de histórico olhada pra trás a partir de hoje pra montar a curva intradiária do
+// mesmo dia da semana (ex.: últimas ~12 terças-feiras). Fixa (não usa o filtro de período do
+// topo do painel) porque a projeção sempre precisa comparar "hoje" com um passado recente o
+// bastante pra não estar desatualizado, mas com amostra suficiente (várias ocorrências do
+// mesmo dia da semana) — um período curto escolhido pelo usuário (ex. "7 dias") não teria
+// nem uma ocorrência a mais do dia de hoje pra formar a curva.
+const PROJECAO_LOOKBACK_DIAS = 84; // ~12 semanas
+const PROJECAO_MIN_DIAS_AMOSTRA = 3; // menos que isso, a curva histórica é ruído demais pra confiar
+const PROJECAO_MIN_FRACAO_DECORRIDA = 0.02; // <2% do dia típico decorrido: dividir por isso amplificaria qualquer ruído
+
+/**
+ * Projeção de fechamento do dia: olha o quanto já foi vendido hoje e estima o total do dia
+ * comparando com o quanto historicamente já costuma ter sido vendido, até a hora atual, num
+ * dia com o mesmo dia da semana de hoje (ex.: hoje é terça 14h — historicamente, que fração
+ * da receita de uma terça-feira típica já aconteceu até as 14h?). A projeção é simplesmente
+ * receita de hoje até agora ÷ essa fração.
+ *
+ * `estado` diz ao frontend o que mostrar:
+ *  - "ok": projeção calculada com confiança (amostra e fração decorrida suficientes).
+ *  - "cedo_demais": ainda é cedo demais no dia (fração histórica decorrida até agora muito
+ *    pequena) — mostrar só a receita de hoje até agora, sem projetar.
+ *  - "dados_insuficientes": não há histórico suficiente desse dia da semana na janela de
+ *    lookback (loja nova, ou pedidos recém-começaram a ser sincronizados).
+ */
+async function projecaoFechamentoDia({ statuses } = {}) {
+  const params = [];
+  const statusIdx = pushStatusParam(statuses, params);
+  const { rows } = await pool.query(
+    `WITH params AS (
+       SELECT
+         date_trunc('day', now() AT TIME ZONE 'UTC') AS hoje,
+         EXTRACT(DOW FROM now() AT TIME ZONE 'UTC')::int AS dia_semana_hoje,
+         EXTRACT(HOUR FROM now() AT TIME ZONE 'UTC')::int AS hora_atual
+     ),
+     hoje_receita AS (
+       SELECT COALESCE(SUM(o.total_value), 0) AS receita, COUNT(*) AS pedidos
+       FROM orders o CROSS JOIN params p
+       WHERE o.creation_date >= p.hoje
+         AND o.creation_date < p.hoje + interval '1 day'
+         AND ${statusClause("o.status", statusIdx)}
+     ),
+     historico AS (
+       SELECT date_trunc('day', o.creation_date AT TIME ZONE 'UTC') AS dia,
+              EXTRACT(HOUR FROM o.creation_date AT TIME ZONE 'UTC')::int AS hora,
+              o.total_value
+       FROM orders o CROSS JOIN params p
+       WHERE o.creation_date >= p.hoje - interval '${PROJECAO_LOOKBACK_DIAS} days'
+         AND o.creation_date < p.hoje
+         AND EXTRACT(DOW FROM o.creation_date AT TIME ZONE 'UTC')::int = p.dia_semana_hoje
+         AND ${statusClause("o.status", statusIdx)}
+     )
+     SELECT
+       (SELECT dia_semana_hoje FROM params) AS dia_semana,
+       (SELECT hora_atual FROM params) AS hora_atual,
+       (SELECT receita FROM hoje_receita) AS receita_hoje,
+       (SELECT pedidos FROM hoje_receita) AS pedidos_hoje,
+       COALESCE(SUM(h.total_value) FILTER (WHERE h.hora <= (SELECT hora_atual FROM params)), 0) AS receita_historica_ate_hora,
+       COALESCE(SUM(h.total_value), 0) AS receita_historica_dia_total,
+       COUNT(DISTINCT h.dia) AS dias_amostra
+     FROM historico h`,
+    params
+  );
+
+  const row = rows[0] || {};
+  const diaSemana = Number(row.dia_semana);
+  const horaAtual = Number(row.hora_atual);
+  const receitaHoje = Number(row.receita_hoje || 0);
+  const pedidosHoje = Number(row.pedidos_hoje || 0);
+  const receitaHistoricaAteHora = Number(row.receita_historica_ate_hora || 0);
+  const receitaHistoricaDiaTotal = Number(row.receita_historica_dia_total || 0);
+  const diasAmostra = Number(row.dias_amostra || 0);
+  const fracaoDecorrida = receitaHistoricaDiaTotal > 0 ? receitaHistoricaAteHora / receitaHistoricaDiaTotal : 0;
+
+  let estado = "ok";
+  if (diasAmostra < PROJECAO_MIN_DIAS_AMOSTRA || receitaHistoricaDiaTotal <= 0) {
+    estado = "dados_insuficientes";
+  } else if (fracaoDecorrida < PROJECAO_MIN_FRACAO_DECORRIDA) {
+    estado = "cedo_demais";
+  }
+
+  return {
+    diaSemana,
+    horaAtual,
+    receitaHoje,
+    pedidosHoje,
+    percentualDecorrido: fracaoDecorrida * 100,
+    projecaoFechamento: estado === "ok" ? receitaHoje / fracaoDecorrida : null,
+    mediaHistoricaDiaSemana: diasAmostra > 0 ? receitaHistoricaDiaTotal / diasAmostra : 0,
+    diasAmostra,
+    estado,
+  };
+}
+
 /**
  * Curva ABC de produtos.
  * @param {object} opts
@@ -518,6 +611,7 @@ module.exports = {
   usoCupons,
   comparativoCupom,
   sazonalidade,
+  projecaoFechamentoDia,
   curvaAbcProdutos,
   meiosDePagamento,
   eficienciaFretePorRegiao,
