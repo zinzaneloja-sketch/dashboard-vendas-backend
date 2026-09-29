@@ -87,12 +87,20 @@ function extractOrderFields(orderDetail) {
   const shippingAddress = orderDetail.shippingData?.address || {};
   const logisticsInfo = orderDetail.shippingData?.logisticsInfo?.[0] || {};
   const firstPayment = orderDetail.paymentData?.transactions?.[0]?.payments?.[0] || {};
+  const marketingData = orderDetail.marketingData || {};
 
   const deliveredAt = findDeliveredAt(orderDetail);
   const promisedDays = parseShippingEstimateToDays(logisticsInfo.shippingEstimate);
   const actualDays = deliveredAt
     ? (new Date(deliveredAt) - new Date(orderDetail.creationDate)) / (1000 * 60 * 60 * 24)
     : null;
+
+  // "Discounts" é o total de desconto DO PEDIDO (cupom + outras promoções de carrinho) que a
+  // Vtex já calcula pronto — diferente do desconto por item (list_unit_price em extractItems)
+  // que é sobre o preço de tabela do produto. Vem negativo nos totals; guardamos como valor
+  // positivo (quanto foi concedido de desconto), 0 quando não há a entrada.
+  const discountsTotal = orderDetail.totals?.find((t) => t.id === "Discounts")?.value;
+  const discountValue = discountsTotal != null ? Math.abs(discountsTotal) / 100 : 0;
 
   return {
     order_id: orderDetail.orderId,
@@ -104,6 +112,10 @@ function extractOrderFields(orderDetail) {
     client_id: orderDetail.clientProfileData?.email || orderDetail.clientProfileData?.userProfileId || null,
     payment_method: firstPayment.paymentSystemName || null,
     payment_group: firstPayment.group || null,
+    installments: firstPayment.installments != null ? Number(firstPayment.installments) : null,
+    coupon_code: marketingData.coupon ? String(marketingData.coupon).toUpperCase() : null,
+    discount_value: discountValue,
+    utm_source: marketingData.utmSource || null,
     region_state: shippingAddress.state || null,
     region_city: shippingAddress.city || null,
     shipping_carrier: logisticsInfo.deliveryCompany || logisticsInfo.selectedSla || null,
