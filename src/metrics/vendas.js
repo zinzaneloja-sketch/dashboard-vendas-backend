@@ -1,6 +1,23 @@
 const { pool } = require("../db");
 
 /**
+ * Filtro de status usado por quase toda métrica da aba Vendas (o filtro "Status" no topo da
+ * aba, ao lado do período). `pushStatusParam` empilha o valor no array de bind da query e
+ * devolve o índice ($N) pra usar em `statusClause`; separados porque algumas queries
+ * referenciam a coluna com apelidos diferentes (`status` numa CTE sem alias, `o.status` na
+ * query principal) mas precisam ser o MESMO parâmetro — chamar `pushStatusParam` uma vez só
+ * e reusar o índice evita duplicar o bind. Sem `statuses` explícito (undefined/[]), cai no
+ * comportamento histórico do painel: tudo exceto cancelado — é isso que `IS NULL` cobre.
+ */
+function pushStatusParam(statuses, params) {
+  params.push(Array.isArray(statuses) && statuses.length ? statuses : null);
+  return params.length;
+}
+function statusClause(column, idx) {
+  return `(($${idx}::text[] IS NULL AND ${column} NOT IN ('canceled','cancelled')) OR ($${idx}::text[] IS NOT NULL AND ${column} = ANY($${idx}::text[])))`;
+}
+
+/**
  * Receita vs. meta cadastrada. Metas são sempre mensais (`revenue_goals` é indexada por
  * mês), mas o card de Vendas usa o filtro de período do topo do painel — que pode ser
  * qualquer intervalo, não só um mês cheio. Por isso: quando vem `dateFrom`/`dateTo` (period
@@ -9,7 +26,7 @@ const { pool } = require("../db");
  * Sem `dateFrom`/`dateTo` (uso do card de Insights, que não tem filtro de período), cai no
  * comportamento antigo: mês calendário atual (ou `month`, se informado) por inteiro.
  */
-async function receitaVsMeta({ dateFrom, dateTo, month } = {}) {
+async function receitaVsMeta({ dateFrom, dateTo, month, statuses } = {}) {
   const periodFrom = dateFrom ? new Date(dateFrom) : null;
   const periodTo = dateTo ? new Date(dateTo) : null;
 
@@ -23,11 +40,13 @@ async function receitaVsMeta({ dateFrom, dateTo, month } = {}) {
   const revenueFrom = periodFrom || monthStart;
   const revenueTo = periodTo || monthEnd;
 
+  const revenueParams = [revenueFrom, revenueTo];
+  const revenueStatusIdx = pushStatusParam(statuses, revenueParams);
   const { rows: revenueRows } = await pool.query(
     `SELECT COALESCE(SUM(total_value),0) AS receita
      FROM orders
-     WHERE creation_date >= $1 AND creation_date < $2 AND status NOT IN ('canceled','cancelled')`,
-    [revenueFrom, revenueTo]
+     WHERE creation_date >= $1 AND creation_date < $2 AND ${statusClause("status", revenueStatusIdx)}`,
+    revenueParams
   );
 
   const { rows: goalRows } = await pool.query(
@@ -55,17 +74,19 @@ async function setRevenueGoal({ month, goalValue }) {
   );
 }
 
-async function vendaPorCategoria({ dateFrom, dateTo } = {}) {
+async function vendaPorCategoria({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT oi.category, SUM(oi.total_price) AS receita, SUM(oi.quantity) AS unidades
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
+       AND ${statusClause("o.status", statusIdx)}
      GROUP BY oi.category
      ORDER BY receita DESC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({ categoria: r.category || "Sem categoria", receita: Number(r.receita), unidades: Number(r.unidades) }));
 }
@@ -78,7 +99,9 @@ async function vendaPorCategoria({ dateFrom, dateTo } = {}) {
  * dessa coluna existir têm list_unit_price vazio; nesse caso tratamos como "Coleção"
  * (sem desconto) até rodar o backfill, pra não empurrar tudo pro lado errado.
  */
-async function vendaPorTipo({ dateFrom, dateTo } = {}) {
+async function vendaPorTipo({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT
        CASE WHEN COALESCE(oi.list_unit_price, oi.unit_price) > oi.unit_price + 0.01
@@ -89,10 +112,10 @@ async function vendaPorTipo({ dateFrom, dateTo } = {}) {
      JOIN orders o ON o.order_id = oi.order_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
+       AND ${statusClause("o.status", statusIdx)}
      GROUP BY tipo
      ORDER BY tipo ASC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({ tipo: r.tipo, receita: Number(r.receita), unidades: Number(r.unidades) }));
 }
@@ -107,7 +130,7 @@ async function vendaPorTipo({ dateFrom, dateTo } = {}) {
  * pg converter um date_trunc(...) (que vira "timestamp sem fuso") de volta pra um JS Date
  * é ambíguo — o driver assumiria o fuso do processo Node — então evitamos isso na raiz.
  */
-async function vendaDiaria({ dateFrom, dateTo } = {}) {
+async function vendaDiaria({ dateFrom, dateTo, statuses } = {}) {
   if (!dateFrom || !dateTo) {
     const err = new Error("dateFrom e dateTo são obrigatórios para venda diária");
     err.status = 400;
@@ -122,6 +145,8 @@ async function vendaDiaria({ dateFrom, dateTo } = {}) {
     throw err;
   }
 
+  const params = [from, to];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT to_char(d.dia, 'YYYY-MM-DD') AS data,
             COALESCE(SUM(o.total_value), 0) AS receita,
@@ -134,10 +159,10 @@ async function vendaDiaria({ dateFrom, dateTo } = {}) {
      LEFT JOIN orders o
        ON date_trunc('day', o.creation_date AT TIME ZONE 'UTC') = d.dia
       AND o.creation_date >= $1::timestamptz AND o.creation_date < $2::timestamptz
-      AND o.status NOT IN ('canceled','cancelled')
+      AND ${statusClause("o.status", statusIdx)}
      GROUP BY d.dia
      ORDER BY d.dia ASC`,
-    [from, to]
+    params
   );
 
   return rows.map((r) => ({ data: r.data, receita: Number(r.receita), pedidos: Number(r.pedidos) }));
@@ -152,12 +177,14 @@ async function vendaDiaria({ dateFrom, dateTo } = {}) {
  * evita o viés óbvio de período curto: numa janela de 7 dias quase todo mundo pareceria
  * "novo" se a comparação fosse só dentro do próprio período.
  */
-async function novosRecorrentes({ dateFrom, dateTo } = {}) {
+async function novosRecorrentes({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `WITH primeira_compra AS (
        SELECT client_id, MIN(creation_date) AS primeira_data
        FROM orders
-       WHERE client_id IS NOT NULL AND status NOT IN ('canceled','cancelled')
+       WHERE client_id IS NOT NULL AND ${statusClause("status", statusIdx)}
        GROUP BY client_id
      )
      SELECT
@@ -173,10 +200,10 @@ async function novosRecorrentes({ dateFrom, dateTo } = {}) {
      LEFT JOIN primeira_compra pc ON pc.client_id = o.client_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
+       AND ${statusClause("o.status", statusIdx)}
      GROUP BY tipo
      ORDER BY tipo ASC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({ tipo: r.tipo, pedidos: Number(r.pedidos), clientes: Number(r.clientes), receita: Number(r.receita) }));
 }
@@ -186,7 +213,11 @@ async function novosRecorrentes({ dateFrom, dateTo } = {}) {
  * (orders.discount_value) e ticket médio de cada um — mesma lógica da aba "Cupons" da
  * planilha de análise. `limit` corta pra não devolver uma cauda longa de cupons usados 1 vez.
  */
-async function usoCupons({ dateFrom, dateTo, limit = 20 } = {}) {
+async function usoCupons({ dateFrom, dateTo, limit = 20, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
+  params.push(limit);
+  const limitIdx = params.length;
   const { rows } = await pool.query(
     `SELECT coupon_code,
             COUNT(*) AS pedidos,
@@ -196,11 +227,11 @@ async function usoCupons({ dateFrom, dateTo, limit = 20 } = {}) {
      WHERE coupon_code IS NOT NULL
        AND ($1::timestamptz IS NULL OR creation_date >= $1)
        AND ($2::timestamptz IS NULL OR creation_date < $2)
-       AND status NOT IN ('canceled','cancelled')
+       AND ${statusClause("status", statusIdx)}
      GROUP BY coupon_code
      ORDER BY pedidos DESC
-     LIMIT $3`,
-    [dateFrom || null, dateTo || null, limit]
+     LIMIT $${limitIdx}`,
+    params
   );
   return rows.map((r) => ({
     cupom: r.coupon_code,
@@ -215,7 +246,9 @@ async function usoCupons({ dateFrom, dateTo, limit = 20 } = {}) {
  * Compara pedidos com e sem cupom no período: volume, receita e ticket médio de cada grupo.
  * Serve pra responder "cupom tá canibalizando ticket médio ou trazendo pedido incremental?".
  */
-async function comparativoCupom({ dateFrom, dateTo } = {}) {
+async function comparativoCupom({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT
        CASE WHEN coupon_code IS NULL THEN 'Sem cupom' ELSE 'Com cupom' END AS grupo,
@@ -225,10 +258,10 @@ async function comparativoCupom({ dateFrom, dateTo } = {}) {
      FROM orders
      WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
        AND ($2::timestamptz IS NULL OR creation_date < $2)
-       AND status NOT IN ('canceled','cancelled')
+       AND ${statusClause("status", statusIdx)}
      GROUP BY grupo
      ORDER BY grupo DESC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({
     grupo: r.grupo,
@@ -246,7 +279,12 @@ async function comparativoCupom({ dateFrom, dateTo } = {}) {
  * ambígua). `diaSemana` sai como número ISO-like do Postgres (0=domingo..6=sábado, via
  * EXTRACT(DOW)) pro frontend decidir o rótulo em pt-BR.
  */
-async function sazonalidade({ dateFrom, dateTo } = {}) {
+async function sazonalidade({ dateFrom, dateTo, statuses } = {}) {
+  const porDiaParams = [dateFrom || null, dateTo || null];
+  const porDiaStatusIdx = pushStatusParam(statuses, porDiaParams);
+  const porHoraParams = [dateFrom || null, dateTo || null];
+  const porHoraStatusIdx = pushStatusParam(statuses, porHoraParams);
+
   const [porDia, porHora] = await Promise.all([
     pool.query(
       `SELECT EXTRACT(DOW FROM creation_date AT TIME ZONE 'UTC')::int AS dia_semana,
@@ -255,10 +293,10 @@ async function sazonalidade({ dateFrom, dateTo } = {}) {
        FROM orders
        WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
          AND ($2::timestamptz IS NULL OR creation_date < $2)
-         AND status NOT IN ('canceled','cancelled')
+         AND ${statusClause("status", porDiaStatusIdx)}
        GROUP BY dia_semana
        ORDER BY dia_semana ASC`,
-      [dateFrom || null, dateTo || null]
+      porDiaParams
     ),
     pool.query(
       `SELECT EXTRACT(HOUR FROM creation_date AT TIME ZONE 'UTC')::int AS hora,
@@ -267,10 +305,10 @@ async function sazonalidade({ dateFrom, dateTo } = {}) {
        FROM orders
        WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
          AND ($2::timestamptz IS NULL OR creation_date < $2)
-         AND status NOT IN ('canceled','cancelled')
+         AND ${statusClause("status", porHoraStatusIdx)}
        GROUP BY hora
        ORDER BY hora ASC`,
-      [dateFrom || null, dateTo || null]
+      porHoraParams
     ),
   ]);
   return {
@@ -288,10 +326,12 @@ async function sazonalidade({ dateFrom, dateTo } = {}) {
  * @param {string} [opts.metric]     'receita' (padrão) ou 'quantidade' — base de cálculo da curva.
  * @param {string[]} [opts.classes]  Subconjunto de classes a retornar, ex. ['A','B']. undefined = todas.
  */
-async function curvaAbcProdutos({ dateFrom, dateTo, categoria, metric, classes } = {}) {
+async function curvaAbcProdutos({ dateFrom, dateTo, categoria, metric, classes, statuses } = {}) {
   const useQuantidade = metric === "quantidade";
   const categoriaFiltro = categoria && categoria !== "todas" ? categoria : null;
 
+  const params = [dateFrom || null, dateTo || null, categoriaFiltro];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT oi.product_name, oi.category,
             SUM(oi.total_price) AS receita,
@@ -300,11 +340,11 @@ async function curvaAbcProdutos({ dateFrom, dateTo, categoria, metric, classes }
      JOIN orders o ON o.order_id = oi.order_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
+       AND ${statusClause("o.status", statusIdx)}
        AND ($3::text IS NULL OR oi.category = $3)
      GROUP BY oi.product_name, oi.category
      ORDER BY ${useQuantidade ? "unidades" : "receita"} DESC`,
-    [dateFrom || null, dateTo || null, categoriaFiltro]
+    params
   );
 
   const valorDe = (r) => Number(useQuantidade ? r.unidades : r.receita);
@@ -335,21 +375,25 @@ async function curvaAbcProdutos({ dateFrom, dateTo, categoria, metric, classes }
   return resultado;
 }
 
-async function meiosDePagamento({ dateFrom, dateTo } = {}) {
+async function meiosDePagamento({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT COALESCE(payment_method,'Não informado') AS metodo, COUNT(*) AS pedidos, SUM(total_value) AS receita
      FROM orders
      WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
        AND ($2::timestamptz IS NULL OR creation_date < $2)
-       AND status NOT IN ('canceled','cancelled')
+       AND ${statusClause("status", statusIdx)}
      GROUP BY metodo
      ORDER BY receita DESC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({ metodo: r.metodo, pedidos: Number(r.pedidos), receita: Number(r.receita) }));
 }
 
-async function eficienciaFretePorRegiao({ dateFrom, dateTo } = {}) {
+async function eficienciaFretePorRegiao({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT COALESCE(region_state,'Não informado') AS regiao,
             AVG(shipping_actual_days) AS prazo_medio_real,
@@ -360,9 +404,10 @@ async function eficienciaFretePorRegiao({ dateFrom, dateTo } = {}) {
      WHERE shipping_actual_days IS NOT NULL
        AND ($1::timestamptz IS NULL OR creation_date >= $1)
        AND ($2::timestamptz IS NULL OR creation_date < $2)
+       AND ${statusClause("status", statusIdx)}
      GROUP BY regiao
      ORDER BY pedidos DESC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({
     regiao: r.regiao,
@@ -373,7 +418,9 @@ async function eficienciaFretePorRegiao({ dateFrom, dateTo } = {}) {
   }));
 }
 
-async function receitaPorRegiao({ dateFrom, dateTo } = {}) {
+async function receitaPorRegiao({ dateFrom, dateTo, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
   const { rows } = await pool.query(
     `SELECT COALESCE(o.region_state,'Não informado') AS regiao,
             COALESCE(o.shipping_carrier,'Não informado') AS transportadora,
@@ -383,10 +430,10 @@ async function receitaPorRegiao({ dateFrom, dateTo } = {}) {
      JOIN orders o ON o.order_id = oi.order_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
+       AND ${statusClause("o.status", statusIdx)}
      GROUP BY regiao, transportadora, categoria
      ORDER BY receita DESC`,
-    [dateFrom || null, dateTo || null]
+    params
   );
   return rows.map((r) => ({
     regiao: r.regiao,
@@ -405,7 +452,11 @@ async function receitaPorRegiao({ dateFrom, dateTo } = {}) {
  * @param {number} [opts.limit]         Limite de linhas (padrão 50; passe um valor alto/undefined a partir da rota "ver tudo").
  * @param {number} [opts.coverageDays]  Dias de cobertura de estoque alvo para a sugestão de reposição (padrão 30).
  */
-async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageDays = 30 } = {}) {
+async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageDays = 30, statuses } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
+  params.push(limit || null);
+  const limitIdx = params.length;
   const { rows } = await pool.query(
     `SELECT oi.product_name, oi.sku, oi.category,
             SUM(oi.quantity) AS unidades_vendidas,
@@ -418,11 +469,11 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
      LEFT JOIN inventory inv ON inv.sku = oi.sku
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
-       AND o.status NOT IN ('canceled','cancelled')
+       AND ${statusClause("o.status", statusIdx)}
      GROUP BY oi.product_name, oi.sku, oi.category
      ORDER BY unidades_vendidas DESC
-     LIMIT $3`,
-    [dateFrom || null, dateTo || null, limit || null]
+     LIMIT $${limitIdx}`,
+    params
   );
 
   // Duração do período analisado, em dias, para calcular a velocidade de vendas.
