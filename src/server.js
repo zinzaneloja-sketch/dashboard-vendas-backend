@@ -187,6 +187,9 @@ app.get("/api/vendas/novos-recorrentes", requireAuth, handle((req) => vendas.nov
 app.get("/api/vendas/cupons", requireAuth, handle((req) => vendas.usoCupons({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/comparativo-cupom", requireAuth, handle((req) => vendas.comparativoCupom({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/sazonalidade", requireAuth, handle((req) => vendas.sazonalidade({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+// Sem parseDateRange: a projeção sempre olha pra "hoje" e pra trás numa janela fixa (ver
+// PROJECAO_LOOKBACK_DIAS em vendas.js), não pro período selecionado no topo do painel.
+app.get("/api/vendas/projecao-fechamento-dia", requireAuth, handle((req) => vendas.projecaoFechamentoDia({ statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/curva-abc", requireAuth, handle((req) => vendas.curvaAbcProdutos({
   ...parseDateRange(req),
   categoria: req.query.categoria,
