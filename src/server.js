@@ -33,6 +33,16 @@ function parseDateRange(req) {
   };
 }
 
+// Filtro de status da aba Vendas (ex.: ?status=invoiced,handling). Sem o parâmetro
+// (undefined) cada função de vendas.js cai no comportamento histórico do painel: tudo
+// exceto cancelado — ver pushStatusParam/statusClause em vendas.js.
+function parseStatusFilter(req) {
+  const raw = req.query.status;
+  if (!raw) return undefined;
+  const list = String(raw).split(",").map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
 function parseGa4DateRanges(req) {
   const { startDate, endDate } = req.query;
   if (!startDate && !endDate) return undefined; // usa default (últimos 30 dias) do connector
@@ -165,23 +175,24 @@ app.delete("/api/auth/users/:id", requireAuth, requireAdmin, handle(async (req) 
 }));
 
 // ---- Vendas ----
-app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo })));
+app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo, statuses: parseStatusFilter(req) })));
 app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
   await vendas.setRevenueGoal({ month: new Date(req.body.month), goalValue: Number(req.body.goalValue) });
   return { ok: true };
 }));
-app.get("/api/vendas/por-categoria", requireAuth, handle((req) => vendas.vendaPorCategoria(parseDateRange(req))));
-app.get("/api/vendas/por-tipo", requireAuth, handle((req) => vendas.vendaPorTipo(parseDateRange(req))));
-app.get("/api/vendas/venda-diaria", requireAuth, handle((req) => vendas.vendaDiaria(parseDateRange(req))));
-app.get("/api/vendas/novos-recorrentes", requireAuth, handle((req) => vendas.novosRecorrentes(parseDateRange(req))));
-app.get("/api/vendas/cupons", requireAuth, handle((req) => vendas.usoCupons({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined })));
-app.get("/api/vendas/comparativo-cupom", requireAuth, handle((req) => vendas.comparativoCupom(parseDateRange(req))));
-app.get("/api/vendas/sazonalidade", requireAuth, handle((req) => vendas.sazonalidade(parseDateRange(req))));
+app.get("/api/vendas/por-categoria", requireAuth, handle((req) => vendas.vendaPorCategoria({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/por-tipo", requireAuth, handle((req) => vendas.vendaPorTipo({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/venda-diaria", requireAuth, handle((req) => vendas.vendaDiaria({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/novos-recorrentes", requireAuth, handle((req) => vendas.novosRecorrentes({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/cupons", requireAuth, handle((req) => vendas.usoCupons({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/comparativo-cupom", requireAuth, handle((req) => vendas.comparativoCupom({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/sazonalidade", requireAuth, handle((req) => vendas.sazonalidade({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/curva-abc", requireAuth, handle((req) => vendas.curvaAbcProdutos({
   ...parseDateRange(req),
   categoria: req.query.categoria,
   metric: req.query.metric,
   classes: req.query.classes ? String(req.query.classes).split(",").map((c) => c.trim()).filter(Boolean) : undefined,
+  statuses: parseStatusFilter(req),
 })));
 app.get("/api/vendas/categorias", requireAuth, handle(async () => {
   const { rows } = await pool.query(
@@ -189,10 +200,10 @@ app.get("/api/vendas/categorias", requireAuth, handle(async () => {
   );
   return { categorias: rows.map((r) => r.category) };
 }));
-app.get("/api/vendas/meios-pagamento", requireAuth, handle((req) => vendas.meiosDePagamento(parseDateRange(req))));
-app.get("/api/vendas/eficiencia-frete-regiao", requireAuth, handle((req) => vendas.eficienciaFretePorRegiao(parseDateRange(req))));
-app.get("/api/vendas/receita-por-regiao", requireAuth, handle((req) => vendas.receitaPorRegiao(parseDateRange(req))));
-app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => vendas.rankingProdutosXEstoque({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined })));
+app.get("/api/vendas/meios-pagamento", requireAuth, handle((req) => vendas.meiosDePagamento({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/eficiencia-frete-regiao", requireAuth, handle((req) => vendas.eficienciaFretePorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/receita-por-regiao", requireAuth, handle((req) => vendas.receitaPorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => vendas.rankingProdutosXEstoque({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
 
 // ---- Logística ----
 app.get("/api/logistica/sla-entrega", requireAuth, handle((req) => logistica.slaDeEntrega(parseDateRange(req))));
