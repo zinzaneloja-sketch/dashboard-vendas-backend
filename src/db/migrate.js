@@ -52,6 +52,21 @@ ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_id TEXT;
 -- salvo em orders.raw, sem precisar buscar de novo na Vtex).
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS list_unit_price NUMERIC(14,2);
 
+-- Cupom aplicado ao pedido (marketingData.coupon da Vtex), valor de desconto concedido no
+-- pedido (totals[].id === "Discounts", inclui cupom + outras promoções de pedido — diferente
+-- do desconto por item de list_unit_price acima, que é sobre o preço de tabela do produto),
+-- origem de UTM (marketingData.utmSource) e nº de parcelas do pagamento principal. Todos
+-- vêm do JSON do pedido que a Vtex já manda e que já guardamos em orders.raw — dá pra
+-- popular pedidos antigos com "Recalcular pedidos já sincronizados" no Admin, sem precisar
+-- buscar de novo na Vtex.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS coupon_code TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_value NUMERIC(14,2);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS utm_source TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS installments INTEGER;
+
+CREATE INDEX IF NOT EXISTS idx_orders_client_id ON orders (client_id);
+CREATE INDEX IF NOT EXISTS idx_orders_coupon_code ON orders (coupon_code);
+
 CREATE INDEX IF NOT EXISTS idx_orders_creation_date ON orders (creation_date);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);
