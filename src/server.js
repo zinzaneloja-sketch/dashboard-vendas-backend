@@ -85,6 +85,30 @@ app.get("/api/debug/sample-item-pricing", requireAuth, requireAdmin, handle(asyn
   });
 }));
 
+// ---- DIAGNÓSTICO TEMPORÁRIO: descobrir qual campo da Vtex identifica o canal de venda
+// (App x Site x Vitrine/venda assistida), pra construir a métrica "Canal de venda" sem
+// chutar o campo errado (mesmo cuidado do diagnóstico de preço acima). Mostra marketingData,
+// origin, callCenterOperatorData, openTextField e salesChannel de alguns pedidos recentes,
+// reaproveitando o JSON já salvo em orders.raw — não busca de novo na Vtex. Só admin
+// autenticado consegue chamar. Remover depois de confirmar o campo certo.
+app.get("/api/debug/sample-order-channel", requireAuth, requireAdmin, handle(async () => {
+  const { rows } = await pool.query(
+    "SELECT order_id, raw FROM orders WHERE raw IS NOT NULL ORDER BY creation_date DESC LIMIT 8"
+  );
+  return rows.map((r) => {
+    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
+    return {
+      order_id: r.order_id,
+      salesChannel: raw.salesChannel,
+      origin: raw.origin,
+      marketingData: raw.marketingData,
+      callCenterOperatorData: raw.callCenterOperatorData,
+      openTextField: raw.openTextField,
+      hostname: raw.hostname,
+    };
+  });
+}));
+
 // ---- Autenticação ----
 app.post("/api/auth/login", handle(async (req) => {
   const { email, password } = req.body || {};
@@ -148,6 +172,11 @@ app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
 }));
 app.get("/api/vendas/por-categoria", requireAuth, handle((req) => vendas.vendaPorCategoria(parseDateRange(req))));
 app.get("/api/vendas/por-tipo", requireAuth, handle((req) => vendas.vendaPorTipo(parseDateRange(req))));
+app.get("/api/vendas/venda-diaria", requireAuth, handle((req) => vendas.vendaDiaria(parseDateRange(req))));
+app.get("/api/vendas/novos-recorrentes", requireAuth, handle((req) => vendas.novosRecorrentes(parseDateRange(req))));
+app.get("/api/vendas/cupons", requireAuth, handle((req) => vendas.usoCupons({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined })));
+app.get("/api/vendas/comparativo-cupom", requireAuth, handle((req) => vendas.comparativoCupom(parseDateRange(req))));
+app.get("/api/vendas/sazonalidade", requireAuth, handle((req) => vendas.sazonalidade(parseDateRange(req))));
 app.get("/api/vendas/curva-abc", requireAuth, handle((req) => vendas.curvaAbcProdutos({
   ...parseDateRange(req),
   categoria: req.query.categoria,
