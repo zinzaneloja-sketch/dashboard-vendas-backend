@@ -98,6 +98,188 @@ async function vendaPorTipo({ dateFrom, dateTo } = {}) {
 }
 
 /**
+ * Receita diária no período (usada no gráfico "Vendas diárias" da aba Vendas), com dias
+ * sem nenhuma venda preenchidos como zero — sem isso o gráfico "pula" datas e, pior, a
+ * comparação com o período anterior (mesmo tamanho, alinhada por posição do dia e não por
+ * data de calendário) desalinharia assim que um dos dois períodos tivesse um dia vazio.
+ * `dateFrom`/`dateTo` são obrigatórios aqui (vêm sempre do filtro de período do topo do
+ * painel). Agrupamos em UTC e devolvemos a data já como string via to_char(): deixar o
+ * pg converter um date_trunc(...) (que vira "timestamp sem fuso") de volta pra um JS Date
+ * é ambíguo — o driver assumiria o fuso do processo Node — então evitamos isso na raiz.
+ */
+async function vendaDiaria({ dateFrom, dateTo } = {}) {
+  if (!dateFrom || !dateTo) {
+    const err = new Error("dateFrom e dateTo são obrigatórios para venda diária");
+    err.status = 400;
+    throw err;
+  }
+  const from = new Date(dateFrom);
+  const to = new Date(dateTo);
+  const dias = (to.getTime() - from.getTime()) / 86400000;
+  if (!(dias > 0) || dias > 366) {
+    const err = new Error("Período inválido para venda diária (intervalo deve ser positivo e de até 366 dias)");
+    err.status = 400;
+    throw err;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT to_char(d.dia, 'YYYY-MM-DD') AS data,
+            COALESCE(SUM(o.total_value), 0) AS receita,
+            COUNT(o.order_id) AS pedidos
+     FROM generate_series(
+            date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC'),
+            date_trunc('day', ($2::timestamptz - interval '1 second') AT TIME ZONE 'UTC'),
+            interval '1 day'
+          ) AS d(dia)
+     LEFT JOIN orders o
+       ON date_trunc('day', o.creation_date AT TIME ZONE 'UTC') = d.dia
+      AND o.creation_date >= $1::timestamptz AND o.creation_date < $2::timestamptz
+      AND o.status NOT IN ('canceled','cancelled')
+     GROUP BY d.dia
+     ORDER BY d.dia ASC`,
+    [from, to]
+  );
+
+  return rows.map((r) => ({ data: r.data, receita: Number(r.receita), pedidos: Number(r.pedidos) }));
+}
+
+/**
+ * Separa pedidos do período entre clientes "Novo" (esse é o primeiro pedido não cancelado
+ * da vida do cliente, considerando TODO o histórico já sincronizado — não só o período
+ * selecionado) e "Recorrente" (cliente já tinha comprado antes). Pedidos sem client_id
+ * (checkout sem identificação) caem em "Não identificado" à parte, sem contaminar a conta
+ * de clientes únicos dos outros dois grupos. Olhar o histórico completo (e não só o período)
+ * evita o viés óbvio de período curto: numa janela de 7 dias quase todo mundo pareceria
+ * "novo" se a comparação fosse só dentro do próprio período.
+ */
+async function novosRecorrentes({ dateFrom, dateTo } = {}) {
+  const { rows } = await pool.query(
+    `WITH primeira_compra AS (
+       SELECT client_id, MIN(creation_date) AS primeira_data
+       FROM orders
+       WHERE client_id IS NOT NULL AND status NOT IN ('canceled','cancelled')
+       GROUP BY client_id
+     )
+     SELECT
+       CASE
+         WHEN o.client_id IS NULL THEN 'Não identificado'
+         WHEN o.creation_date <= pc.primeira_data THEN 'Novo'
+         ELSE 'Recorrente'
+       END AS tipo,
+       COUNT(DISTINCT o.order_id) AS pedidos,
+       COUNT(DISTINCT o.client_id) AS clientes,
+       COALESCE(SUM(o.total_value), 0) AS receita
+     FROM orders o
+     LEFT JOIN primeira_compra pc ON pc.client_id = o.client_id
+     WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR o.creation_date < $2)
+       AND o.status NOT IN ('canceled','cancelled')
+     GROUP BY tipo
+     ORDER BY tipo ASC`,
+    [dateFrom || null, dateTo || null]
+  );
+  return rows.map((r) => ({ tipo: r.tipo, pedidos: Number(r.pedidos), clientes: Number(r.clientes), receita: Number(r.receita) }));
+}
+
+/**
+ * Uso de cupons no período: top cupons por nº de pedidos, com receita, desconto concedido
+ * (orders.discount_value) e ticket médio de cada um — mesma lógica da aba "Cupons" da
+ * planilha de análise. `limit` corta pra não devolver uma cauda longa de cupons usados 1 vez.
+ */
+async function usoCupons({ dateFrom, dateTo, limit = 20 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT coupon_code,
+            COUNT(*) AS pedidos,
+            COALESCE(SUM(total_value), 0) AS receita,
+            COALESCE(SUM(discount_value), 0) AS desconto
+     FROM orders
+     WHERE coupon_code IS NOT NULL
+       AND ($1::timestamptz IS NULL OR creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR creation_date < $2)
+       AND status NOT IN ('canceled','cancelled')
+     GROUP BY coupon_code
+     ORDER BY pedidos DESC
+     LIMIT $3`,
+    [dateFrom || null, dateTo || null, limit]
+  );
+  return rows.map((r) => ({
+    cupom: r.coupon_code,
+    pedidos: Number(r.pedidos),
+    receita: Number(r.receita),
+    desconto: Number(r.desconto),
+    ticketMedio: Number(r.pedidos) ? Number(r.receita) / Number(r.pedidos) : 0,
+  }));
+}
+
+/**
+ * Compara pedidos com e sem cupom no período: volume, receita e ticket médio de cada grupo.
+ * Serve pra responder "cupom tá canibalizando ticket médio ou trazendo pedido incremental?".
+ */
+async function comparativoCupom({ dateFrom, dateTo } = {}) {
+  const { rows } = await pool.query(
+    `SELECT
+       CASE WHEN coupon_code IS NULL THEN 'Sem cupom' ELSE 'Com cupom' END AS grupo,
+       COUNT(*) AS pedidos,
+       COALESCE(SUM(total_value), 0) AS receita,
+       COALESCE(SUM(discount_value), 0) AS desconto
+     FROM orders
+     WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR creation_date < $2)
+       AND status NOT IN ('canceled','cancelled')
+     GROUP BY grupo
+     ORDER BY grupo DESC`,
+    [dateFrom || null, dateTo || null]
+  );
+  return rows.map((r) => ({
+    grupo: r.grupo,
+    pedidos: Number(r.pedidos),
+    receita: Number(r.receita),
+    desconto: Number(r.desconto),
+    ticketMedio: Number(r.pedidos) ? Number(r.receita) / Number(r.pedidos) : 0,
+  }));
+}
+
+/**
+ * Sazonalidade: receita por dia da semana e por hora do dia dentro do período. Agrupamos em
+ * UTC com to_char()/extract() diretamente no SQL (mesmo motivo do padrão já usado em
+ * vendaDiaria: evitar que o pg converta uma data "sem fuso" de volta pra um JS Date de forma
+ * ambígua). `diaSemana` sai como número ISO-like do Postgres (0=domingo..6=sábado, via
+ * EXTRACT(DOW)) pro frontend decidir o rótulo em pt-BR.
+ */
+async function sazonalidade({ dateFrom, dateTo } = {}) {
+  const [porDia, porHora] = await Promise.all([
+    pool.query(
+      `SELECT EXTRACT(DOW FROM creation_date AT TIME ZONE 'UTC')::int AS dia_semana,
+              COUNT(*) AS pedidos,
+              COALESCE(SUM(total_value), 0) AS receita
+       FROM orders
+       WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
+         AND ($2::timestamptz IS NULL OR creation_date < $2)
+         AND status NOT IN ('canceled','cancelled')
+       GROUP BY dia_semana
+       ORDER BY dia_semana ASC`,
+      [dateFrom || null, dateTo || null]
+    ),
+    pool.query(
+      `SELECT EXTRACT(HOUR FROM creation_date AT TIME ZONE 'UTC')::int AS hora,
+              COUNT(*) AS pedidos,
+              COALESCE(SUM(total_value), 0) AS receita
+       FROM orders
+       WHERE ($1::timestamptz IS NULL OR creation_date >= $1)
+         AND ($2::timestamptz IS NULL OR creation_date < $2)
+         AND status NOT IN ('canceled','cancelled')
+       GROUP BY hora
+       ORDER BY hora ASC`,
+      [dateFrom || null, dateTo || null]
+    ),
+  ]);
+  return {
+    porDiaSemana: porDia.rows.map((r) => ({ diaSemana: Number(r.dia_semana), pedidos: Number(r.pedidos), receita: Number(r.receita) })),
+    porHora: porHora.rows.map((r) => ({ hora: Number(r.hora), pedidos: Number(r.pedidos), receita: Number(r.receita) })),
+  };
+}
+
+/**
  * Curva ABC de produtos.
  * @param {object} opts
  * @param {Date}   opts.dateFrom
@@ -280,6 +462,11 @@ module.exports = {
   setRevenueGoal,
   vendaPorCategoria,
   vendaPorTipo,
+  vendaDiaria,
+  novosRecorrentes,
+  usoCupons,
+  comparativoCupom,
+  sazonalidade,
   curvaAbcProdutos,
   meiosDePagamento,
   eficienciaFretePorRegiao,
