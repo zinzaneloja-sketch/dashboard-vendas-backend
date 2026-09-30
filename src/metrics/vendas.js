@@ -691,6 +691,13 @@ function nomeBaseComum(nomes) {
  * produto); `nomesVariacoes` (nomes completos de cada SKU do grupo) alimenta nomeBaseComum
  * pra mostrar um nome sem o tamanho/cor repetido, e `variacoes` diz quantos SKUs distintos
  * venderam nesse produto no período — é o que decide se o card mostra o link "ver tamanhos".
+ * `estoqueDisponivel` soma o estoque de TODOS os SKUs (tamanhos) desse product_id na tabela
+ * `inventory` (sincronizada da Vtex), pra dar uma visão geral de disponibilidade já na linha
+ * agrupada, sem precisar abrir o detalhamento por tamanho. A soma vem de uma subquery
+ * pré-agregada por product_id (uma linha por produto) antes do JOIN, exatamente pra não
+ * multiplicar as linhas de order_items (o que infla unidades_vendidas/receita) — cada produto
+ * tem várias linhas em `inventory` (uma por SKU/tamanho), então um JOIN direto sem pré-agregar
+ * contaria cada pedido uma vez por tamanho do produto.
  */
 async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } = {}) {
   const params = [dateFrom || null, dateTo || null];
@@ -704,9 +711,15 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
             SUM(oi.quantity) AS unidades_vendidas,
             SUM(oi.total_price) AS receita,
             (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo,
-            COUNT(DISTINCT oi.sku) AS variacoes
+            COUNT(DISTINCT oi.sku) AS variacoes,
+            COALESCE(MAX(inv.estoque_disponivel), 0) AS estoque_disponivel
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
+     LEFT JOIN (
+       SELECT product_id, SUM(available_quantity) AS estoque_disponivel
+       FROM inventory
+       GROUP BY product_id
+     ) inv ON inv.product_id = oi.product_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND ${statusClause("o.status", statusIdx)}
@@ -727,6 +740,7 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
     receita: Number(r.receita),
     imagemUrl: imagens[r.product_id] || null,
     variacoes: Number(r.variacoes),
+    estoqueDisponivel: Number(r.estoque_disponivel),
   }));
 }
 
@@ -737,7 +751,9 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
  * inclui o tamanho, ex. "Blusa Manga 7/8 - Preto G - PRETO") — sem tentar extrair só a sigla
  * do tamanho pra não arriscar um parsing errado, já que o formato do nome varia entre
  * produtos com cor no nome e produtos "tamanho único". Respeita os mesmos filtros de
- * período/status do card principal.
+ * período/status do card principal. `estoqueDisponivel` vem de um LEFT JOIN direto com
+ * `inventory` por SKU (chave primária da tabela, então é um casamento 1:1 — não multiplica
+ * as linhas de order_items como aconteceria juntando por product_id, que tem vários SKUs).
  */
 async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses } = {}) {
   if (!productId) return [];
@@ -746,9 +762,11 @@ async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses 
   const { rows } = await pool.query(
     `SELECT oi.sku, oi.product_name,
             SUM(oi.quantity) AS unidades_vendidas,
-            SUM(oi.total_price) AS receita
+            SUM(oi.total_price) AS receita,
+            COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
+     LEFT JOIN inventory inv ON inv.sku = oi.sku
      WHERE oi.product_id = $1
        AND ($2::timestamptz IS NULL OR o.creation_date >= $2)
        AND ($3::timestamptz IS NULL OR o.creation_date < $3)
@@ -762,6 +780,7 @@ async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses 
     nome: r.product_name,
     unidadesVendidas: Number(r.unidades_vendidas),
     receita: Number(r.receita),
+    estoqueDisponivel: Number(r.estoque_disponivel),
   }));
 }
 
