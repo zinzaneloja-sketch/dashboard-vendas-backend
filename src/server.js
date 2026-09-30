@@ -226,6 +226,102 @@ app.get("/api/debug/sample-product-image", requireAuth, requireAdmin, handle(asy
   );
 }));
 
+// ---- DIAGNÓSTICO TEMPORÁRIO: descobrir por que um produto que TEM estoque de verdade
+// aparece com "0" no painel (coluna Estoque do card "Top produtos mais vendidos"). O valor
+// exibido vem só da tabela `inventory`, que é preenchida pelo job `syncInventory` listando
+// SKUs ATIVOS no catálogo (/api/catalog_system/pvt/sku/stockkeepingunitids) — então um SKU
+// que nunca aparece nessa listagem (por qualquer motivo: IsActive=false, alguma paginação
+// que não cobriu ele, etc.) nunca ganha linha em `inventory` e cai no COALESCE(...,0) do
+// card. Esse diagnóstico busca AO VIVO na Vtex (sem depender do cache) pra cada SKU do
+// produto: (a) o que está cacheado agora em `inventory`, (b) a resposta crua do endpoint de
+// estoque da Vtex (/api/logistics/pvt/inventory/skus/{id} — mostra hasUnlimitedQuantity,
+// totalQuantity, reservedQuantity por depósito, útil pra pegar o caso de "estoque
+// ilimitado" que zera o totalQuantity) e (c) IsActive/IsAvailable do catálogo (mostra se o
+// SKU está marcado inativo, o que o tiraria da sincronização mesmo tendo estoque físico).
+// Aceita productId OU productName (busca parcial, case-insensitive, nos pedidos já
+// sincronizados) — útil quando só se sabe o nome exibido no painel. Só admin autenticado.
+app.get("/api/debug/sample-product-stock", requireAuth, requireAdmin, handle(async (req) => {
+  const vtexConn = require("./connectors/vtex");
+  const productIdParam = req.query.productId ? String(req.query.productId).trim() : null;
+  const productNameParam = req.query.productName ? String(req.query.productName).trim() : null;
+
+  if (!productIdParam && !productNameParam) {
+    return { aviso: "Informe productId ou productName." };
+  }
+
+  let productId = productIdParam;
+
+  if (!productId) {
+    const { rows: candidatos } = await pool.query(
+      `SELECT DISTINCT product_id, (array_agg(product_name))[1] AS product_name
+       FROM order_items
+       WHERE product_name ILIKE '%' || $1 || '%'
+       GROUP BY product_id
+       LIMIT 10`,
+      [productNameParam]
+    );
+    if (!candidatos.length) {
+      return { aviso: "Nenhum produto encontrado com esse nome nos pedidos sincronizados.", productNameBuscado: productNameParam };
+    }
+    if (candidatos.length > 1) {
+      return {
+        aviso: "Mais de um produto bateu com esse nome — chame de novo passando productId com um dos IDs abaixo.",
+        candidatos: candidatos.map((c) => ({ productId: c.product_id, produto: c.product_name })),
+      };
+    }
+    productId = candidatos[0].product_id;
+  }
+
+  const { rows: skuRows } = await pool.query(
+    `SELECT DISTINCT oi.sku, oi.product_name
+     FROM order_items oi
+     WHERE oi.product_id = $1
+     ORDER BY oi.sku`,
+    [productId]
+  );
+  if (!skuRows.length) {
+    return { aviso: "Nenhum SKU encontrado pra esse productId nos pedidos sincronizados.", productId };
+  }
+
+  const { rows: cacheRows } = await pool.query(
+    `SELECT sku, available_quantity, date_first_available, synced_at, raw->>'IsActive' AS is_active_cache
+     FROM inventory WHERE sku = ANY($1::text[])`,
+    [skuRows.map((r) => r.sku)]
+  );
+  const cacheBySku = {};
+  cacheRows.forEach((r) => { cacheBySku[r.sku] = r; });
+
+  return Promise.all(
+    skuRows.map(async (r) => {
+      const resultado = {
+        sku: r.sku,
+        nome: r.product_name,
+        cacheInventoryTable: cacheBySku[r.sku]
+          ? {
+              availableQuantity: Number(cacheBySku[r.sku].available_quantity),
+              dateFirstAvailable: cacheBySku[r.sku].date_first_available,
+              syncedAt: cacheBySku[r.sku].synced_at,
+              isActiveNoUltimoSync: cacheBySku[r.sku].is_active_cache,
+            }
+          : "SEM CACHE — esse SKU nunca apareceu em /api/catalog_system/pvt/sku/stockkeepingunitids (a listagem que o syncInventory usa pra saber quais SKUs buscar), então nunca foi gravado em `inventory` e por isso o painel mostra 0.",
+      };
+      try {
+        const inv = await vtexConn.getSkuInventory(r.sku);
+        resultado.estoqueAoVivoNaVtex = inv;
+      } catch (err) {
+        resultado.erroEstoqueAoVivo = err.message;
+      }
+      try {
+        const d = await vtexConn.getSkuDetail(r.sku);
+        resultado.detalheSkuAoVivo = { IsActive: d.IsActive, IsAvailable: d.IsAvailable, RefId: d.RefId, SkuName: d.SkuName };
+      } catch (err) {
+        resultado.erroDetalheAoVivo = err.message;
+      }
+      return resultado;
+    })
+  );
+}));
+
 // ---- Autenticação ----
 app.post("/api/auth/login", handle(async (req) => {
   const { email, password } = req.body || {};
