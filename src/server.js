@@ -122,23 +122,77 @@ app.get("/api/debug/sample-order-channel", requireAuth, requireAdmin, handle(asy
 // ---- DIAGNÓSTICO TEMPORÁRIO: confirmar (a) o formato da resposta da Vtex pra foto de SKU
 // (endpoint /api/catalog/pvt/stockkeepingunit/{skuId}/file — ver getSkuMainImageUrl em
 // connectors/vtex.js) e (b) quais campos do SKU indicam "mesma referência, tamanho
-// diferente" (RefId/ProductRefId/nomes), pra montar o agrupamento por tamanho pedido no
-// card "Top produtos mais vendidos" sem chutar o formato. Amostra exatamente os produtos
-// que aparecem no Top 15 (mesma query de produtosMaisVendidos, sem filtro de período), não
-// SKUs aleatórios — assim o resultado já mostra direto quais dos produtos do card estão sem
-// foto. Chama a Vtex de verdade pra alguns SKUs reais e devolve a resposta crua pra
-// conferência manual. Remover depois de confirmar fotos + campo de referência. Só admin
-// autenticado consegue chamar.
-app.get("/api/debug/sample-product-image", requireAuth, requireAdmin, handle(async () => {
+// diferente" (RefId/ProductRefId/nomes). Chama a Vtex de verdade e devolve a resposta crua
+// pra conferência manual. Só admin autenticado consegue chamar.
+//
+// Dois modos:
+//  - ?productId=X (+ opcionalmente dateFrom/dateTo/status, iguais ao filtro do painel):
+//    investiga UM produto específico — todas as variações (SKUs) dele, não só a
+//    representativa, e marca qual delas é a "representativa" NESSE filtro (a escolhida pra
+//    buscar a foto é sempre a mais vendida dentro do período/status selecionado no painel,
+//    então pode mudar produto a produto e filtro a filtro). Usado quando um produto
+//    específico aparece sem foto no card, tipo "Calça Pantalona Detalhe Vivos".
+//  - sem productId: amostra geral do Top 15 (mesmo agrupamento de produtosMaisVendidos),
+//    respeitando dateFrom/dateTo/status recebidos (o botão do painel manda os mesmos filtros
+//    ativos na aba Vendas).
+app.get("/api/debug/sample-product-image", requireAuth, requireAdmin, handle(async (req) => {
   const vtexConn = require("./connectors/vtex");
+  const { dateFrom, dateTo } = parseDateRange(req);
+  const statuses = parseStatusFilter(req);
+  const statusParam = Array.isArray(statuses) && statuses.length ? statuses : null;
+  const productId = req.query.productId ? String(req.query.productId).trim() : null;
+
+  if (productId) {
+    const statusSqlProduto = `(($4::text[] IS NULL AND o.status NOT IN ('canceled','cancelled')) OR ($4::text[] IS NOT NULL AND o.status = ANY($4::text[])))`;
+    const { rows } = await pool.query(
+      `SELECT oi.sku, oi.product_name, SUM(oi.quantity) AS unidades_vendidas
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       WHERE oi.product_id = $1
+         AND ($2::timestamptz IS NULL OR o.creation_date >= $2)
+         AND ($3::timestamptz IS NULL OR o.creation_date < $3)
+         AND ${statusSqlProduto}
+       GROUP BY oi.sku, oi.product_name
+       ORDER BY unidades_vendidas DESC`,
+      [productId, dateFrom || null, dateTo || null, statusParam]
+    );
+    if (!rows.length) {
+      return { productId, aviso: "Nenhuma venda desse produto no período/status informado — confira se o productId está certo e se o filtro do painel não está deixando esse produto de fora." };
+    }
+    const skuRepresentativoAtual = rows[0].sku;
+    return Promise.all(
+      rows.map(async (r) => {
+        const resultado = {
+          sku: r.sku,
+          nome: r.product_name,
+          unidadesVendidas: Number(r.unidades_vendidas),
+          ehRepresentativoNesseFiltro: r.sku === skuRepresentativoAtual,
+        };
+        try {
+          resultado.arquivos = await vtexConn.getSkuFiles(r.sku);
+        } catch (err) {
+          resultado.erroArquivos = err.message;
+        }
+        return resultado;
+      })
+    );
+  }
+
+  const statusSqlTop15 = `(($3::text[] IS NULL AND o.status NOT IN ('canceled','cancelled')) OR ($3::text[] IS NOT NULL AND o.status = ANY($3::text[])))`;
   const { rows } = await pool.query(
-    `SELECT oi.product_id, oi.product_name,
+    `SELECT oi.product_id,
+            (array_agg(oi.product_name ORDER BY oi.quantity DESC, oi.id ASC))[1] AS product_name,
             SUM(oi.quantity) AS unidades_vendidas,
             (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo
      FROM order_items oi
-     GROUP BY oi.product_id, oi.product_name
+     JOIN orders o ON o.order_id = oi.order_id
+     WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR o.creation_date < $2)
+       AND ${statusSqlTop15}
+     GROUP BY oi.product_id
      ORDER BY unidades_vendidas DESC
-     LIMIT 15`
+     LIMIT 15`,
+    [dateFrom || null, dateTo || null, statusParam]
   );
   return Promise.all(
     rows.map(async (r) => {
