@@ -115,6 +115,15 @@ CREATE TABLE IF NOT EXISTS inventory (
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS date_first_available TIMESTAMPTZ;
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS raw JSONB;
 
+-- Flag "estoque ilimitado" (campo hasUnlimitedQuantity de cada depósito na resposta da Vtex
+-- em /api/logistics/pvt/inventory/skus/{id}). Um SKU nesse modo fica sempre disponível pra
+-- venda na Vtex independente da quantidade numérica do depósito (a própria Vtex documenta
+-- que, nesse caso, "a quantidade disponível nunca diminui, e o SKU nunca fica sem estoque") —
+-- por isso available_quantity sozinho não basta pra saber se o produto está "zerado" de
+-- verdade: um SKU ilimitado pode ter totalQuantity=0 num depósito e ainda assim estar
+-- disponível. Guardamos a flag separada pra exibir "Ilimitado" no painel em vez de "0".
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS has_unlimited_quantity BOOLEAN NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS sync_state (
   key                 TEXT PRIMARY KEY,
   value                TEXT,
