@@ -89,6 +89,41 @@ async function getSkuDetail(skuId) {
 }
 
 /**
+ * Arquivos/fotos associados a um SKU (API de "SKU File Association" da Vtex — mesma família
+ * de endpoint privado já usada em getSkuDetail acima). Retorna a lista crua da Vtex: cada
+ * item costuma trazer Id, ArchiveId, SkuId, Name, IsMain, Label, Text, Url. Usamos a mesma
+ * autenticação (AppKey/AppToken) já configurada no client.
+ */
+async function getSkuFiles(skuId) {
+  const { data } = await client.get(`/api/catalog/pvt/stockkeepingunit/${skuId}/file`);
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * URL da foto principal de um SKU (a marcada como IsMain, ou a primeira da lista se nenhuma
+ * estiver marcada). Devolve null em qualquer falha — produto sem foto cadastrada, SKU
+ * removido do catálogo, Vtex fora do ar, campo com nome diferente do esperado — pra nunca
+ * derrubar o card de "Top produtos" por causa de uma foto que não carregou. Se a Vtex nunca
+ * tiver sido validada nesse ponto específico (não temos como testar contra a conta real da
+ * loja a partir daqui), o endpoint de diagnóstico /api/debug/sample-product-image devolve a
+ * resposta crua da Vtex pra conferência manual.
+ */
+async function getSkuMainImageUrl(skuId) {
+  try {
+    const files = await getSkuFiles(skuId);
+    if (!files.length) return null;
+    const main = files.find((f) => f.IsMain === true || f.isMain === true) || files[0];
+    let url = main && (main.Url || main.url);
+    if (!url) return null;
+    if (url.startsWith("//")) url = "https:" + url;
+    return url;
+  } catch (err) {
+    console.warn(`[vtex] Falha ao buscar foto do SKU ${skuId}:`, err.message);
+    return null;
+  }
+}
+
+/**
  * Lista os depósitos/lojas (warehouses) cadastrados na conta — inclui as lojas físicas
  * usadas na estratégia OMNI (ship-from-store), de onde o estoque do e-commerce é expedido.
  */
@@ -125,6 +160,8 @@ module.exports = {
   getSkuInventory,
   listActiveSkuIds,
   getSkuDetail,
+  getSkuFiles,
+  getSkuMainImageUrl,
   getCategoryTree,
   getCategoryMap,
   listWarehouses,
