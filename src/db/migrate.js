@@ -121,6 +121,17 @@ CREATE TABLE IF NOT EXISTS sync_state (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Cache da foto principal de cada produto (buscada sob demanda na Vtex — ver
+-- resolveProductImages em metrics/vendas.js), usada no card "Top produtos mais vendidos".
+-- Só guarda produtos que já apareceram nesse ranking, não o catálogo inteiro: buscar a foto
+-- de TODOS os produtos a cada sync seria centenas de chamadas na Vtex sem necessidade, já
+-- que só os mais vendidos aparecem no card.
+CREATE TABLE IF NOT EXISTS product_images (
+  product_id          TEXT PRIMARY KEY,
+  image_url           TEXT,
+  synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Metas de receita configuráveis manualmente pelo usuário (Vtex não tem conceito de "meta")
 CREATE TABLE IF NOT EXISTS revenue_goals (
   month               DATE PRIMARY KEY, -- sempre dia 1 do mês
