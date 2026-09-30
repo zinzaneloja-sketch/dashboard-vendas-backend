@@ -654,12 +654,43 @@ async function resolveProductImages(items) {
 }
 
 /**
+ * Acha o maior prefixo comum a uma lista de nomes e corta no último " - " completo antes
+ * dele, pra não cortar no meio de uma palavra. Usado pra tirar um "nome base" de produto a
+ * partir dos nomes completos das suas variações (que na Zinzane incluem tamanho e cor no
+ * final, ex.: "Blusa Manga 7/8 - Preto G - PRETO" / "... - Preto M - PRETO" -> "Blusa Manga
+ * 7/8"). Só usa dado que já temos (product_name salvo do pedido) — nada de campo novo da
+ * Vtex. Com uma única variação (produto de tamanho único), devolve o próprio nome, sem cortar
+ * nada.
+ */
+function nomeBaseComum(nomes) {
+  const unicos = Array.from(new Set((nomes || []).filter(Boolean)));
+  if (!unicos.length) return null;
+  if (unicos.length === 1) return unicos[0];
+  let prefixo = unicos[0];
+  for (let i = 1; i < unicos.length && prefixo; i++) {
+    const atual = unicos[i];
+    let j = 0;
+    while (j < prefixo.length && j < atual.length && prefixo[j] === atual[j]) j++;
+    prefixo = prefixo.slice(0, j);
+  }
+  const corte = prefixo.lastIndexOf(" - ");
+  const base = (corte > 0 ? prefixo.slice(0, corte) : prefixo).trim();
+  return base || unicos[0];
+}
+
+/**
  * Top produtos mais vendidos (por unidades), pra identificação visual rápida — pensado pra
  * mostrar foto + nome + unidades + valor total num card com "ver tudo". Agrupa por PRODUTO
- * (não por SKU, ao contrário do ranking de estoque acima), pra não diluir um produto com
- * várias variações (cor/tamanho) em várias linhas separadas. `skuRepresentativo` é a
- * variação mais vendida desse produto no período — usada só pra buscar UMA foto (a Vtex
- * associa fotos a SKU, não a produto).
+ * (product_id da Vtex), não por SKU, pra não diluir um produto com várias variações de
+ * tamanho em várias linhas separadas — confirmado via /api/debug/sample-product-image que
+ * nessa loja tamanhos diferentes do mesmo produto/cor têm o MESMO product_id (o que muda é só
+ * o SKU e o product_name completo). Uma versão anterior desse agrupamento incluía
+ * product_name no GROUP BY, o que na prática desfazia o agrupamento (cada tamanho tem um
+ * product_name diferente) — corrigido aqui. `skuRepresentativo` é a variação mais vendida
+ * desse produto no período, usada só pra buscar UMA foto (a Vtex associa fotos a SKU, não a
+ * produto); `nomesVariacoes` (nomes completos de cada SKU do grupo) alimenta nomeBaseComum
+ * pra mostrar um nome sem o tamanho/cor repetido, e `variacoes` diz quantos SKUs distintos
+ * venderam nesse produto no período — é o que decide se o card mostra o link "ver tamanhos".
  */
 async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } = {}) {
   const params = [dateFrom || null, dateTo || null];
@@ -667,16 +698,19 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
   params.push(limit || null);
   const limitIdx = params.length;
   const { rows } = await pool.query(
-    `SELECT oi.product_id, oi.product_name, oi.category,
+    `SELECT oi.product_id,
+            array_agg(DISTINCT oi.product_name) AS nomes_variacoes,
+            (array_agg(oi.category ORDER BY oi.quantity DESC, oi.id ASC))[1] AS category,
             SUM(oi.quantity) AS unidades_vendidas,
             SUM(oi.total_price) AS receita,
-            (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo
+            (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo,
+            COUNT(DISTINCT oi.sku) AS variacoes
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
        AND ($2::timestamptz IS NULL OR o.creation_date < $2)
        AND ${statusClause("o.status", statusIdx)}
-     GROUP BY oi.product_id, oi.product_name, oi.category
+     GROUP BY oi.product_id
      ORDER BY unidades_vendidas DESC
      LIMIT $${limitIdx}`,
     params
@@ -687,11 +721,47 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
 
   return rows.map((r) => ({
     produtoId: r.product_id,
-    produto: r.product_name,
+    produto: nomeBaseComum(r.nomes_variacoes),
     categoria: r.category,
     unidadesVendidas: Number(r.unidades_vendidas),
     receita: Number(r.receita),
     imagemUrl: imagens[r.product_id] || null,
+    variacoes: Number(r.variacoes),
+  }));
+}
+
+/**
+ * Detalhamento por tamanho/variação de um produto do card "Top produtos mais vendidos" —
+ * usado quando o usuário clica num produto com mais de uma variação pra ver quanto vendeu de
+ * cada tamanho. Uma linha por SKU (mesmo product_id), com o nome completo daquele SKU (que
+ * inclui o tamanho, ex. "Blusa Manga 7/8 - Preto G - PRETO") — sem tentar extrair só a sigla
+ * do tamanho pra não arriscar um parsing errado, já que o formato do nome varia entre
+ * produtos com cor no nome e produtos "tamanho único". Respeita os mesmos filtros de
+ * período/status do card principal.
+ */
+async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses } = {}) {
+  if (!productId) return [];
+  const params = [String(productId), dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
+  const { rows } = await pool.query(
+    `SELECT oi.sku, oi.product_name,
+            SUM(oi.quantity) AS unidades_vendidas,
+            SUM(oi.total_price) AS receita
+     FROM order_items oi
+     JOIN orders o ON o.order_id = oi.order_id
+     WHERE oi.product_id = $1
+       AND ($2::timestamptz IS NULL OR o.creation_date >= $2)
+       AND ($3::timestamptz IS NULL OR o.creation_date < $3)
+       AND ${statusClause("o.status", statusIdx)}
+     GROUP BY oi.sku, oi.product_name
+     ORDER BY unidades_vendidas DESC`,
+    params
+  );
+  return rows.map((r) => ({
+    sku: r.sku,
+    nome: r.product_name,
+    unidadesVendidas: Number(r.unidades_vendidas),
+    receita: Number(r.receita),
   }));
 }
 
@@ -712,4 +782,5 @@ module.exports = {
   receitaPorRegiao,
   rankingProdutosXEstoque,
   produtosMaisVendidos,
+  produtoDetalhePorTamanho,
 };
