@@ -1,6 +1,19 @@
 const { pool } = require("../db");
 const vtex = require("../connectors/vtex");
 
+// Fuso horário da loja, usado em toda métrica que agrupa/extrai por DIA, DIA DA SEMANA ou
+// HORA (Vendas diárias, Vendas por dia da semana, Vendas por hora do dia, Projeção de
+// fechamento do dia). `creation_date` é salvo como timestamptz (instante absoluto, sem
+// ambiguidade) — o bug que isso corrige é usar 'UTC' como fuso de referência pra "que dia/hora
+// é esse instante", quando a loja opera em horário de Brasília (UTC-3, sem horário de verão
+// desde 2019). Um pedido feito às 22h de Brasília vira 01h UTC do dia SEGUINTE — com 'UTC'
+// como referência, esse pedido caía no dia errado (e na hora errada, e por tabela às vezes no
+// dia da semana errado), fazendo o "Vendas diárias" de ontem aparecer menor do que o real (a
+// receita da noite migrava pra hoje) e a "Projeção de fechamento do dia" comparar hoje com o
+// dia da semana errado perto da virada. Configurável via STORE_TIMEZONE (nome de fuso IANA)
+// caso a loja opere em outro fuso; América/São_Paulo é o padrão certo pra essa conta.
+const STORE_TZ = process.env.STORE_TIMEZONE || "America/Sao_Paulo";
+
 /**
  * Filtro de status usado por quase toda métrica da aba Vendas (o filtro "Status" no topo da
  * aba, ao lado do período). `pushStatusParam` empilha o valor no array de bind da query e
@@ -127,9 +140,11 @@ async function vendaPorTipo({ dateFrom, dateTo, statuses } = {}) {
  * comparação com o período anterior (mesmo tamanho, alinhada por posição do dia e não por
  * data de calendário) desalinharia assim que um dos dois períodos tivesse um dia vazio.
  * `dateFrom`/`dateTo` são obrigatórios aqui (vêm sempre do filtro de período do topo do
- * painel). Agrupamos em UTC e devolvemos a data já como string via to_char(): deixar o
- * pg converter um date_trunc(...) (que vira "timestamp sem fuso") de volta pra um JS Date
- * é ambíguo — o driver assumiria o fuso do processo Node — então evitamos isso na raiz.
+ * painel). Agrupamos no fuso da loja (STORE_TZ) — não em UTC — pra "ontem" e "hoje" baterem
+ * com o calendário de Brasília, não com o calendário UTC (ver comentário de STORE_TZ no topo
+ * do arquivo). Devolvemos a data já como string via to_char(): deixar o pg converter um
+ * date_trunc(...) (que vira "timestamp sem fuso") de volta pra um JS Date é ambíguo — o driver
+ * assumiria o fuso do processo Node — então evitamos isso na raiz.
  */
 async function vendaDiaria({ dateFrom, dateTo, statuses } = {}) {
   if (!dateFrom || !dateTo) {
@@ -153,12 +168,12 @@ async function vendaDiaria({ dateFrom, dateTo, statuses } = {}) {
             COALESCE(SUM(o.total_value), 0) AS receita,
             COUNT(o.order_id) AS pedidos
      FROM generate_series(
-            date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC'),
-            date_trunc('day', ($2::timestamptz - interval '1 second') AT TIME ZONE 'UTC'),
+            date_trunc('day', $1::timestamptz AT TIME ZONE '${STORE_TZ}'),
+            date_trunc('day', ($2::timestamptz - interval '1 second') AT TIME ZONE '${STORE_TZ}'),
             interval '1 day'
           ) AS d(dia)
      LEFT JOIN orders o
-       ON date_trunc('day', o.creation_date AT TIME ZONE 'UTC') = d.dia
+       ON date_trunc('day', o.creation_date AT TIME ZONE '${STORE_TZ}') = d.dia
       AND o.creation_date >= $1::timestamptz AND o.creation_date < $2::timestamptz
       AND ${statusClause("o.status", statusIdx)}
      GROUP BY d.dia
@@ -288,7 +303,7 @@ async function sazonalidade({ dateFrom, dateTo, statuses } = {}) {
 
   const [porDia, porHora] = await Promise.all([
     pool.query(
-      `SELECT EXTRACT(DOW FROM creation_date AT TIME ZONE 'UTC')::int AS dia_semana,
+      `SELECT EXTRACT(DOW FROM creation_date AT TIME ZONE '${STORE_TZ}')::int AS dia_semana,
               COUNT(*) AS pedidos,
               COALESCE(SUM(total_value), 0) AS receita
        FROM orders
@@ -300,7 +315,7 @@ async function sazonalidade({ dateFrom, dateTo, statuses } = {}) {
       porDiaParams
     ),
     pool.query(
-      `SELECT EXTRACT(HOUR FROM creation_date AT TIME ZONE 'UTC')::int AS hora,
+      `SELECT EXTRACT(HOUR FROM creation_date AT TIME ZONE '${STORE_TZ}')::int AS hora,
               COUNT(*) AS pedidos,
               COALESCE(SUM(total_value), 0) AS receita
        FROM orders
@@ -348,9 +363,16 @@ async function projecaoFechamentoDia({ statuses } = {}) {
   const { rows } = await pool.query(
     `WITH params AS (
        SELECT
-         date_trunc('day', now() AT TIME ZONE 'UTC') AS hoje,
-         EXTRACT(DOW FROM now() AT TIME ZONE 'UTC')::int AS dia_semana_hoje,
-         EXTRACT(HOUR FROM now() AT TIME ZONE 'UTC')::int AS hora_atual
+         -- "hoje" precisa continuar timestamptz (não um timestamp sem fuso) pra comparar
+         -- direto com o.creation_date mais abaixo sem cair na pegadinha de comparação
+         -- timestamptz x timestamp (que o Postgres resolveria usando o fuso da SESSÃO, não
+         -- o '${STORE_TZ}' que usamos aqui) — por isso a dupla conversão AT TIME ZONE: a
+         -- primeira lê o instante atual como hora de parede em ${STORE_TZ}, o date_trunc
+         -- corta pra meia-noite NESSA hora de parede, e a segunda AT TIME ZONE converte essa
+         -- meia-noite de volta pra um instante absoluto (timestamptz) correto.
+         date_trunc('day', now() AT TIME ZONE '${STORE_TZ}') AT TIME ZONE '${STORE_TZ}' AS hoje,
+         EXTRACT(DOW FROM now() AT TIME ZONE '${STORE_TZ}')::int AS dia_semana_hoje,
+         EXTRACT(HOUR FROM now() AT TIME ZONE '${STORE_TZ}')::int AS hora_atual
      ),
      hoje_receita AS (
        SELECT COALESCE(SUM(o.total_value), 0) AS receita, COUNT(*) AS pedidos
@@ -360,13 +382,13 @@ async function projecaoFechamentoDia({ statuses } = {}) {
          AND ${statusClause("o.status", statusIdx)}
      ),
      historico AS (
-       SELECT date_trunc('day', o.creation_date AT TIME ZONE 'UTC') AS dia,
-              EXTRACT(HOUR FROM o.creation_date AT TIME ZONE 'UTC')::int AS hora,
+       SELECT date_trunc('day', o.creation_date AT TIME ZONE '${STORE_TZ}') AS dia,
+              EXTRACT(HOUR FROM o.creation_date AT TIME ZONE '${STORE_TZ}')::int AS hora,
               o.total_value
        FROM orders o CROSS JOIN params p
        WHERE o.creation_date >= p.hoje - interval '${PROJECAO_LOOKBACK_DIAS} days'
          AND o.creation_date < p.hoje
-         AND EXTRACT(DOW FROM o.creation_date AT TIME ZONE 'UTC')::int = p.dia_semana_hoje
+         AND EXTRACT(DOW FROM o.creation_date AT TIME ZONE '${STORE_TZ}')::int = p.dia_semana_hoje
          AND ${statusClause("o.status", statusIdx)}
      )
      SELECT
