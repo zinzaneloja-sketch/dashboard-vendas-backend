@@ -284,7 +284,7 @@ app.get("/api/debug/sample-product-stock", requireAuth, requireAdmin, handle(asy
   }
 
   const { rows: cacheRows } = await pool.query(
-    `SELECT sku, available_quantity, date_first_available, synced_at, raw->>'IsActive' AS is_active_cache
+    `SELECT sku, available_quantity, has_unlimited_quantity, date_first_available, synced_at, raw->>'IsActive' AS is_active_cache
      FROM inventory WHERE sku = ANY($1::text[])`,
     [skuRows.map((r) => r.sku)]
   );
@@ -299,6 +299,7 @@ app.get("/api/debug/sample-product-stock", requireAuth, requireAdmin, handle(asy
         cacheInventoryTable: cacheBySku[r.sku]
           ? {
               availableQuantity: Number(cacheBySku[r.sku].available_quantity),
+              hasUnlimitedQuantity: cacheBySku[r.sku].has_unlimited_quantity,
               dateFirstAvailable: cacheBySku[r.sku].date_first_available,
               syncedAt: cacheBySku[r.sku].synced_at,
               isActiveNoUltimoSync: cacheBySku[r.sku].is_active_cache,
