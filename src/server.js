@@ -119,26 +119,55 @@ app.get("/api/debug/sample-order-channel", requireAuth, requireAdmin, handle(asy
   });
 }));
 
-// ---- DIAGNÓSTICO TEMPORÁRIO: confirmar o formato da resposta da Vtex pra foto de SKU
+// ---- DIAGNÓSTICO TEMPORÁRIO: confirmar (a) o formato da resposta da Vtex pra foto de SKU
 // (endpoint /api/catalog/pvt/stockkeepingunit/{skuId}/file — ver getSkuMainImageUrl em
-// connectors/vtex.js, usado no card "Top produtos mais vendidos"). Ao contrário dos dois
-// diagnósticos acima, este chama a Vtex de verdade (não tem como confirmar o formato exato
-// da resposta sem isso) pra alguns SKUs reais e recentes, e devolve a resposta crua pra
-// conferência manual. Remover depois de confirmar que as fotos aparecem certas no card. Só
-// admin autenticado consegue chamar.
+// connectors/vtex.js) e (b) quais campos do SKU indicam "mesma referência, tamanho
+// diferente" (RefId/ProductRefId/nomes), pra montar o agrupamento por tamanho pedido no
+// card "Top produtos mais vendidos" sem chutar o formato. Amostra exatamente os produtos
+// que aparecem no Top 15 (mesma query de produtosMaisVendidos, sem filtro de período), não
+// SKUs aleatórios — assim o resultado já mostra direto quais dos produtos do card estão sem
+// foto. Chama a Vtex de verdade pra alguns SKUs reais e devolve a resposta crua pra
+// conferência manual. Remover depois de confirmar fotos + campo de referência. Só admin
+// autenticado consegue chamar.
 app.get("/api/debug/sample-product-image", requireAuth, requireAdmin, handle(async () => {
   const vtexConn = require("./connectors/vtex");
   const { rows } = await pool.query(
-    "SELECT DISTINCT sku, product_name FROM order_items ORDER BY sku DESC LIMIT 5"
+    `SELECT oi.product_id, oi.product_name,
+            SUM(oi.quantity) AS unidades_vendidas,
+            (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo
+     FROM order_items oi
+     GROUP BY oi.product_id, oi.product_name
+     ORDER BY unidades_vendidas DESC
+     LIMIT 15`
   );
   return Promise.all(
     rows.map(async (r) => {
+      const resultado = {
+        productId: r.product_id,
+        produto: r.product_name,
+        unidadesVendidas: Number(r.unidades_vendidas),
+        skuRepresentativo: r.sku_representativo,
+      };
       try {
-        const arquivos = await vtexConn.getSkuFiles(r.sku);
-        return { sku: r.sku, produto: r.product_name, arquivos };
+        resultado.arquivos = await vtexConn.getSkuFiles(r.sku_representativo);
       } catch (err) {
-        return { sku: r.sku, produto: r.product_name, erro: err.message };
+        resultado.erroArquivos = err.message;
       }
+      try {
+        const d = await vtexConn.getSkuDetail(r.sku_representativo);
+        resultado.detalheSku = {
+          RefId: d.RefId,
+          ProductRefId: d.ProductRefId,
+          ProductId: d.ProductId,
+          ProductName: d.ProductName,
+          NameComplete: d.NameComplete,
+          SkuName: d.SkuName,
+          IsActive: d.IsActive,
+        };
+      } catch (err) {
+        resultado.erroDetalheSku = err.message;
+      }
+      return resultado;
     })
   );
 }));
