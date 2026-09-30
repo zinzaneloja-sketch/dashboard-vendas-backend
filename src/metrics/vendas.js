@@ -556,6 +556,7 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
             SUM(oi.quantity) AS unidades_vendidas,
             SUM(oi.total_price) AS receita,
             COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel,
+            COALESCE(BOOL_OR(inv.has_unlimited_quantity), false) AS estoque_ilimitado,
             MIN(o.creation_date) AS primeira_venda,
             MAX(o.creation_date) AS ultima_venda
      FROM order_items oi
@@ -577,6 +578,7 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
   return rows.map((r) => {
     const unidadesVendidas = Number(r.unidades_vendidas);
     const estoqueDisponivel = Number(r.estoque_disponivel);
+    const estoqueIlimitado = Boolean(r.estoque_ilimitado);
 
     let diasPeriodo = periodoMs ? periodoMs / 86400000 : null;
     if (!diasPeriodo && r.primeira_venda && r.ultima_venda) {
@@ -587,7 +589,8 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
 
     const velocidadeDiaria = unidadesVendidas / diasPeriodo;
     const estoqueAlvo = velocidadeDiaria * coverageDays;
-    const sugestaoReposicao = Math.max(0, Math.ceil(estoqueAlvo - estoqueDisponivel));
+    // Estoque ilimitado nunca precisa de reposição, independente da conta acima.
+    const sugestaoReposicao = estoqueIlimitado ? 0 : Math.max(0, Math.ceil(estoqueAlvo - estoqueDisponivel));
 
     return {
       produto: r.product_name,
@@ -596,6 +599,7 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
       unidadesVendidas,
       receita: Number(r.receita),
       estoqueDisponivel,
+      estoqueIlimitado,
       velocidadeDiaria: Number(velocidadeDiaria.toFixed(2)),
       sugestaoReposicao,
     };
@@ -712,11 +716,12 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
             SUM(oi.total_price) AS receita,
             (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo,
             COUNT(DISTINCT oi.sku) AS variacoes,
-            COALESCE(MAX(inv.estoque_disponivel), 0) AS estoque_disponivel
+            COALESCE(MAX(inv.estoque_disponivel), 0) AS estoque_disponivel,
+            COALESCE(MAX(inv.tem_ilimitado::int), 0)::boolean AS estoque_ilimitado
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN (
-       SELECT product_id, SUM(available_quantity) AS estoque_disponivel
+       SELECT product_id, SUM(available_quantity) AS estoque_disponivel, BOOL_OR(has_unlimited_quantity) AS tem_ilimitado
        FROM inventory
        GROUP BY product_id
      ) inv ON inv.product_id = oi.product_id
@@ -741,6 +746,7 @@ async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } =
     imagemUrl: imagens[r.product_id] || null,
     variacoes: Number(r.variacoes),
     estoqueDisponivel: Number(r.estoque_disponivel),
+    estoqueIlimitado: Boolean(r.estoque_ilimitado),
   }));
 }
 
@@ -763,7 +769,8 @@ async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses 
     `SELECT oi.sku, oi.product_name,
             SUM(oi.quantity) AS unidades_vendidas,
             SUM(oi.total_price) AS receita,
-            COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel
+            COALESCE(MAX(inv.available_quantity), 0) AS estoque_disponivel,
+            COALESCE(BOOL_OR(inv.has_unlimited_quantity), false) AS estoque_ilimitado
      FROM order_items oi
      JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN inventory inv ON inv.sku = oi.sku
@@ -781,6 +788,7 @@ async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses 
     unidadesVendidas: Number(r.unidades_vendidas),
     receita: Number(r.receita),
     estoqueDisponivel: Number(r.estoque_disponivel),
+    estoqueIlimitado: Boolean(r.estoque_ilimitado),
   }));
 }
 
