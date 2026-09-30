@@ -423,14 +423,30 @@ async function syncInventory() {
       ]);
       if (!detail) return;
 
-      const available = (inventory?.balance || []).reduce((sum, b) => sum + (b.totalQuantity || 0), 0);
+      // A Vtex retorna um "balance" por depósito, cada um com totalQuantity (quantidade
+      // física, INCLUINDO unidades já reservadas por outros pedidos), reservedQuantity e
+      // hasUnlimitedQuantity. available_quantity precisa ser a quantidade DISPONÍVEL pra
+      // venda, não a física — por isso subtraímos reservedQuantity (documentado pela própria
+      // Vtex como "availableQuantity = totalQuantity - reservedQuantity"). Um depósito com
+      // hasUnlimitedQuantity=true fica sempre disponível pra venda independente da
+      // quantidade numérica (a Vtex documenta que nesse caso o SKU "nunca fica sem
+      // estoque", mesmo que totalQuantity venha 0) — por isso não somamos a quantidade
+      // desse depósito (não representa um limite real) e marcamos has_unlimited_quantity
+      // separadamente, pra o painel mostrar "Ilimitado" em vez de "0".
+      const balances = inventory?.balance || [];
+      const hasUnlimitedQuantity = balances.some((b) => b.hasUnlimitedQuantity === true);
+      const available = balances.reduce((sum, b) => {
+        if (b.hasUnlimitedQuantity) return sum;
+        const sellable = (b.totalQuantity || 0) - (b.reservedQuantity || 0);
+        return sum + Math.max(0, sellable);
+      }, 0);
       const dateFirstAvailable = extractDateFirstAvailable(detail);
 
       await pool.query(
-        `INSERT INTO inventory (product_id, sku, product_name, category, available_quantity, date_first_available, raw, synced_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7, now())
-         ON CONFLICT (sku) DO UPDATE SET product_id = $1, product_name = $3, category = $4, available_quantity = $5, date_first_available = $6, raw = $7, synced_at = now()`,
-        [String(detail.ProductId), String(skuId), detail.SkuName || detail.NameComplete, detail.CategoryName || null, available, dateFirstAvailable, JSON.stringify(detail)]
+        `INSERT INTO inventory (product_id, sku, product_name, category, available_quantity, has_unlimited_quantity, date_first_available, raw, synced_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+         ON CONFLICT (sku) DO UPDATE SET product_id = $1, product_name = $3, category = $4, available_quantity = $5, has_unlimited_quantity = $6, date_first_available = $7, raw = $8, synced_at = now()`,
+        [String(detail.ProductId), String(skuId), detail.SkuName || detail.NameComplete, detail.CategoryName || null, available, hasUnlimitedQuantity, dateFirstAvailable, JSON.stringify(detail)]
       );
       totalSynced += 1;
     });
