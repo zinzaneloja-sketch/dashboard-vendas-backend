@@ -132,6 +132,19 @@ CREATE TABLE IF NOT EXISTS product_images (
   synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Limpeza única do cache de fotos gravado com a URL errada: até essa correção,
+-- getSkuMainImageUrl (connectors/vtex.js) usava o campo Url que a Vtex devolve pro arquivo
+-- do SKU, que aponta pro bucket S3 de upload interno da Vtex (ex.: sincdn.s3.sa-east-1.
+-- amazonaws.com) — esse bucket não é acessível publicamente pelo navegador, por isso a foto
+-- não aparecia no card mesmo quando a Vtex retornava uma Url preenchida. Confirmado
+-- comparando com o site público da Zinzane: lá as fotos são servidas por
+-- {conta}.vtexassets.com, a partir do ArchiveId do arquivo — é isso que getSkuMainImageUrl
+-- passou a usar. Sem essa limpeza, produtos que já tinham uma foto (errada) cacheada aqui
+-- nunca seriam buscados de novo (resolveProductImages só busca o que ainda não está em
+-- cache). Idempotente: só apaga o que não é do domínio novo, então não faz nada depois que o
+-- cache for todo repovoado com a URL certa.
+DELETE FROM product_images WHERE image_url NOT LIKE '%.vtexassets.com/%';
+
 -- Metas de receita configuráveis manualmente pelo usuário (Vtex não tem conceito de "meta")
 CREATE TABLE IF NOT EXISTS revenue_goals (
   month               DATE PRIMARY KEY, -- sempre dia 1 do mês
