@@ -9,6 +9,24 @@ const { pool } = require("../db");
 // período histórico extenso etc.), mesmo com o job continuando rodando por trás.
 const JOB_KEY_PREFIX = "job_status:";
 
+// Um job "running" só existe de verdade enquanto o PROCESSO Node que o iniciou continua de
+// pé — o `Promise.resolve().then(fn)` que atualiza o status pra "ok"/"error" no final vive só
+// na memória desse processo. Se o Railway reinicia o servidor no meio de uma sincronização
+// (um novo deploy, um restart manual, o processo cair), esse status "running" fica preso pra
+// sempre em `sync_state` — ninguém nunca vai atualizá-lo, porque o código que faria isso
+// morreu junto com o processo antigo. Sem isso, o botão "Sincronizar agora" fica bloqueado
+// pra sempre com "já tem uma sincronização rodando", mesmo não tendo mais nenhuma sincronização
+// de verdade em andamento.
+//
+// Duas defesas: (1) `reconcileStaleJobsOnBoot`, chamada uma vez quando o servidor sobe — todo
+// job que já estava "running" nesse ponto é necessariamente órfão de um processo anterior (um
+// processo recém-iniciado não pode ter uma Promise em andamento de antes dele existir), então
+// marcamos como erro "interrompido por reinício do servidor" e liberamos o botão na hora. (2)
+// Como defesa adicional pro caso de travar sem derrubar o processo (um loop preso, por
+// exemplo), `runJobInBackground` também ignora um status "running" mais velho que
+// STALE_RUNNING_MS e deixa iniciar um novo job por cima dele.
+const STALE_RUNNING_MS = 20 * 60 * 1000; // 20 minutos
+
 async function setJobStatus(jobName, status) {
   const key = JOB_KEY_PREFIX + jobName;
   await pool.query(
@@ -53,7 +71,11 @@ async function getAllJobStatuses() {
 async function runJobInBackground(jobName, fn) {
   const current = await getJobStatus(jobName);
   if (current && current.status === "running") {
-    return { started: false, alreadyRunning: true, status: current };
+    const rodandoHaMs = current.startedAt ? Date.now() - new Date(current.startedAt).getTime() : Infinity;
+    if (rodandoHaMs < STALE_RUNNING_MS) {
+      return { started: false, alreadyRunning: true, status: current };
+    }
+    console.warn(`[job:${jobName}] status "running" preso há ${Math.round(rodandoHaMs / 60000)} min — tratando como travado e iniciando de novo.`);
   }
 
   const startedAt = new Date().toISOString();
@@ -84,4 +106,27 @@ async function runJobInBackground(jobName, fn) {
   return { started: true, alreadyRunning: false };
 }
 
-module.exports = { runJobInBackground, getJobStatus, getAllJobStatuses };
+/**
+ * Chamada uma vez na subida do servidor (ver server.js). Qualquer job com status "running"
+ * já gravado em `sync_state` nesse momento é órfão de um processo anterior que morreu no
+ * meio da sincronização (deploy, restart, crash) — o processo atual acabou de nascer, então
+ * não pode ter nenhuma Promise de verdade em andamento ainda. Marcamos como erro pra liberar
+ * o botão "Sincronizar agora" imediatamente, em vez de deixar preso até completar
+ * STALE_RUNNING_MS.
+ */
+async function reconcileStaleJobsOnBoot() {
+  const statuses = await getAllJobStatuses();
+  const presos = Object.entries(statuses).filter(([, s]) => s && s.status === "running");
+  for (const [jobName, status] of presos) {
+    console.warn(`[job:${jobName}] estava "running" na subida do servidor (órfão de um processo anterior) — marcando como interrompido.`);
+    await setJobStatus(jobName, {
+      status: "error",
+      startedAt: status.startedAt,
+      finishedAt: new Date().toISOString(),
+      error: "Interrompido por reinício do servidor (deploy ou restart) antes de terminar. Clique em sincronizar de novo.",
+      result: null,
+    });
+  }
+}
+
+module.exports = { runJobInBackground, getJobStatus, getAllJobStatuses, reconcileStaleJobsOnBoot };
