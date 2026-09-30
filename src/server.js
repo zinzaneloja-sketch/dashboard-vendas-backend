@@ -8,7 +8,7 @@ const logistica = require("./metrics/logistica");
 const marketing = require("./metrics/marketing");
 const overview = require("./metrics/overview");
 const { syncOrders, syncInventory, syncWarehouses, backfillCategories, backfillOrderFields } = require("./sync/syncVtex");
-const { runJobInBackground, getAllJobStatuses } = require("./sync/jobRunner");
+const { runJobInBackground, getAllJobStatuses, reconcileStaleJobsOnBoot } = require("./sync/jobRunner");
 const { pool } = require("./db");
 const bcrypt = require("bcryptjs");
 const {
@@ -496,6 +496,11 @@ app.get("/api/sync/status", requireAuth, requireAdmin, handle(async () => ({ job
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
+
+// Libera qualquer job que ficou marcado "running" de um processo anterior (deploy/restart no
+// meio de uma sincronização) — sem isso, o botão "Sincronizar agora" ficaria bloqueado pra
+// sempre com "já tem uma sincronização rodando". Ver comentário em jobRunner.js.
+reconcileStaleJobsOnBoot().catch((err) => console.error("[server] falha ao reconciliar jobs travados:", err.message));
 
 // Sincroniza pedidos a cada 30 minutos e estoque a cada 6 horas.
 if (process.env.DISABLE_CRON !== "true") {
