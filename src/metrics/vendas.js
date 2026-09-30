@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const vtex = require("../connectors/vtex");
 
 /**
  * Filtro de status usado por quase toda métrica da aba Vendas (o filtro "Status" no topo da
@@ -601,6 +602,99 @@ async function rankingProdutosXEstoque({ dateFrom, dateTo, limit = 50, coverageD
   });
 }
 
+/**
+ * Resolve a foto principal de cada produto de `rows` (cada item precisa de `productId` e
+ * `skuRepresentativo`), usando um cache em `product_images` pra não bater na Vtex a cada
+ * carregamento do card — só busca de verdade os produtos que ainda não têm foto em cache.
+ * Devolve um mapa productId -> URL (ou undefined se não achou). Falha ao buscar a foto de UM
+ * produto nunca derruba o card inteiro: ele só fica sem foto até a próxima tentativa (por
+ * isso não cacheamos "sem foto" — permite retry no próximo carregamento).
+ */
+async function resolveProductImages(items) {
+  const bySkuRepresentativo = {};
+  items.forEach((it) => { if (it.productId) bySkuRepresentativo[it.productId] = it.skuRepresentativo; });
+  const productIds = Object.keys(bySkuRepresentativo);
+  if (!productIds.length) return {};
+
+  const { rows: cached } = await pool.query(
+    `SELECT product_id, image_url FROM product_images WHERE product_id = ANY($1::text[])`,
+    [productIds]
+  );
+  const map = {};
+  cached.forEach((r) => { if (r.image_url) map[r.product_id] = r.image_url; });
+
+  const missing = productIds.filter((id) => !map[id]);
+  const CONCURRENCIA = 5;
+  for (let i = 0; i < missing.length; i += CONCURRENCIA) {
+    const lote = missing.slice(i, i + CONCURRENCIA);
+    const resultados = await Promise.all(
+      lote.map((productId) => vtex.getSkuMainImageUrl(bySkuRepresentativo[productId]).catch(() => null))
+    );
+    lote.forEach((productId, idx) => { if (resultados[idx]) map[productId] = resultados[idx]; });
+  }
+
+  const paraCachear = missing.filter((id) => map[id]);
+  if (paraCachear.length) {
+    const values = [];
+    const params = [];
+    paraCachear.forEach((id) => {
+      params.push(id, map[id]);
+      values.push(`($${params.length - 1}, $${params.length})`);
+    });
+    await pool
+      .query(
+        `INSERT INTO product_images (product_id, image_url) VALUES ${values.join(",")}
+         ON CONFLICT (product_id) DO UPDATE SET image_url = EXCLUDED.image_url, synced_at = now()`,
+        params
+      )
+      .catch((err) => console.warn("[vendas] Falha ao cachear fotos de produto:", err.message));
+  }
+
+  return map;
+}
+
+/**
+ * Top produtos mais vendidos (por unidades), pra identificação visual rápida — pensado pra
+ * mostrar foto + nome + unidades + valor total num card com "ver tudo". Agrupa por PRODUTO
+ * (não por SKU, ao contrário do ranking de estoque acima), pra não diluir um produto com
+ * várias variações (cor/tamanho) em várias linhas separadas. `skuRepresentativo` é a
+ * variação mais vendida desse produto no período — usada só pra buscar UMA foto (a Vtex
+ * associa fotos a SKU, não a produto).
+ */
+async function produtosMaisVendidos({ dateFrom, dateTo, statuses, limit = 60 } = {}) {
+  const params = [dateFrom || null, dateTo || null];
+  const statusIdx = pushStatusParam(statuses, params);
+  params.push(limit || null);
+  const limitIdx = params.length;
+  const { rows } = await pool.query(
+    `SELECT oi.product_id, oi.product_name, oi.category,
+            SUM(oi.quantity) AS unidades_vendidas,
+            SUM(oi.total_price) AS receita,
+            (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo
+     FROM order_items oi
+     JOIN orders o ON o.order_id = oi.order_id
+     WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR o.creation_date < $2)
+       AND ${statusClause("o.status", statusIdx)}
+     GROUP BY oi.product_id, oi.product_name, oi.category
+     ORDER BY unidades_vendidas DESC
+     LIMIT $${limitIdx}`,
+    params
+  );
+
+  const items = rows.map((r) => ({ productId: r.product_id, skuRepresentativo: r.sku_representativo }));
+  const imagens = await resolveProductImages(items);
+
+  return rows.map((r) => ({
+    produtoId: r.product_id,
+    produto: r.product_name,
+    categoria: r.category,
+    unidadesVendidas: Number(r.unidades_vendidas),
+    receita: Number(r.receita),
+    imagemUrl: imagens[r.product_id] || null,
+  }));
+}
+
 module.exports = {
   receitaVsMeta,
   setRevenueGoal,
@@ -617,4 +711,5 @@ module.exports = {
   eficienciaFretePorRegiao,
   receitaPorRegiao,
   rankingProdutosXEstoque,
+  produtosMaisVendidos,
 };
