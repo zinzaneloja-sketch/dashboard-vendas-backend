@@ -101,20 +101,25 @@ async function getSkuFiles(skuId) {
 
 /**
  * URL da foto principal de um SKU (a marcada como IsMain, ou a primeira da lista se nenhuma
- * estiver marcada). Devolve null em qualquer falha — produto sem foto cadastrada, SKU
- * removido do catálogo, Vtex fora do ar, campo com nome diferente do esperado — pra nunca
- * derrubar o card de "Top produtos" por causa de uma foto que não carregou. Se a Vtex nunca
- * tiver sido validada nesse ponto específico (não temos como testar contra a conta real da
- * loja a partir daqui), o endpoint de diagnóstico /api/debug/sample-product-image devolve a
- * resposta crua da Vtex pra conferência manual.
+ * estiver marcada). Confirmado via /api/debug/sample-product-image contra a conta real da
+ * Zinzane: em alguns SKUs o arquivo marcado como IsMain vem com Url null (a Vtex manteve o
+ * registro do arquivo mas o link caiu — casos vistos: "Caixa de Presente p", "Calça Legging
+ * Seamless Canelado", "Top Faixa Basic"), enquanto outro arquivo do mesmo SKU (geralmente o
+ * de Label "color") tem uma Url válida. Por isso só aceitamos o IsMain se ele realmente tiver
+ * Url; senão caímos pro primeiro arquivo da lista que tiver uma Url utilizável. Devolve null
+ * só quando NENHUM arquivo do SKU tem Url (produto sem foto cadastrada mesmo) ou em qualquer
+ * falha — SKU removido do catálogo, Vtex fora do ar — pra nunca derrubar o card de "Top
+ * produtos" por causa de uma foto que não carregou.
  */
 async function getSkuMainImageUrl(skuId) {
   try {
     const files = await getSkuFiles(skuId);
     if (!files.length) return null;
-    const main = files.find((f) => f.IsMain === true || f.isMain === true) || files[0];
-    let url = main && (main.Url || main.url);
-    if (!url) return null;
+    const temUrl = (f) => !!(f && (f.Url || f.url));
+    const main = files.find((f) => (f.IsMain === true || f.isMain === true) && temUrl(f));
+    const candidato = main || files.find(temUrl);
+    if (!candidato) return null;
+    let url = candidato.Url || candidato.url;
     if (url.startsWith("//")) url = "https:" + url;
     return url;
   } catch (err) {
