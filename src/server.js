@@ -261,6 +261,7 @@ app.get("/api/vendas/eficiencia-frete-regiao", requireAuth, handle((req) => vend
 app.get("/api/vendas/receita-por-regiao", requireAuth, handle((req) => vendas.receitaPorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => vendas.rankingProdutosXEstoque({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/produtos-mais-vendidos", requireAuth, handle((req) => vendas.produtosMaisVendidos({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/produtos-mais-vendidos/:productId/tamanhos", requireAuth, handle((req) => vendas.produtoDetalhePorTamanho({ productId: req.params.productId, ...parseDateRange(req), statuses: parseStatusFilter(req) })));
 
 // ---- Logística ----
 app.get("/api/logistica/sla-entrega", requireAuth, handle((req) => logistica.slaDeEntrega(parseDateRange(req))));
