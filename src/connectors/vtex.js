@@ -100,28 +100,32 @@ async function getSkuFiles(skuId) {
 }
 
 /**
- * URL da foto principal de um SKU (a marcada como IsMain, ou a primeira da lista se nenhuma
- * estiver marcada). Confirmado via /api/debug/sample-product-image contra a conta real da
- * Zinzane: em alguns SKUs o arquivo marcado como IsMain vem com Url null (a Vtex manteve o
- * registro do arquivo mas o link caiu — casos vistos: "Caixa de Presente p", "Calça Legging
- * Seamless Canelado", "Top Faixa Basic"), enquanto outro arquivo do mesmo SKU (geralmente o
- * de Label "color") tem uma Url válida. Por isso só aceitamos o IsMain se ele realmente tiver
- * Url; senão caímos pro primeiro arquivo da lista que tiver uma Url utilizável. Devolve null
- * só quando NENHUM arquivo do SKU tem Url (produto sem foto cadastrada mesmo) ou em qualquer
- * falha — SKU removido do catálogo, Vtex fora do ar — pra nunca derrubar o card de "Top
- * produtos" por causa de uma foto que não carregou.
+ * URL PÚBLICA (CDN de assets da Vtex) da foto principal de um SKU. Causa raiz real das fotos
+ * que não apareciam (confirmada comparando com o produto "Calça Pantalona Detalhe Vivos" no
+ * site de verdade da Zinzane, zinzane.com.br): o campo `Url` que getSkuFiles devolve aponta
+ * pro bucket S3 de UPLOAD interno da Vtex (ex.: sincdn.s3.sa-east-1.amazonaws.com,
+ * wks-s3-sincdn-useast2.s3.us-east-2.amazonaws.com) — esse bucket não é servido publicamente
+ * pro navegador, então a foto falhava mesmo quando `Url` vinha preenchida (não era só um
+ * problema de IsMain com Url nula — isso também acontecia, mas era secundário). O site
+ * público serve as fotos por outro domínio, https://{conta}.vtexassets.com/arquivos/ids/
+ * {ArchiveId}-{largura}-auto, construído a partir do `ArchiveId` do arquivo — que a Vtex
+ * sempre devolve, ao contrário de `Url`. Por isso ignoramos `Url` completamente e montamos a
+ * URL a partir do ArchiveId. Prioriza o arquivo marcado como IsMain; se ele não tiver
+ * ArchiveId (não deveria acontecer), cai pro primeiro arquivo da lista que tiver. Devolve
+ * null só quando o SKU não tem nenhum arquivo, ou em qualquer falha — SKU removido do
+ * catálogo, Vtex fora do ar — pra nunca derrubar o card de "Top produtos" por causa de uma
+ * foto que não carregou.
  */
 async function getSkuMainImageUrl(skuId) {
   try {
     const files = await getSkuFiles(skuId);
     if (!files.length) return null;
-    const temUrl = (f) => !!(f && (f.Url || f.url));
-    const main = files.find((f) => (f.IsMain === true || f.isMain === true) && temUrl(f));
-    const candidato = main || files.find(temUrl);
+    const temArchiveId = (f) => !!(f && (f.ArchiveId || f.archiveId));
+    const main = files.find((f) => (f.IsMain === true || f.isMain === true) && temArchiveId(f));
+    const candidato = main || files.find(temArchiveId);
     if (!candidato) return null;
-    let url = candidato.Url || candidato.url;
-    if (url.startsWith("//")) url = "https:" + url;
-    return url;
+    const archiveId = candidato.ArchiveId || candidato.archiveId;
+    return `https://${ACCOUNT}.vtexassets.com/arquivos/ids/${archiveId}-300-auto?width=300&height=auto&aspect=true`;
   } catch (err) {
     console.warn(`[vtex] Falha ao buscar foto do SKU ${skuId}:`, err.message);
     return null;
