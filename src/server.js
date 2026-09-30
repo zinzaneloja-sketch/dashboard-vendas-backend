@@ -119,6 +119,30 @@ app.get("/api/debug/sample-order-channel", requireAuth, requireAdmin, handle(asy
   });
 }));
 
+// ---- DIAGNÓSTICO TEMPORÁRIO: confirmar o formato da resposta da Vtex pra foto de SKU
+// (endpoint /api/catalog/pvt/stockkeepingunit/{skuId}/file — ver getSkuMainImageUrl em
+// connectors/vtex.js, usado no card "Top produtos mais vendidos"). Ao contrário dos dois
+// diagnósticos acima, este chama a Vtex de verdade (não tem como confirmar o formato exato
+// da resposta sem isso) pra alguns SKUs reais e recentes, e devolve a resposta crua pra
+// conferência manual. Remover depois de confirmar que as fotos aparecem certas no card. Só
+// admin autenticado consegue chamar.
+app.get("/api/debug/sample-product-image", requireAuth, requireAdmin, handle(async () => {
+  const vtexConn = require("./connectors/vtex");
+  const { rows } = await pool.query(
+    "SELECT DISTINCT sku, product_name FROM order_items ORDER BY sku DESC LIMIT 5"
+  );
+  return Promise.all(
+    rows.map(async (r) => {
+      try {
+        const arquivos = await vtexConn.getSkuFiles(r.sku);
+        return { sku: r.sku, produto: r.product_name, arquivos };
+      } catch (err) {
+        return { sku: r.sku, produto: r.product_name, erro: err.message };
+      }
+    })
+  );
+}));
+
 // ---- Autenticação ----
 app.post("/api/auth/login", handle(async (req) => {
   const { email, password } = req.body || {};
@@ -207,6 +231,7 @@ app.get("/api/vendas/meios-pagamento", requireAuth, handle((req) => vendas.meios
 app.get("/api/vendas/eficiencia-frete-regiao", requireAuth, handle((req) => vendas.eficienciaFretePorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/receita-por-regiao", requireAuth, handle((req) => vendas.receitaPorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
 app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => vendas.rankingProdutosXEstoque({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/produtos-mais-vendidos", requireAuth, handle((req) => vendas.produtosMaisVendidos({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
 
 // ---- Logística ----
 app.get("/api/logistica/sla-entrega", requireAuth, handle((req) => logistica.slaDeEntrega(parseDateRange(req))));
