@@ -44,15 +44,50 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-/** Extrai dias úteis/corridos de uma string de shippingEstimate da Vtex, ex: "5bd", "3d", "1h". */
-function parseShippingEstimateToDays(estimate) {
-  if (!estimate) return null;
-  const match = String(estimate).match(/(\d+)(bd|d|h)/i);
-  if (!match) return null;
-  const value = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  if (unit === "h") return value / 24;
-  return value; // trata "bd" (dias úteis) e "d" (dias corridos) de forma equivalente, aproximação
+/** Soma `n` dias úteis (segunda a sexta, sem feriados) a uma data. */
+function addBusinessDays(start, n) {
+  const d = new Date(start.getTime());
+  let left = n;
+  while (left > 0) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) left -= 1;
+  }
+  return d;
+}
+
+/**
+ * Prazo prometido de entrega de um pedido: devolve a DATA prometida e o prazo em DIAS CORRIDOS
+ * contados desde a compra — mesma régua de `shipping_actual_days` (compra -> entrega, em dias
+ * corridos), pra os dois poderem ser comparados.
+ *
+ * Antes, o "5bd" (5 dias ÚTEIS) da Vtex era tratado como 5 dias corridos, enquanto o prazo real
+ * era medido em dias corridos — um pedido entregue em 6 dias corridos (4 úteis, dentro do prazo)
+ * aparecia como atrasado. Agora: (1) usa `shippingEstimateDate`, a data de entrega prometida que
+ * a própria Vtex calcula; (2) se ela não vier, soma o estimate à data da compra (dias úteis
+ * pulando fins de semana; feriados não são considerados).
+ */
+function computePromised(logisticsInfo, creationDate) {
+  const created = new Date(creationDate);
+  if (isNaN(created)) return { promisedDate: null, promisedDays: null };
+
+  let promisedDate = null;
+  if (logisticsInfo.shippingEstimateDate) {
+    const d = new Date(logisticsInfo.shippingEstimateDate);
+    if (!isNaN(d)) promisedDate = d;
+  }
+  if (!promisedDate && logisticsInfo.shippingEstimate) {
+    const match = String(logisticsInfo.shippingEstimate).match(/(\d+)\s*(bd|d|h)/i);
+    if (match) {
+      const value = Number(match[1]);
+      const unit = match[2].toLowerCase();
+      if (unit === "bd") promisedDate = addBusinessDays(created, value);
+      else if (unit === "d") promisedDate = new Date(created.getTime() + value * 86400000);
+      else promisedDate = new Date(created.getTime() + value * 3600000);
+    }
+  }
+  if (!promisedDate) return { promisedDate: null, promisedDays: null };
+  return { promisedDate, promisedDays: Math.max(0, (promisedDate - created) / 86400000) };
 }
 
 /**
@@ -90,7 +125,7 @@ function extractOrderFields(orderDetail) {
   const marketingData = orderDetail.marketingData || {};
 
   const deliveredAt = findDeliveredAt(orderDetail);
-  const promisedDays = parseShippingEstimateToDays(logisticsInfo.shippingEstimate);
+  const { promisedDate, promisedDays } = computePromised(logisticsInfo, orderDetail.creationDate);
   const actualDays = deliveredAt
     ? (new Date(deliveredAt) - new Date(orderDetail.creationDate)) / (1000 * 60 * 60 * 24)
     : null;
@@ -120,6 +155,7 @@ function extractOrderFields(orderDetail) {
     region_city: shippingAddress.city || null,
     shipping_carrier: logisticsInfo.deliveryCompany || logisticsInfo.selectedSla || null,
     shipping_promised_days: promisedDays,
+    shipping_promised_date: promisedDate,
     shipping_actual_days: actualDays,
     delivered_at: deliveredAt,
     invoiced_at: orderDetail.invoicedDate || null,
