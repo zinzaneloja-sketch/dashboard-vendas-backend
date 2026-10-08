@@ -504,12 +504,12 @@ reconcileStaleJobsOnBoot()
   .then(runPromisedDateBackfillOnce)
   .catch((err) => console.error("[server] falha ao reconciliar jobs travados:", err.message));
 
-// Roda UMA vez (marcado em sync_state) depois do deploy que corrigiu o cálculo do prazo
-// prometido (dias úteis x corridos + data prometida da Vtex): reaproveita o `raw` já salvo de
-// cada pedido, sem chamar a Vtex, e grava shipping_promised_date / shipping_promised_days
-// corretos nos pedidos antigos. O status aparece em /api/sync/status como "backfill-order-fields".
+// Roda UMA vez por versão (marcado em sync_state) depois dos deploys que corrigiram campos
+// derivados do pedido (v2: prazo prometido em dias úteis/corridos + data prometida da Vtex;
+// v3: client_id estável em vez do email mascarado da Vtex): reaproveita o `raw` já salvo de
+// cada pedido, sem chamar a Vtex, e regrava esses campos nos pedidos antigos. O status aparece em /api/sync/status como "backfill-order-fields".
 async function runPromisedDateBackfillOnce() {
-  const FLAG = "migr:promised_v2";
+  const FLAG = "migr:order_fields_v3";
   const { rows } = await pool.query("SELECT 1 FROM sync_state WHERE key = $1", [FLAG]);
   if (rows.length) return;
   await runJobInBackground("backfill-order-fields", async () => {
