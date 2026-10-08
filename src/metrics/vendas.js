@@ -14,6 +14,16 @@ const vtex = require("../connectors/vtex");
 // caso a loja opere em outro fuso; América/São_Paulo é o padrão certo pra essa conta.
 const STORE_TZ = process.env.STORE_TIMEZONE || "America/Sao_Paulo";
 
+// Uma entrega foi "no prazo" quando a data de entrega (no fuso da loja) é no máximo a data
+// prometida — entregar no último dia prometido conta como no prazo. Sem data prometida
+// guardada, cai pra comparação em dias (parte inteira dos dias reais <= dias prometidos).
+// Colunas sem alias de tabela: usar só em queries diretas sobre `orders`.
+const ENTREGA_NO_PRAZO_SQL = `(CASE
+  WHEN shipping_promised_date IS NOT NULL AND delivered_at IS NOT NULL
+    THEN (delivered_at AT TIME ZONE '${STORE_TZ}')::date <= (shipping_promised_date AT TIME ZONE '${STORE_TZ}')::date
+  ELSE FLOOR(shipping_actual_days) <= shipping_promised_days
+END)`;
+
 /**
  * Filtro de status usado por quase toda métrica da aba Vendas (o filtro "Status" no topo da
  * aba, ao lado do período). `pushStatusParam` empilha o valor no array de bind da query e
@@ -343,6 +353,99 @@ const PROJECAO_LOOKBACK_DIAS = 84; // ~12 semanas
 const PROJECAO_MIN_DIAS_AMOSTRA = 3; // menos que isso, a curva histórica é ruído demais pra confiar
 const PROJECAO_MIN_FRACAO_DECORRIDA = 0.02; // <2% do dia típico decorrido: dividir por isso amplificaria qualquer ruído
 
+const PROJECAO_MENSAL_MIN_DIAS_HISTORICO = 14; // janela de histórico mínima pra confiar na média por dia da semana
+
+/**
+ * Projeção de fechamento do MÊS. Estimativa = o que já foi vendido no mês (até agora) + o que
+ * falta de hoje + a média histórica de cada dia que ainda falta até o fim do mês, calculada
+ * POR DIA DA SEMANA (um sábado costuma vender diferente de uma segunda), sobre as últimas
+ * PROJECAO_LOOKBACK_DIAS dias. A média por dia da semana divide pelo número de dias do
+ * calendário daquele dia da semana na janela (inclusive os dias sem nenhum pedido) — dividir
+ * só pelos dias com pedido inflaria a média.
+ *
+ * `restanteHoje` = quanto ainda se espera vender hoje além do que já foi vendido (vem da
+ * projeção do dia quando ela existe; senão, do que a média histórica do dia da semana ainda
+ * deixa de folga sobre o já vendido).
+ *
+ * `estado`:
+ *  - "ok": histórico suficiente (>= PROJECAO_MENSAL_MIN_DIAS_HISTORICO dias) pra média por dia da semana.
+ *  - "ritmo_do_mes": sem histórico suficiente — usa a média diária do próprio mês até aqui.
+ *  - "dados_insuficientes": nem isso (mês começou agora e não há histórico).
+ */
+async function projecaoFechamentoMes({ statuses, receitaHoje, projecaoHoje }) {
+  const baseParams = [];
+  const statusIdx = pushStatusParam(statuses, baseParams);
+  const { rows } = await pool.query(
+    `WITH p AS (SELECT (now() AT TIME ZONE '${STORE_TZ}')::date AS hoje_d)
+     SELECT
+       to_char(p.hoje_d, 'YYYY-MM-DD') AS hoje_d,
+       to_char(date_trunc('month', p.hoje_d::timestamp), 'YYYY-MM') AS mes,
+       EXTRACT(DAY FROM p.hoje_d)::int AS dia_do_mes,
+       EXTRACT(DAY FROM (date_trunc('month', p.hoje_d::timestamp) + interval '1 month' - interval '1 day'))::int AS dias_no_mes,
+       COALESCE((
+         SELECT SUM(o.total_value) FROM orders o
+         WHERE o.creation_date >= (date_trunc('month', p.hoje_d::timestamp) AT TIME ZONE '${STORE_TZ}')
+           AND ${statusClause("o.status", statusIdx)}
+       ), 0) AS receita_mes,
+       (SELECT to_char(MIN(o.creation_date AT TIME ZONE '${STORE_TZ}')::date, 'YYYY-MM-DD') FROM orders o) AS primeiro_pedido
+     FROM p`,
+    baseParams
+  );
+  const r = rows[0];
+  const diaDoMes = Number(r.dia_do_mes);
+  const diasNoMes = Number(r.dias_no_mes);
+  const receitaMes = Number(r.receita_mes || 0);
+  const out = { mes: r.mes, diaDoMes, diasNoMes, diasRestantes: diasNoMes - diaDoMes, receitaMes, projecaoMes: null, estado: "dados_insuficientes" };
+
+  const DAY = 86400000;
+  const parse = (str) => { const [y, m, d] = str.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+  const hojeMs = parse(r.hoje_d);
+  const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+  // Dias que faltam depois de hoje, até o último dia do mês (cada um com seu dia da semana)
+  const restantesDow = [];
+  for (let k = 1; k <= out.diasRestantes; k++) restantesDow.push(new Date(hojeMs + k * DAY).getUTCDay());
+
+  let mediaPorDow = null;
+  if (r.primeiro_pedido) {
+    const inicioMs = Math.max(hojeMs - PROJECAO_LOOKBACK_DIAS * DAY, parse(r.primeiro_pedido));
+    const janelaDias = Math.round((hojeMs - inicioMs) / DAY);
+    if (janelaDias >= PROJECAO_MENSAL_MIN_DIAS_HISTORICO) {
+      const histParams = [iso(inicioMs), r.hoje_d];
+      const histStatusIdx = pushStatusParam(statuses, histParams);
+      const hist = await pool.query(
+        `SELECT EXTRACT(DOW FROM o.creation_date AT TIME ZONE '${STORE_TZ}')::int AS dow, SUM(o.total_value) AS receita
+         FROM orders o
+         WHERE o.creation_date >= ($1::date::timestamp AT TIME ZONE '${STORE_TZ}')
+           AND o.creation_date <  ($2::date::timestamp AT TIME ZONE '${STORE_TZ}')
+           AND ${statusClause("o.status", histStatusIdx)}
+         GROUP BY 1`,
+        histParams
+      );
+      const somaDow = [0, 0, 0, 0, 0, 0, 0];
+      hist.rows.forEach((x) => { somaDow[Number(x.dow)] = Number(x.receita); });
+      const diasDow = [0, 0, 0, 0, 0, 0, 0];
+      for (let ms = inicioMs; ms < hojeMs; ms += DAY) diasDow[new Date(ms).getUTCDay()]++;
+      mediaPorDow = somaDow.map((v, i) => (diasDow[i] > 0 ? v / diasDow[i] : 0));
+    }
+  }
+
+  if (mediaPorDow) {
+    const dowHoje = new Date(hojeMs).getUTCDay();
+    const hojeEsperado = projecaoHoje != null ? Math.max(projecaoHoje, receitaHoje) : Math.max(mediaPorDow[dowHoje], receitaHoje);
+    const restanteHoje = hojeEsperado - receitaHoje;
+    const resto = restantesDow.reduce((acc, dow) => acc + mediaPorDow[dow], 0);
+    out.projecaoMes = receitaMes + restanteHoje + resto;
+    out.estado = "ok";
+  } else if (diaDoMes >= 4) {
+    // Fallback: ritmo do próprio mês (dias completos até ontem)
+    const mediaDiaria = (receitaMes - receitaHoje) / (diaDoMes - 1);
+    out.projecaoMes = receitaMes + Math.max(0, mediaDiaria - receitaHoje) + mediaDiaria * out.diasRestantes;
+    out.estado = "ritmo_do_mes";
+  }
+  return out;
+}
+
 /**
  * Projeção de fechamento do dia: olha o quanto já foi vendido hoje e estima o total do dia
  * comparando com o quanto historicamente já costuma ter sido vendido, até a hora atual, num
@@ -420,13 +523,17 @@ async function projecaoFechamentoDia({ statuses } = {}) {
     estado = "cedo_demais";
   }
 
+  const projecaoHoje = estado === "ok" ? receitaHoje / fracaoDecorrida : null;
+  const mensal = await projecaoFechamentoMes({ statuses, receitaHoje, projecaoHoje });
+
   return {
+    mensal,
     diaSemana,
     horaAtual,
     receitaHoje,
     pedidosHoje,
     percentualDecorrido: fracaoDecorrida * 100,
-    projecaoFechamento: estado === "ok" ? receitaHoje / fracaoDecorrida : null,
+    projecaoFechamento: projecaoHoje,
     mediaHistoricaDiaSemana: diasAmostra > 0 ? receitaHistoricaDiaTotal / diasAmostra : 0,
     diasAmostra,
     estado,
@@ -515,7 +622,9 @@ async function eficienciaFretePorRegiao({ dateFrom, dateTo, statuses } = {}) {
             AVG(shipping_actual_days) AS prazo_medio_real,
             AVG(shipping_promised_days) AS prazo_medio_prometido,
             AVG(shipping_value) AS custo_medio_frete,
-            COUNT(*) AS pedidos
+            COUNT(*) AS pedidos,
+            COUNT(*) FILTER (WHERE shipping_promised_days IS NOT NULL) AS avaliadas,
+            COUNT(*) FILTER (WHERE shipping_promised_days IS NOT NULL AND ${ENTREGA_NO_PRAZO_SQL}) AS no_prazo
      FROM orders
      WHERE shipping_actual_days IS NOT NULL
        AND ($1::timestamptz IS NULL OR creation_date >= $1)
@@ -531,6 +640,7 @@ async function eficienciaFretePorRegiao({ dateFrom, dateTo, statuses } = {}) {
     prazoMedioPrometido: r.prazo_medio_prometido ? Number(r.prazo_medio_prometido) : null,
     custoMedioFrete: Number(r.custo_medio_frete),
     pedidos: Number(r.pedidos),
+    noPrazoPct: Number(r.avaliadas) > 0 ? (Number(r.no_prazo) / Number(r.avaliadas)) * 100 : null,
   }));
 }
 
@@ -815,6 +925,7 @@ async function produtoDetalhePorTamanho({ productId, dateFrom, dateTo, statuses 
 }
 
 module.exports = {
+  ENTREGA_NO_PRAZO_SQL,
   receitaVsMeta,
   setRevenueGoal,
   vendaPorCategoria,
