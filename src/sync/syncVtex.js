@@ -118,6 +118,27 @@ function findDeliveredAt(orderDetail) {
   return null;
 }
 
+/**
+ * Identificador estável do cliente (usado em Novos x Recorrentes e LTV).
+ *
+ * O email que a Vtex devolve nos pedidos costuma ser um ALIAS mascarado (algo@ct.vtex.com.br)
+ * que muda a cada pedido — usar isso como id faz o mesmo cliente parecer uma pessoa nova toda
+ * vez que compra (100% "novos", LTV = valor de um pedido só). Por isso a ordem é:
+ * (1) userProfileId, o id do cliente no cadastro da Vtex, que é o mesmo em todos os pedidos dele;
+ * (2) documento (CPF/CNPJ), só dígitos; (3) email, mas só se NÃO for o alias mascarado.
+ */
+function resolveClientId(profile) {
+  if (!profile) return null;
+  if (profile.userProfileId) return String(profile.userProfileId).toLowerCase();
+  if (profile.document) {
+    const digits = String(profile.document).replace(/\D/g, "");
+    if (digits.length >= 8) return "doc:" + digits;
+  }
+  const email = profile.email ? String(profile.email).trim().toLowerCase() : "";
+  if (email && !/(^|[@.])ct\.vtex\.com\.br$/.test(email)) return email;
+  return null;
+}
+
 function extractOrderFields(orderDetail) {
   const shippingAddress = orderDetail.shippingData?.address || {};
   const logisticsInfo = orderDetail.shippingData?.logisticsInfo?.[0] || {};
@@ -144,7 +165,7 @@ function extractOrderFields(orderDetail) {
     total_value: (orderDetail.value || 0) / 100,
     shipping_value: (orderDetail.shippingTotal || orderDetail.totals?.find((t) => t.id === "Shipping")?.value || 0) / 100,
     sales_channel: orderDetail.salesChannel,
-    client_id: orderDetail.clientProfileData?.email || orderDetail.clientProfileData?.userProfileId || null,
+    client_id: resolveClientId(orderDetail.clientProfileData),
     payment_method: firstPayment.paymentSystemName || null,
     payment_group: firstPayment.group || null,
     installments: firstPayment.installments != null ? Number(firstPayment.installments) : null,
