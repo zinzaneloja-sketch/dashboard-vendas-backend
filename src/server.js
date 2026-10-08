@@ -500,7 +500,27 @@ app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
 // Libera qualquer job que ficou marcado "running" de um processo anterior (deploy/restart no
 // meio de uma sincronização) — sem isso, o botão "Sincronizar agora" ficaria bloqueado pra
 // sempre com "já tem uma sincronização rodando". Ver comentário em jobRunner.js.
-reconcileStaleJobsOnBoot().catch((err) => console.error("[server] falha ao reconciliar jobs travados:", err.message));
+reconcileStaleJobsOnBoot()
+  .then(runPromisedDateBackfillOnce)
+  .catch((err) => console.error("[server] falha ao reconciliar jobs travados:", err.message));
+
+// Roda UMA vez (marcado em sync_state) depois do deploy que corrigiu o cálculo do prazo
+// prometido (dias úteis x corridos + data prometida da Vtex): reaproveita o `raw` já salvo de
+// cada pedido, sem chamar a Vtex, e grava shipping_promised_date / shipping_promised_days
+// corretos nos pedidos antigos. O status aparece em /api/sync/status como "backfill-order-fields".
+async function runPromisedDateBackfillOnce() {
+  const FLAG = "migr:promised_v2";
+  const { rows } = await pool.query("SELECT 1 FROM sync_state WHERE key = $1", [FLAG]);
+  if (rows.length) return;
+  await runJobInBackground("backfill-order-fields", async () => {
+    await backfillOrderFields();
+    await pool.query(
+      `INSERT INTO sync_state (key, value, updated_at) VALUES ($1, 'done', now())
+       ON CONFLICT (key) DO UPDATE SET value = 'done', updated_at = now()`,
+      [FLAG]
+    );
+  });
+}
 
 // Sincroniza pedidos a cada 30 minutos e estoque a cada 6 horas.
 if (process.env.DISABLE_CRON !== "true") {
