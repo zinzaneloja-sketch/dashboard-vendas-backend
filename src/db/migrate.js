@@ -124,6 +124,12 @@ ALTER TABLE inventory ADD COLUMN IF NOT EXISTS raw JSONB;
 -- disponível. Guardamos a flag separada pra exibir "Ilimitado" no painel em vez de "0".
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS has_unlimited_quantity BOOLEAN NOT NULL DEFAULT false;
 
+-- Data prometida de entrega do pedido (shippingEstimateDate da Vtex, ou calculada a partir do
+-- shippingEstimate somando dias uteis/corridos a data da compra). E com ela que o painel decide se
+-- uma entrega foi no prazo, comparando datas de calendario (entregar no ultimo dia prometido conta
+-- como no prazo).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_promised_date TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS sync_state (
   key                 TEXT PRIMARY KEY,
   value                TEXT,
