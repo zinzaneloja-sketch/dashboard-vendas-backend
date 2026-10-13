@@ -693,6 +693,12 @@
   .ec-plist input { accent-color: var(--accent); }
   .ec-upload { display: grid; gap: 12px; max-width: 560px; }
   @media (max-width: 700px) { input.ec-input[type="search"] { width: 100%; } .ec-hide-sm { display: none; } }
+  .ec-filtros { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 0 0 18px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+  .ec-filtros-lbl { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-right: 2px; }
+  .ec-pick.ativo > summary { border-color: var(--accent); background: var(--accent-soft); }
+  .ec-pick.ativo > summary .lbl { color: var(--accent); }
+  .ec-pick .lbl { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+  .ec-plist .tudo { font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 3px; }
 </style>
 
 <div class="login-screen" id="loginScreen">
@@ -904,52 +910,52 @@
         </div>
       </div>
 
+      <div class="ec-filtros" id="ec-filtros">
+        <span class="ec-filtros-lbl">Filtros</span>
+        <details class="ec-pick" id="ec-pk-tipo"></details>
+        <details class="ec-pick" id="ec-pk-loja"></details>
+        <details class="ec-pick" id="ec-pk-grupo"></details>
+        <details class="ec-pick" id="ec-pk-linha"></details>
+        <button type="button" class="tag-btn" id="ec-limpar" hidden>Limpar filtros</button>
+        <span class="ec-note" id="ec-filtro-resumo"></span>
+      </div>
+
       <div class="card" id="ec-vazio" hidden>
         <h3>Nenhuma planilha de estoque carregada ainda</h3>
         <p class="ec-note">Suba a planilha "Estoque Omni" do dia em <b>Carregar planilha</b> (administrador) ou pela rotina do GitHub. Depois disso, todas as visões do Estoque Cia aparecem aqui.</p>
       </div>
+      <div class="ec-loading" id="ec-carregando" hidden><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
 
       <!-- DECISÕES -->
       <div class="ec-page" id="ec-sub-decisoes">
-        <p class="ec-take" id="ec-take">Dá para agir agora em seis frentes. As três maiores: completar a grade de <b data-dec="grade:refs">—</b> referências enviando <b data-dec="grade:pecas">—</b> peças do CD; distribuir <b data-dec="cd:pecas">—</b> peças paradas no CD; e destravar <b data-dec="defeito:pecas">—</b> peças no retorno de defeito.</p>
-        <div class="ec-dec" id="ec-dec-cards"><div class="skeleton"></div></div>
-        <div class="ec-bar">
-          <span class="ec-note">Filtrar as listas abaixo por loja:</span>
-          <details class="ec-pick" id="ec-pk-dec"></details>
-        </div>
+        <p class="ec-take" id="ec-take-dec">—</p>
+        <div class="ec-dec" id="ec-dec-cards"></div>
 
         <div class="card" id="ec-sec-grade">
           <h3>1 · Completar grade com estoque do CD</h3>
           <p class="ec-note">Para cada loja e referência, os tamanhos que faltam e o que dá para mandar já do CD (RJ DISTRIBUIDORA e RJ CQ DISTRIBUIDORA), 1 peça por tamanho. O saldo do CD é dividido priorizando grade quebrada e as lojas com mais peças da referência.</p>
-          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-grade" placeholder="Buscar Ref_Cor, nome ou categoria" aria-label="Buscar"><span class="ec-note" id="ec-n-grade"></span></div>
+          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-grade" placeholder="Buscar Ref_Cor ou nome" aria-label="Buscar"><span class="ec-note" id="ec-n-grade"></span></div>
           <div class="ec-scroll short"><table id="ec-t-grade"></table></div>
         </div>
 
         <div class="card" id="ec-sec-cd">
           <h3>2 · Distribuir referências paradas no CD</h3>
-          <p class="ec-note">Referências com 20 peças ou mais no CD e presentes em até 5 lojas. Lojas sugeridas: as que têm mais estoque da categoria e ainda não têm a referência, 1 peça por tamanho em cada. Com a venda, a sugestão passa a usar quem mais vende a categoria.</p>
-          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-cd" placeholder="Buscar Ref_Cor, nome ou categoria" aria-label="Buscar"><span class="ec-note" id="ec-n-cd"></span></div>
+          <p class="ec-note">Referências com 20 peças ou mais no CD e presentes em até 5 lojas. Lojas sugeridas: as que têm mais estoque da categoria e ainda não têm a referência, 1 peça por tamanho em cada. Com filtro de loja, aparecem só as sugestões para as lojas escolhidas.</p>
+          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-cd" placeholder="Buscar Ref_Cor ou nome" aria-label="Buscar"><span class="ec-note" id="ec-n-cd"></span></div>
           <div class="ec-scroll short"><table id="ec-t-cd"></table></div>
         </div>
 
         <div class="card" id="ec-sec-mix">
           <h3>3 e 4 · Ajustar o mix de categorias por loja</h3>
           <p class="ec-note">Onde a participação da categoria na loja está 3 p.p. ou mais longe da média das lojas. "Peças para ajustar" é quanto falta ou sobra para a loja chegar no mix da rede. Use "Reduzir" como origem de transferência e "Reforçar" como destino, conferindo com a venda.</p>
-          <div class="ec-bar">
-            <div class="segmented" id="ec-mixf">
-              <button type="button" data-v="" class="active">Todas</button>
-              <button type="button" data-v="Reforçar">Reforçar</button>
-              <button type="button" data-v="Reduzir">Reduzir</button>
-            </div>
-            <span class="ec-note" id="ec-n-mix"></span>
-          </div>
+          <div class="ec-bar"><details class="ec-pick" id="ec-pk-acao"></details><span class="ec-note" id="ec-n-mix"></span></div>
           <div class="ec-scroll short"><table id="ec-t-mix"></table></div>
         </div>
 
         <div class="ec-grid2">
           <div class="card" id="ec-sec-soltas">
             <h3>5 · Consolidar peças soltas</h3>
-            <p class="ec-note">Lojas com mais referências de 1 peça só. Clique na loja para ver as peças em Produtos e decidir entre juntar na loja com mais grade ou mandar para liquidação ou outlet.</p>
+            <p class="ec-note">Lojas com mais referências de 1 peça só (de produtos com 2 tamanhos ou mais). Clique na loja para ver as peças em Produtos e decidir entre juntar na loja com mais grade ou mandar para liquidação ou outlet.</p>
             <div class="ec-scroll short"><table id="ec-t-soltas"></table></div>
           </div>
           <div class="card" id="ec-sec-defeito">
@@ -959,7 +965,7 @@
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="ec-sec-venda">
           <h3>Próximo passo: cruzar com a venda</h3>
           <p class="ec-note">Com a venda, cada lista acima ganha prioridade por giro: cobertura em semanas por loja × categoria, ruptura (vende e não tem estoque), excesso (tem estoque e não vende), sell-through e transferência loja → loja de quem tem sobra para quem vende.</p>
         </div>
@@ -967,18 +973,7 @@
 
       <!-- VISÃO GERAL -->
       <div class="ec-page" id="ec-sub-geral" hidden>
-        <div class="ec-bar">
-          <label for="ec-escopo">Escopo
-            <select id="ec-escopo" class="ec-input">
-              <option value="Lojas">Lojas (sem CD)</option>
-              <option value="OMNI">Lojas OMNI</option>
-              <option value="Loja não OMNI">Lojas não OMNI</option>
-              <option value="CD / Outros">CD / Outros</option>
-              <option value="Todas">Tudo (lojas + CD)</option>
-            </select>
-          </label>
-        </div>
-        <p class="ec-take" style="margin:0">No escopo escolhido, a categoria <b id="ec-topcat">—</b> concentra <b id="ec-topshare">—</b> das peças.</p>
+        <p class="ec-take" id="ec-take-geral">—</p>
         <div class="ec-kpis">
           <div class="ec-kpi"><span class="ec-kl">Peças em estoque</span><b class="ec-kv ec-k" data-k="pecas">—</b></div>
           <div class="ec-kpi"><span class="ec-kl">Valor a preço de venda</span><b class="ec-kv ec-k" data-k="valor">—</b></div>
@@ -988,18 +983,18 @@
           <div class="ec-kpi"><span class="ec-kl">Disponível e-com</span><b class="ec-kv ec-k" data-k="ecom">—</b><span class="ec-kn">lojas OMNI, −1 peça por SKU</span></div>
         </div>
         <div class="ec-grid2">
-          <div class="card">
+          <div class="card" id="ec-card-cat">
             <h3>Peças por categoria</h3>
-            <p class="ec-note">Top 20 categorias do escopo, com a parte em liquidação separada. Clique para abrir a categoria.</p>
+            <p class="ec-note">Até 20 categorias, com a parte em liquidação separada. Clique numa barra para filtrar só essa categoria.</p>
             <div class="ec-legend" id="ec-leg-cat"></div>
             <div class="ec-chart" id="ec-ch-cat"></div>
           </div>
-          <div class="card">
+          <div class="card" id="ec-card-heat">
             <h3>Mapa loja × categoria</h3>
-            <p class="ec-note">10 maiores categorias do escopo. Clique na loja para abrir o plano dela.</p>
+            <p class="ec-note">As 10 maiores categorias do filtro. Clique na loja para abrir o plano dela.</p>
             <div class="segmented" id="ec-heatm" style="justify-self:start">
               <button type="button" data-m="pecas" class="active">Peças</button>
-              <button type="button" data-m="share_loja">% do mix da loja</button>
+              <button type="button" data-m="share" >% do mix da loja</button>
               <button type="button" data-m="prof">Peças por ref.</button>
             </div>
             <div class="ec-scroll" id="ec-heat"></div>
@@ -1009,24 +1004,24 @@
 
       <!-- LOJAS -->
       <div class="ec-page" id="ec-sub-lojas" hidden>
-        <div class="card">
+        <div class="card" id="ec-card-lojas">
           <h3>Ranking de lojas</h3>
-          <p class="ec-note">Escolha as lojas que aparecem no ranking. As colunas de ação mostram, por loja, quanto vem do CD para completar grade, quantas referências paradas no CD ela deve receber e quanto o mix pede para reforçar ou reduzir. Clique numa loja para abrir o plano dela.</p>
-          <div class="ec-bar"><details class="ec-pick" id="ec-pk-rank"></details><span class="ec-note" id="ec-n-lojas"></span></div>
+          <p class="ec-note">Todas as colunas respeitam os filtros do topo (ex.: escolhendo VESTIDO e CALCA, peças, refs e ações são só dessas categorias). Clique numa loja para abrir o plano dela.</p>
+          <div class="ec-bar"><span class="ec-note" id="ec-n-lojas"></span></div>
           <div class="ec-scroll"><table id="ec-t-lojas"></table></div>
         </div>
         <div class="card" id="ec-card-loja">
           <h3>Plano da loja</h3>
-          <div class="ec-bar"><label for="ec-sel-loja">Loja <select id="ec-sel-loja" class="ec-input"></select></label></div>
+          <div class="ec-bar"><details class="ec-pick" id="ec-pk-plano"></details><span class="ec-note">Escolha uma ou mais lojas; em "Tudo", soma todas as lojas do filtro.</span></div>
           <div class="ec-kpis">
-            <div class="ec-kpi"><span class="ec-kl">Receber do CD (grade)</span><b class="ec-kv ec-kl-v" data-k="rep_pecas">—</b><span class="ec-kn">peças</span></div>
-            <div class="ec-kpi"><span class="ec-kl">Refs paradas no CD para receber</span><b class="ec-kv ec-kl-v" data-k="cd_refs_sugeridas">—</b></div>
-            <div class="ec-kpi"><span class="ec-kl">Mix: reforçar</span><b class="ec-kv ec-kl-v" data-k="mix_reforcar">—</b><span class="ec-kn">peças</span></div>
-            <div class="ec-kpi"><span class="ec-kl">Mix: reduzir</span><b class="ec-kv ec-kl-v" data-k="mix_reduzir">—</b><span class="ec-kn">peças</span></div>
-            <div class="ec-kpi"><span class="ec-kl">Refs com peça solta</span><b class="ec-kv ec-kl-v" data-k="refs_peca_solta">—</b></div>
-            <div class="ec-kpi"><span class="ec-kl">Peças em liquidação</span><b class="ec-kv ec-kl-v" data-k="pecas_liqui">—</b></div>
+            <div class="ec-kpi"><span class="ec-kl">Receber do CD (grade)</span><b class="ec-kv ec-pl" data-k="rep">—</b><span class="ec-kn">peças</span></div>
+            <div class="ec-kpi"><span class="ec-kl">Refs paradas no CD para receber</span><b class="ec-kv ec-pl" data-k="cd">—</b></div>
+            <div class="ec-kpi"><span class="ec-kl">Mix: reforçar</span><b class="ec-kv ec-pl" data-k="ref">—</b><span class="ec-kn">peças</span></div>
+            <div class="ec-kpi"><span class="ec-kl">Mix: reduzir</span><b class="ec-kv ec-pl" data-k="red">—</b><span class="ec-kn">peças</span></div>
+            <div class="ec-kpi"><span class="ec-kl">Refs com peça solta</span><b class="ec-kv ec-pl" data-k="solta">—</b></div>
+            <div class="ec-kpi"><span class="ec-kl">Peças em liquidação</span><b class="ec-kv ec-pl" data-k="liq">—</b></div>
           </div>
-          <p class="ec-note">Mix da loja comparado com a média das lojas da rede (sem CD).</p>
+          <p class="ec-note">Participação de cada categoria nas peças da seleção, comparada com a média das lojas da rede (sem CD).</p>
           <div class="ec-legend" id="ec-leg-mix"></div>
           <div class="ec-chart" id="ec-ch-mix"></div>
           <div class="ec-scroll short"><table id="ec-t-loja-cat"></table></div>
@@ -1035,23 +1030,20 @@
 
       <!-- CATEGORIAS -->
       <div class="ec-page" id="ec-sub-categorias" hidden>
-        <div class="ec-bar"><label for="ec-sel-cat">Categoria <select id="ec-sel-cat" class="ec-input"></select></label></div>
-        <div class="ec-kpis">
-          <div class="ec-kpi"><span class="ec-kl">Peças nas lojas</span><b class="ec-kv ec-kc" data-k="pecas">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Referências</span><b class="ec-kv ec-kc" data-k="refs">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Lojas com a categoria</span><b class="ec-kv ec-kc" data-k="lojas">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Peças por referência</span><b class="ec-kv ec-kc" data-k="prof">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Refs com grade quebrada</span><b class="ec-kv ec-kc" data-k="refs_grade_quebrada">—</b><span class="ec-kn">somando todas as lojas</span></div>
+        <div class="card" id="ec-card-cats">
+          <h3>Categorias lado a lado</h3>
+          <p class="ec-note">Uma linha por categoria do filtro. Clique numa categoria para filtrar só ela; para voltar, use "Tudo" no filtro de categorias.</p>
+          <div class="ec-scroll short"><table id="ec-t-cats"></table></div>
         </div>
         <div class="ec-grid2">
-          <div class="card">
+          <div class="card" id="ec-card-grade">
             <h3>Peças por posição de tamanho</h3>
-            <p class="ec-note">T1 a T11 são as posições da grade como vêm do sistema (ex.: T1 = PP ou 34). Só lojas.</p>
+            <p class="ec-note">T1 a T11 são as posições da grade como vêm do sistema (ex.: T1 = PP ou 34), somando as categorias e lojas do filtro.</p>
             <div class="ec-chart" id="ec-ch-grade"></div>
           </div>
-          <div class="card">
-            <h3>Onde a categoria está</h3>
-            <p class="ec-note">Lojas e CD com estoque da categoria. Clique na linha para abrir o plano da loja.</p>
+          <div class="card" id="ec-card-cat-lojas">
+            <h3>Onde as categorias estão</h3>
+            <p class="ec-note">Lojas e CD com estoque das categorias do filtro. "Mix na loja" é o peso dessas categorias no estoque total da loja. Clique na linha para abrir o plano da loja.</p>
             <div class="ec-scroll short"><table id="ec-t-cat-lojas"></table></div>
           </div>
         </div>
@@ -1059,16 +1051,14 @@
 
       <!-- PRODUTOS -->
       <div class="ec-page" id="ec-sub-produtos" hidden>
-        <div class="card">
+        <div class="card" id="ec-card-prod">
           <h3>Produtos</h3>
-          <p class="ec-note">Sem loja escolhida, mostra a rede toda (até 300 referências). Escolhendo lojas, mostra cada produto em cada loja, com a grade, os tamanhos que faltam e o que o CD tem desses tamanhos (até 500 linhas).</p>
+          <p class="ec-note">Sem loja no filtro, mostra cada produto somando as lojas e locais (até 300). Com lojas no filtro, mostra cada produto em cada loja, com a grade, os tamanhos que faltam e o que o CD tem deles (até 500 linhas).</p>
           <div class="ec-bar">
-            <details class="ec-pick" id="ec-pk-prod"></details>
             <input type="search" class="ec-input" id="ec-q-prod" placeholder="Buscar Ref_Cor ou nome" aria-label="Buscar produto">
-            <label for="ec-f-cat">Categoria <select id="ec-f-cat" class="ec-input"><option value="">Todas</option></select></label>
-            <label for="ec-f-st">Grade <select id="ec-f-st" class="ec-input"><option value="">Todas</option><option>Completa</option><option>Incompleta</option><option>Quebrada</option><option>Solta</option></select></label>
-            <label for="ec-f-foto">Foto <select id="ec-f-foto" class="ec-input"><option value="">Todas</option><option>Com foto</option><option>Sem foto</option></select></label>
-            <label for="ec-f-liq">Liquidação <select id="ec-f-liq" class="ec-input"><option value="">Todos</option><option>Liqui</option><option>Não liqui</option></select></label>
+            <details class="ec-pick" id="ec-pk-st"></details>
+            <details class="ec-pick" id="ec-pk-foto"></details>
+            <details class="ec-pick" id="ec-pk-liq"></details>
             <span class="ec-note" id="ec-n-prod"></span>
           </div>
           <div class="ec-scroll" id="ec-wrap-prod"><table id="ec-t-prod"></table></div>
@@ -1076,14 +1066,14 @@
         </div>
         <div class="card" id="ec-card-sku">
           <h3 id="ec-sku-title">Distribuição por loja</h3>
-          <p class="ec-note">Grade = peças por posição de tamanho, de T1 em diante (ex.: 0-2-2-1 = sem T1, 2 no T2, 2 no T3, 1 no T4). "No CD" = peças da distribuidora nos tamanhos que faltam na loja.</p>
+          <p class="ec-note">Todas as lojas e locais com a referência escolhida (as do filtro aparecem destacadas). Grade = peças por posição de tamanho, de T1 em diante. "No CD" = peças da distribuidora nos tamanhos que faltam na loja.</p>
           <div class="ec-scroll short"><table id="ec-t-sku"></table></div>
         </div>
       </div>
 
       <!-- CARREGAR PLANILHA (admin) -->
       <div class="ec-page" id="ec-sub-planilha" hidden>
-        <div class="card">
+        <div class="card" id="ec-card-upload">
           <h3>Carregar a planilha de estoque do dia</h3>
           <form class="ec-upload" id="ec-upload-form">
             <p class="ec-note">Envie a planilha "Estoque Omni" (.xlsx) como ela sai hoje. O painel lê a aba de estoque (filial × produto × cor com ES1..ES11), a aba "Todos os produtos" (categoria, linha e liquidação) e a aba OMNIS, recalcula tudo e passa a mostrar essa versão. Reenviar no mesmo dia substitui a carga do dia.</p>
@@ -1093,13 +1083,13 @@
             <p class="form-msg" id="ec-upload-msg" hidden></p>
           </form>
         </div>
-        <div class="card">
+        <div class="card" id="ec-card-cargas">
           <h3>Planilhas recebidas</h3>
           <div class="ec-scroll short"><table id="ec-t-cargas"></table></div>
         </div>
-        <div class="card">
+        <div class="card" id="ec-card-github">
           <h3>Subir pelo GitHub</h3>
-          <p class="ec-note">Também dá para mandar a planilha pelo GitHub: suba o arquivo na pasta <code>estoque/</code> do repositório de estoque (ou rode a rotina "Enviar estoque" manualmente). A rotina envia a planilha para cá e ela aparece nesta lista com origem "github".</p>
+          <p class="ec-note">Também dá para mandar pelo GitHub: no repositório <code>dashboard-vendas-backend</code>, suba o arquivo na pasta <code>estoque/</code> (Add file → Upload files). A rotina "Enviar estoque Cia" manda a planilha para cá e ela aparece nesta lista com origem "github". Coloque a data no nome do arquivo (ex.: Estoque_Omni_2026-10-13.xlsx).</p>
         </div>
       </div>
     </section>
@@ -3090,20 +3080,25 @@
 
   // ==================== Estoque Cia ====================
   // Menu com o estoque de todas as lojas + CD, a partir da planilha "Estoque Omni" que é
-  // carregada todo dia (botão "Carregar planilha" ou rotina do GitHub). Todos os números
-  // vêm prontos do backend (/api/estoque-cia/dataset/:nome, calculados em
-  // src/estoqueCia/processar.js); aqui só filtramos, ordenamos e desenhamos.
+  // carregada todo dia (botão "Carregar planilha" ou rotina do GitHub). O backend entrega a
+  // base produto × loja já enriquecida (/api/estoque-cia/dataset/sku_loja, ver
+  // src/estoqueCia/processar.js) e as listas de ação; aqui o navegador junta com produtos e
+  // lojas e recalcula tudo para a combinação de filtros escolhida (todo filtro é de
+  // múltipla escolha, com "Tudo").
   var EstoqueCia = (function () {
     var D3_URL = "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js";
     var CD = "CD / Outros";
+    var RETORNO_DEFEITO = "RJ RETORNO DEFEITO";
+    var TIPOS = ["OMNI", "Loja não OMNI", CD];
     var NF = new Intl.NumberFormat("pt-BR");
     var fi = function (v) { return v == null || v === "" || isNaN(v) ? "—" : NF.format(Math.round(v)); };
-    var fd = function (v) { return v == null || isNaN(v) ? "—" : new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
-    var fp = function (v) { return v == null || isNaN(v) ? "—" : new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
+    var fd = function (v) { return v == null || isNaN(v) || !isFinite(v) ? "—" : new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
+    var fp = function (v) { return v == null || isNaN(v) || !isFinite(v) ? "—" : new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
     var fpp = function (v) { return (v > 0 ? "+" : "") + fd(v) + " p.p."; };
     var fbrlC = function (v) { return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", notation: "compact", maximumFractionDigits: 1 }).format(v || 0); };
     var fcomp = function (v) { return v >= 10000 ? new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 }).format(v) : fi(v); };
-    var inScope = function (tipo, esc) { return esc === "Todas" || (esc === "Lojas" ? tipo !== CD : tipo === esc); };
+    var div = function (a, b) { return b ? a / b : 0; };
+    var pl = function (n, um, varios) { return fi(n) + " " + (n === 1 ? um : varios); };
     var STCLS = { Quebrada: "bad", Solta: "warn", Incompleta: "mut", Completa: "ok" };
     var C_MAIN = "var(--accent)", C_ALT = "var(--series-2)", C_MUTED = "var(--text-muted)";
 
@@ -3111,9 +3106,10 @@
     var $ = function (s) { return root().querySelector(s); };
     var $$ = function (s) { return Array.prototype.slice.call(root().querySelectorAll(s)); };
 
-    var S = { sub: "decisoes", escopo: "Lojas", heat: "pecas", loja: null, cat: null, mixf: "", qGrade: "", qCd: "",
-      qProd: "", fCat: "", fSt: "", fFoto: "", fLiq: "", prod: null, sorts: {},
-      pick: { dec: new Set(), rank: new Set(), prod: new Set() } };
+    // Filtros: cada um é um Set; vazio = "Tudo".
+    var F = { tipo: new Set(), loja: new Set(), grupo: new Set(), linha: new Set(),
+      acao: new Set(), plano: new Set(), st: new Set(), foto: new Set(), liq: new Set() };
+    var S = { sub: "decisoes", heat: "pecas", qGrade: "", qCd: "", qProd: "", prod: null, sorts: {} };
     var D = {};          // cache dos datasets: nome -> {status, rows, msg}
     var cargas = null;   // lista de cargas (null = não carregou ainda)
     var wired = false;
@@ -3124,7 +3120,7 @@
       if (!d) {
         D[nome] = { status: "loading" };
         apiFetch("/api/estoque-cia/dataset/" + nome).then(function (r) {
-          D[nome] = { status: "ok", rows: r.rows, dataRef: r.dataRef };
+          D[nome] = { status: "ok", rows: r.rows };
           draw();
         }).catch(function (e) {
           D[nome] = { status: "error", msg: e.message };
@@ -3134,7 +3130,10 @@
       }
       return d.status === "ok" ? d.rows : null;
     }
-    var failed = function (nome) { return D[nome] && D[nome].status === "error"; };
+    function erroDe() {
+      for (var i = 0; i < arguments.length; i++) { var d = D[arguments[i]]; if (d && d.status === "error") return d.msg || "erro"; }
+      return null;
+    }
     function carregarCargas() {
       return apiFetch("/api/estoque-cia/cargas").then(function (r) { cargas = r.cargas || []; draw(); })
         .catch(function () { cargas = cargas || []; draw(); });
@@ -3147,10 +3146,68 @@
       return loadD3.p;
     }
 
+    // Base produto × loja juntando produtos (categoria, linha, preço, foto, liquidação) e lojas (tipo).
+    var M = null;
+    function modelo() {
+      var lojas = ds("lojas"), prod = ds("produtos"), sku = ds("sku_loja");
+      if (!lojas || !prod || !sku) return null;
+      if (M && M.src === sku && M.srcP === prod && M.srcL === lojas) return M;
+      var tipoDe = new Map(lojas.map(function (r) { return [r.filial, r.tipo]; }));
+      var pmap = new Map(prod.map(function (r) { return [r.Ref_Cor, r]; }));
+      var tamCia = new Map();
+      var rows = sku.map(function (r) {
+        var p = pmap.get(r.ref) || {};
+        var tam = String(r.grade || "").split("-").map(Number);
+        var bits = tamCia.get(r.ref) || 0;
+        tam.forEach(function (x, j) { if (x > 0) bits |= (1 << j); });
+        tamCia.set(r.ref, bits);
+        return { ref: r.ref, filial: r.filial, tipo: tipoDe.get(r.filial) || "", grupo: p.grupo || "SEM GRUPO", linha: p.linha || "SEM LINHA",
+          nome: p.nome || "", preco: Number(p.preco) || 0, liqui: p.liqui === "Liqui", foto: p.foto === "Com foto",
+          pecas: Number(r.pecas) || 0, ecom: Number(r.ecom) || 0, status: r.status || "", falta: r.falta || "", cd: r.cd || "", grade: r.grade, tam: tam };
+      });
+      var pop = function (n) { var c = 0; while (n) { c += n & 1; n >>>= 1; } return c; };
+      rows.forEach(function (r) { r.nszCia = pop(tamCia.get(r.ref) || 0); });
+      var uniq = function (f) { return Array.from(new Set(rows.map(f))).sort(function (a, b) { return a.localeCompare(b, "pt-BR"); }); };
+      // mix médio da rede (lojas, todas as categorias) — referência fixa pro ajuste de mix
+      var redeG = new Map(), redeT = 0;
+      rows.forEach(function (r) { if (r.tipo !== CD) { redeG.set(r.grupo, (redeG.get(r.grupo) || 0) + r.pecas); redeT += r.pecas; } });
+      M = { src: sku, srcP: prod, srcL: lojas, rows: rows, pmap: pmap, tipoDe: tipoDe, lojas: lojas,
+        grupos: uniq(function (r) { return r.grupo; }), linhas: uniq(function (r) { return r.linha; }),
+        shareRede: function (g) { return div(redeG.get(g) || 0, redeT); } };
+      return M;
+    }
+    var tem = function (set, v) { return set.size === 0 || set.has(v); };
+    var passaLoja = function (filial, tipo) { return tem(F.tipo, tipo) && tem(F.loja, filial); };
+    var passaProd = function (grupo, linha) { return tem(F.grupo, grupo) && (linha == null || tem(F.linha, linha)); };
+    var passa = function (r) { return passaLoja(r.filial, r.tipo) && passaProd(r.grupo, r.linha); };
+    function filtrados() { var m = modelo(); return m ? m.rows.filter(passa) : null; }
+    var filtroAtivo = function () { return F.tipo.size || F.loja.size || F.grupo.size || F.linha.size; };
+
+    function agg(rows) {
+      var refs = new Set(), refsQ = new Set(), refsS = new Set(), lojas = new Set();
+      var a = { pecas: 0, valor: 0, liq: 0, semFoto: 0, ecom: 0 };
+      rows.forEach(function (r) {
+        a.pecas += r.pecas; a.valor += r.pecas * r.preco; a.ecom += r.ecom;
+        if (r.liqui) a.liq += r.pecas;
+        if (!r.foto) a.semFoto += r.pecas;
+        refs.add(r.ref); lojas.add(r.filial);
+        if (r.status === "Quebrada") refsQ.add(r.ref);
+        if (r.status === "Solta") refsS.add(r.ref);
+      });
+      a.refs = refs.size; a.refsQ = refsQ.size; a.refsS = refsS.size; a.lojas = lojas.size;
+      a.prof = div(a.pecas, a.refs);
+      return a;
+    }
+    function agrupar(rows, f) {
+      var m = new Map();
+      rows.forEach(function (r) { var k = f(r), a = m.get(k); if (!a) { a = []; m.set(k, a); } a.push(r); });
+      return m;
+    }
+
     // ---- utilidades de UI ----
     function failBox(el, msg) {
       if (!el) return;
-      var f = document.createElement("div"); f.className = "ec-fail"; f.textContent = msg || "Não foi possível carregar. Clique em Atualizar.";
+      var f = document.createElement("div"); f.className = "ec-fail"; f.textContent = "Não foi possível carregar (" + (msg || "erro") + "). Clique em Atualizar.";
       el.replaceChildren(f);
     }
     function loadingBox(el) {
@@ -3169,6 +3226,7 @@
         s.append(i, document.createTextNode(it[0])); return s;
       }));
     }
+    function vazioBox(el, txt) { var p = document.createElement("p"); p.className = "empty-state"; p.textContent = txt; el.replaceChildren(p); }
 
     // tooltip
     var tip = document.createElement("div"); tip.className = "ec-tip"; tip.hidden = true;
@@ -3201,7 +3259,7 @@
       if (!window.d3) { loadingBox(box); return; }
       delete box.dataset.loading;
       box.replaceChildren();
-      if (!rows.length) { var p = document.createElement("p"); p.className = "empty-state"; p.textContent = "Sem dados para este filtro."; box.appendChild(p); return; }
+      if (!rows.length) { vazioBox(box, "Sem dados para este filtro."); return; }
       var W = Math.max(280, box.clientWidth || 600);
       var rh = o.grouped ? 20 : 18, gap = o.grouped ? 8 : 6;
       var svg = d3.select(box).append("svg").attr("width", "100%");
@@ -3237,7 +3295,7 @@
       if (!window.d3) { loadingBox(box); return; }
       delete box.dataset.loading;
       box.replaceChildren();
-      if (!rows.length) { var p = document.createElement("p"); p.className = "empty-state"; p.textContent = "Sem dados para esta categoria."; box.appendChild(p); return; }
+      if (!rows.length) { vazioBox(box, "Sem dados para este filtro."); return; }
       var W = Math.max(260, box.clientWidth || 500), H = 200, m = { t: 18, r: 6, b: 22, l: 6 };
       var svg = d3.select(box).append("svg").attr("width", "100%").attr("viewBox", "0 0 " + W + " " + H).attr("height", H);
       var x = d3.scaleBand(rows.map(function (r) { return r.tamanho; }), [m.l, W - m.r]).padding(0.25);
@@ -3284,8 +3342,13 @@
       });
       thead.appendChild(htr);
       var maxBar = {};
-      cols.filter(function (c) { return c.bar; }).forEach(function (c) { maxBar[c.f] = Math.max.apply(null, rows.map(function (r) { return Number(r[c.f]) || 0; }).concat([1])); });
+      cols.filter(function (c) { return c.bar; }).forEach(function (c) { maxBar[c.f] = rows.reduce(function (m, r) { return Math.max(m, Number(r[c.f]) || 0); }, 1); });
       var tb = document.createElement("tbody");
+      if (!rs.length) {
+        var tr0 = document.createElement("tr"), td0 = document.createElement("td");
+        td0.colSpan = cols.length; td0.className = "empty-state"; td0.textContent = opt.vazio || "Nada para mostrar com os filtros atuais.";
+        tr0.appendChild(td0); tb.appendChild(tr0);
+      }
       rs.forEach(function (r) {
         var tr = document.createElement("tr");
         if (opt.sel && opt.sel(r)) tr.classList.add("sel");
@@ -3314,53 +3377,95 @@
       if (opt.countEl) opt.countEl.textContent = total > rs.length ? "Mostrando " + fi(rs.length) + " de " + fi(total) : fi(total) + " linhas";
     }
 
-    // ---- seletor de lojas ----
-    var pickerSig = {};
-    function buildPicker(key, lojas) {
-      var el = $("#ec-pk-" + key);
+    // ---- seletor de múltipla escolha (com "Tudo") ----
+    // cfg: { titulo, opcoes(): [{v, hint}], atalhos: [[rótulo, fn(opcoes) -> valores]] }
+    var PICKS = {
+      tipo: { titulo: "Tipo de loja", opcoes: function () { return TIPOS.map(function (t) { return { v: t }; }); },
+        atalhos: [["Só lojas (sem CD)", function () { return ["OMNI", "Loja não OMNI"]; }]] },
+      loja: { titulo: "Lojas", busca: true, opcoes: function () {
+          var m = modelo(); if (!m) return [];
+          return m.lojas.filter(function (r) { return tem(F.tipo, r.tipo); }).slice().sort(function (a, b) { return a.filial.localeCompare(b.filial, "pt-BR"); }).map(function (r) { return { v: r.filial, hint: r.tipo }; });
+        },
+        atalhos: [["Só OMNI", function (o) { return o.filter(function (x) { return x.hint === "OMNI"; }).map(function (x) { return x.v; }); }],
+          ["Só não OMNI", function (o) { return o.filter(function (x) { return x.hint === "Loja não OMNI"; }).map(function (x) { return x.v; }); }]] },
+      grupo: { titulo: "Categorias", busca: true, opcoes: function () { var m = modelo(); return m ? m.grupos.map(function (g) { return { v: g }; }) : []; } },
+      linha: { titulo: "Linhas", busca: true, opcoes: function () { var m = modelo(); return m ? m.linhas.map(function (g) { return { v: g }; }) : []; } },
+      acao: { titulo: "Ação", opcoes: function () { return [{ v: "Reforçar" }, { v: "Reduzir" }]; } },
+      plano: { titulo: "Lojas do plano", busca: true, opcoes: function () {
+          var m = modelo(); if (!m) return [];
+          return m.lojas.filter(function (r) { return r.tipo !== CD && passaLoja(r.filial, r.tipo); }).slice().sort(function (a, b) { return a.filial.localeCompare(b.filial, "pt-BR"); }).map(function (r) { return { v: r.filial, hint: r.tipo }; });
+        } },
+      st: { titulo: "Grade", opcoes: function () { return ["Completa", "Incompleta", "Quebrada", "Solta"].map(function (v) { return { v: v }; }); } },
+      foto: { titulo: "Foto", opcoes: function () { return [{ v: "Com foto" }, { v: "Sem foto" }]; } },
+      liq: { titulo: "Liquidação", opcoes: function () { return [{ v: "Liqui" }, { v: "Não liqui" }]; } },
+    };
+    var pickSig = {};
+    function buildPick(key) {
+      var el = $("#ec-pk-" + key), cfg = PICKS[key], set = F[key];
       if (!el) return;
-      var set = S.pick[key];
       if (!el.dataset.ready) {
         el.dataset.ready = "1";
         var sum = document.createElement("summary");
-        sum.append(document.createTextNode("Lojas:"));
+        sum.append(document.createTextNode(cfg.titulo + ":"));
         var lbl0 = document.createElement("span"); lbl0.className = "lbl"; sum.appendChild(lbl0);
         var pop = document.createElement("div"); pop.className = "ec-pop";
-        var q = document.createElement("input"); q.type = "search"; q.className = "ec-input"; q.placeholder = "Buscar loja"; q.setAttribute("aria-label", "Buscar loja");
-        var chips = document.createElement("div"); chips.className = "ec-chips";
-        [["Todas", "all"], ["Só OMNI", "OMNI"], ["Só não OMNI", "Loja não OMNI"], ["Só CD / outros", CD], ["Limpar", "all"]].forEach(function (c) {
-          var b = document.createElement("button"); b.type = "button"; b.className = "tag-btn"; b.textContent = c[0];
-          b.addEventListener("click", function () {
-            set.clear();
-            if (c[1] !== "all") (ds("lojas") || []).filter(function (r) { return r.tipo === c[1]; }).forEach(function (r) { set.add(r.filial); });
-            pickerSig[key] = null; draw();
+        if (cfg.busca) {
+          var q = document.createElement("input"); q.type = "search"; q.className = "ec-input"; q.placeholder = "Buscar"; q.setAttribute("aria-label", "Buscar " + cfg.titulo.toLowerCase());
+          q.addEventListener("input", function () { pickSig[key] = null; buildPick(key); });
+          pop.appendChild(q);
+        }
+        if (cfg.atalhos) {
+          var chips = document.createElement("div"); chips.className = "ec-chips";
+          cfg.atalhos.forEach(function (a) {
+            var b = document.createElement("button"); b.type = "button"; b.className = "tag-btn"; b.textContent = a[0];
+            b.addEventListener("click", function () { set.clear(); a[1](cfg.opcoes()).forEach(function (v) { set.add(v); }); mudou(key); });
+            chips.appendChild(b);
           });
-          chips.appendChild(b);
-        });
+          pop.appendChild(chips);
+        }
         var list = document.createElement("div"); list.className = "ec-plist";
-        q.addEventListener("input", function () { pickerSig[key] = null; draw(); });
-        pop.append(q, chips, list);
+        pop.appendChild(list);
         el.append(sum, pop);
         document.addEventListener("click", function (ev) { if (el.open && !el.contains(ev.target)) el.open = false; });
       }
-      el.querySelector(".lbl").textContent = set.size === 0 ? "Todas" : set.size === 1 ? Array.from(set)[0] : set.size + " selecionadas";
-      if (!lojas) return;
-      var qv = el.querySelector("input[type=search]").value.trim().toUpperCase();
-      var sig = qv + "|" + Array.from(set).sort().join(";") + "|" + lojas.length;
-      if (pickerSig[key] === sig) return;
-      pickerSig[key] = sig;
-      var rows = lojas.slice().sort(function (a, b) { return a.filial.localeCompare(b.filial, "pt-BR"); }).filter(function (r) { return !qv || r.filial.indexOf(qv) >= 0; });
+      var opcoes = cfg.opcoes();
+      // remove do filtro o que não existe mais nas opções (ex.: loja de um tipo desmarcado)
+      if (opcoes.length) { var validos = new Set(opcoes.map(function (o) { return o.v; })); Array.from(set).forEach(function (v) { if (!validos.has(v)) set.delete(v); }); }
+      el.classList.toggle("ativo", set.size > 0);
+      el.querySelector(".lbl").textContent = set.size === 0 ? "Tudo" : set.size === 1 ? Array.from(set)[0] : set.size + " selecionados";
+      var qEl = el.querySelector("input[type=search]"), qv = qEl ? qEl.value.trim().toUpperCase() : "";
+      var sig = qv + "|" + Array.from(set).sort().join(";") + "|" + opcoes.map(function (o) { return o.v; }).join(";");
+      if (pickSig[key] === sig) return;
+      pickSig[key] = sig;
       var listEl = el.querySelector(".ec-plist");
-      listEl.replaceChildren.apply(listEl, rows.map(function (r) {
+      var linhas = [];
+      var lTudo = document.createElement("label"); lTudo.className = "tudo";
+      var cbT = document.createElement("input"); cbT.type = "checkbox"; cbT.checked = set.size === 0;
+      cbT.addEventListener("change", function () { set.clear(); mudou(key); });
+      var nT = document.createElement("span"); nT.textContent = "Tudo";
+      lTudo.append(cbT, nT); linhas.push(lTudo);
+      opcoes.filter(function (o) { return !qv || String(o.v).toUpperCase().indexOf(qv) >= 0; }).forEach(function (o) {
         var l = document.createElement("label");
-        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = set.has(r.filial);
-        cb.addEventListener("change", function () { if (cb.checked) set.add(r.filial); else set.delete(r.filial); pickerSig[key] = null; draw(); });
-        var n = document.createElement("span"); n.textContent = r.filial;
-        var t = document.createElement("span"); t.className = "tp"; t.textContent = r.tipo;
-        l.append(cb, n, t); return l;
-      }));
+        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = set.has(o.v);
+        cb.addEventListener("change", function () {
+          if (cb.checked) set.add(o.v); else set.delete(o.v);
+          if (set.size === opcoes.length) set.clear(); // marcou todos = Tudo
+          mudou(key);
+        });
+        var n = document.createElement("span"); n.textContent = o.v;
+        l.append(cb, n);
+        if (o.hint) { var t = document.createElement("span"); t.className = "tp"; t.textContent = o.hint; l.appendChild(t); }
+        linhas.push(l);
+      });
+      listEl.replaceChildren.apply(listEl, linhas);
     }
-    var picked = function (key, filial) { return S.pick[key].size === 0 || S.pick[key].has(filial); };
+    function mudou(key) {
+      pickSig[key] = null;
+      if (key === "tipo") { pickSig.loja = null; pickSig.plano = null; }
+      if (key === "loja") pickSig.plano = null;
+      draw();
+    }
+    function soEsse(key, v) { F[key] = new Set([v]); mudou(key); }
 
     // ---- navegação ----
     var SUBS = ["decisoes", "geral", "lojas", "categorias", "produtos", "planilha"];
@@ -3369,164 +3474,177 @@
       $$("#ec-subnav button").forEach(function (b) { b.classList.toggle("active", b.dataset.sub === sub); });
       draw();
     }
-    function goLoja(f) { S.loja = f; openSub("lojas"); var c = $("#ec-card-loja"); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
-    function goProdLoja(f, st) { S.pick.prod = new Set([f]); pickerSig.prod = null; S.fSt = st || ""; $("#ec-f-st").value = S.fSt; openSub("produtos"); }
+    function goLoja(f) { F.plano = new Set([f]); pickSig.plano = null; openSub("lojas"); var c = $("#ec-card-loja"); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
+    function goProdLoja(f, st) { F.loja = new Set([f]); F.st = new Set(st ? [st] : []); pickSig.loja = null; pickSig.st = null; openSub("produtos"); }
 
     function wire() {
       if (wired) return; wired = true;
       $("#ec-subnav").addEventListener("click", function (e) { var b = e.target.closest("button[data-sub]"); if (b) openSub(b.dataset.sub); });
-      $("#ec-escopo").addEventListener("change", function (e) { S.escopo = e.target.value; draw(); });
       $("#ec-heatm").addEventListener("click", function (e) { var b = e.target.closest("button[data-m]"); if (b) { S.heat = b.dataset.m; draw(); } });
-      $("#ec-mixf").addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) { S.mixf = b.dataset.v; draw(); } });
       $("#ec-q-grade").addEventListener("input", function (e) { S.qGrade = e.target.value; draw(); });
       $("#ec-q-cd").addEventListener("input", function (e) { S.qCd = e.target.value; draw(); });
-      $("#ec-sel-loja").addEventListener("change", function (e) { S.loja = e.target.value; draw(); });
-      $("#ec-sel-cat").addEventListener("change", function (e) { S.cat = e.target.value; draw(); });
       $("#ec-q-prod").addEventListener("input", function (e) { S.qProd = e.target.value; draw(); });
-      $("#ec-f-cat").addEventListener("change", function (e) { S.fCat = e.target.value; draw(); });
-      $("#ec-f-st").addEventListener("change", function (e) { S.fSt = e.target.value; draw(); });
-      $("#ec-f-foto").addEventListener("change", function (e) { S.fFoto = e.target.value; draw(); });
-      $("#ec-f-liq").addEventListener("change", function (e) { S.fLiq = e.target.value; draw(); });
+      $("#ec-limpar").addEventListener("click", function () { ["tipo", "loja", "grupo", "linha"].forEach(function (k) { F[k].clear(); pickSig[k] = null; }); pickSig.plano = null; draw(); });
       $("#ec-upload-form").addEventListener("submit", enviarPlanilha);
       $("#ec-data").value = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
       var rz; window.addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { if (!root().hidden) draw(); }, 200); });
     }
 
+    // ---- ações filtradas (usadas em Decisões, Lojas e Plano) ----
+    function acoesFiltradas(m) {
+      var ag = ds("acoes_grade"), ac = ds("acoes_cd"), am = ds("acoes_mix");
+      if (!ag || !ac || !am) return null;
+      var linhaDe = function (ref) { var p = m.pmap.get(ref); return p ? p.linha : null; };
+      var grade = ag.filter(function (r) { return passaLoja(r.filial, r.tipo) && passaProd(r.grupo, linhaDe(r.ref)); });
+      var cd = [];
+      ac.forEach(function (r) {
+        if (!passaProd(r.grupo, linhaDe(r.ref))) return;
+        var sug = String(r.sugestao || "").split(", ").filter(function (f) { return f && passaLoja(f, m.tipoDe.get(f)); });
+        if (!sug.length) return;
+        cd.push(Object.assign({}, r, { sugestao: sug.join(", "), lojas_sugeridas: sug.length, pecas_distribuir: sug.length * r.tamanhos }));
+      });
+      var mix = am.filter(function (r) { return passaLoja(r.filial, r.tipo) && passaProd(r.grupo, null); });
+      return { grade: grade, cd: cd, mix: mix };
+    }
+    function porLoja(rows, f) { var mm = new Map(); rows.forEach(function (r) { mm.set(r.filial, (mm.get(r.filial) || 0) + f(r)); }); return mm; }
+
     // ---- DECISÕES ----
-    var DSUB = {
-      grade: function (r) { return fi(r.refs) + " referências · " + fi(r.lojas) + " lojas"; },
-      cd: function (r) { return fi(r.refs) + " referências · " + fi(r.lojas) + " lojas recebem"; },
-      reforcar: function (r) { return fi(r.refs) + " loja × categoria · " + fi(r.lojas) + " lojas"; },
-      reduzir: function (r) { return fi(r.refs) + " loja × categoria · " + fi(r.lojas) + " lojas"; },
-      soltas: function (r) { return fi(r.refs) + " referências · " + fi(r.lojas) + " lojas"; },
-      defeito: function (r) { return fi(r.refs) + " referências paradas"; },
-    };
     var DSEC = { grade: "ec-sec-grade", cd: "ec-sec-cd", reforcar: "ec-sec-mix", reduzir: "ec-sec-mix", soltas: "ec-sec-soltas", defeito: "ec-sec-defeito" };
-    var decDone = null;
-    function drawDecisoes(lojas) {
-      var dec = ds("decisoes"), box = $("#ec-dec-cards");
-      if (failed("decisoes")) failBox(box, D.decisoes.msg);
-      if (dec) {
-        $$("[data-dec]").forEach(function (el) {
-          var p = el.dataset.dec.split(":"), r = dec.filter(function (x) { return x.id === p[0]; })[0];
-          setTxt(el, r ? fi(r[p[1]]) : "—");
+    function drawDecisoes(m, rows) {
+      buildPick("acao");
+      var A = acoesFiltradas(m), dec = ds("decisoes");
+      var err = erroDe("acoes_grade", "acoes_cd", "acoes_mix", "decisoes");
+      if (err) { failBox($("#ec-dec-cards"), err); return; }
+      if (!A || !dec) { loadingBox($("#ec-dec-cards")); return; }
+      delete $("#ec-dec-cards").dataset.loading;
+      var soltas = rows.filter(function (r) { return r.tipo !== CD && r.status === "Solta" && r.nszCia >= 2; });
+      var defeito = rows.filter(function (r) { return r.filial === RETORNO_DEFEITO; });
+      var mixR = A.mix.filter(function (r) { return r.acao === "Reforçar"; }), mixD = A.mix.filter(function (r) { return r.acao === "Reduzir"; });
+      var uniq = function (a) { return new Set(a).size; };
+      var soma = function (a, f) { return a.reduce(function (s, r) { return s + f(r); }, 0); };
+      var sugLojas = new Set(); A.cd.forEach(function (r) { r.sugestao.split(", ").forEach(function (f) { sugLojas.add(f); }); });
+      var V = {
+        grade: { pecas: soma(A.grade, function (r) { return r.pecas_enviar; }), sub: pl(uniq(A.grade.map(function (r) { return r.ref; })), "referência", "referências") + " · " + pl(uniq(A.grade.map(function (r) { return r.filial; })), "loja", "lojas"), refs: uniq(A.grade.map(function (r) { return r.ref; })) },
+        cd: { pecas: soma(A.cd, function (r) { return r.pecas_distribuir; }), sub: pl(A.cd.length, "referência", "referências") + " · " + pl(sugLojas.size, "loja recebe", "lojas recebem") },
+        reforcar: { pecas: soma(mixR, function (r) { return r.pecas_ajuste; }), sub: pl(mixR.length, "loja × categoria", "loja × categoria") + " · " + pl(uniq(mixR.map(function (r) { return r.filial; })), "loja", "lojas") },
+        reduzir: { pecas: soma(mixD, function (r) { return r.pecas_ajuste; }), sub: pl(mixD.length, "loja × categoria", "loja × categoria") + " · " + pl(uniq(mixD.map(function (r) { return r.filial; })), "loja", "lojas") },
+        soltas: { pecas: soma(soltas, function (r) { return r.pecas; }), sub: pl(uniq(soltas.map(function (r) { return r.ref; })), "referência", "referências") + " · " + pl(uniq(soltas.map(function (r) { return r.filial; })), "loja", "lojas") },
+        defeito: { pecas: soma(defeito, function (r) { return r.pecas; }), sub: pl(uniq(defeito.map(function (r) { return r.ref; })), "referência parada", "referências paradas") },
+      };
+      setTxt($("#ec-take-dec"), (filtroAtivo() ? "Com os filtros escolhidos, as três maiores frentes: " : "Dá para agir agora em seis frentes. As três maiores: ")
+        + "completar a grade de " + fi(V.grade.refs) + " referências enviando " + fi(V.grade.pecas) + " peças do CD; distribuir "
+        + fi(V.cd.pecas) + " peças paradas no CD; e destravar " + fi(V.defeito.pecas) + " peças no retorno de defeito.");
+      var box = $("#ec-dec-cards");
+      box.replaceChildren.apply(box, dec.slice().sort(function (a, b) { return a.ordem - b.ordem; }).map(function (r) {
+        var v = V[r.id] || { pecas: r.pecas, sub: "" };
+        var c = document.createElement("div"); c.className = "ec-dcard";
+        var h = document.createElement("div"); h.className = "ec-dhead";
+        var st = document.createElement("span"); st.className = "ec-step"; st.textContent = r.ordem;
+        var tt = document.createElement("span"); tt.textContent = r.acao;
+        h.append(st, tt);
+        var n = document.createElement("div"); n.className = "ec-dnum";
+        var b = document.createElement("b"); b.className = "ec-kv"; b.textContent = fi(v.pecas);
+        var u = document.createElement("span"); u.className = "ec-kn"; u.textContent = "peças";
+        n.append(b, u);
+        var sub = document.createElement("span"); sub.className = "ec-kn"; sub.textContent = v.sub;
+        var como = document.createElement("p"); como.className = "ec-note"; como.textContent = r.como;
+        var go = document.createElement("button"); go.type = "button"; go.className = "tag-btn ec-dgo"; go.textContent = "Ver lista";
+        go.addEventListener("click", function () {
+          if (r.id === "reforcar" || r.id === "reduzir") { F.acao = new Set([r.id === "reforcar" ? "Reforçar" : "Reduzir"]); mudou("acao"); }
+          document.getElementById(DSEC[r.id]).scrollIntoView({ block: "start", behavior: "smooth" });
         });
-        if (decDone !== dec) {
-          decDone = dec;
-          box.replaceChildren.apply(box, dec.slice().sort(function (a, b) { return a.ordem - b.ordem; }).map(function (r) {
-            var c = document.createElement("div"); c.className = "ec-dcard";
-            var h = document.createElement("div"); h.className = "ec-dhead";
-            var st = document.createElement("span"); st.className = "ec-step"; st.textContent = r.ordem;
-            var tt = document.createElement("span"); tt.textContent = r.acao;
-            h.append(st, tt);
-            var n = document.createElement("div"); n.className = "ec-dnum";
-            var v = document.createElement("b"); v.className = "ec-kv"; v.textContent = fi(r.pecas);
-            var u = document.createElement("span"); u.className = "ec-kn"; u.textContent = "peças";
-            n.append(v, u);
-            var sub = document.createElement("span"); sub.className = "ec-kn"; sub.textContent = DSUB[r.id] ? DSUB[r.id](r) : "";
-            var como = document.createElement("p"); como.className = "ec-note"; como.textContent = r.como;
-            var go = document.createElement("button"); go.type = "button"; go.className = "tag-btn ec-dgo"; go.textContent = "Ver lista";
-            go.addEventListener("click", function () {
-              if (r.id === "reforcar" || r.id === "reduzir") { S.mixf = r.id === "reforcar" ? "Reforçar" : "Reduzir"; draw(); }
-              document.getElementById(DSEC[r.id]).scrollIntoView({ block: "start", behavior: "smooth" });
-            });
-            c.append(h, n, sub, como, go);
-            return c;
-          }));
-        }
-      }
-      buildPicker("dec", lojas);
-      var P = function (f) { return picked("dec", f); };
-      var ag = ds("acoes_grade");
-      if (failed("acoes_grade")) failBox($("#ec-t-grade"), D.acoes_grade.msg);
-      else if (ag) {
-        var q = S.qGrade.trim().toUpperCase();
-        renderTable($("#ec-t-grade"), ag.filter(function (r) { return P(r.filial) && txtMatch(q, r.ref, r.nome, r.grupo); }), [
-          { f: "filial", label: "Loja" }, { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" },
-          { f: "grupo", label: "Categoria", hideSm: true }, { f: "status", label: "Grade hoje", tag: true },
-          { f: "pecas_loja", label: "Peças na loja", num: true, fmt: fi }, { f: "falta", label: "Tamanhos que faltam" },
-          { f: "enviar", label: "Enviar do CD" }, { f: "pecas_enviar", label: "Peças", num: true, fmt: fi },
-        ], { sort: { f: "filial", dir: "asc" }, limit: 500, countEl: $("#ec-n-grade") });
-      }
-      var ac = ds("acoes_cd");
-      if (failed("acoes_cd")) failBox($("#ec-t-cd"), D.acoes_cd.msg);
-      else if (ac) {
-        var q2 = S.qCd.trim().toUpperCase(), sel = S.pick.dec;
-        renderTable($("#ec-t-cd"), ac.filter(function (r) { return (sel.size === 0 || String(r.sugestao).split(", ").some(function (s) { return sel.has(s); })) && txtMatch(q2, r.ref, r.nome, r.grupo); }), [
-          { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria", hideSm: true },
-          { f: "pecas_cd", label: "Peças no CD", num: true, bar: true, fmt: fi }, { f: "lojas_atuais", label: "Lojas hoje", num: true, fmt: fi },
-          { f: "tamanhos", label: "Tamanhos", num: true, fmt: fi, hideSm: true }, { f: "pecas_distribuir", label: "Peças a distribuir", num: true, fmt: fi },
-          { f: "sugestao", label: "Lojas sugeridas", wrap: true }, { f: "liqui", label: "Liqui", hideSm: true },
-        ], { sort: { f: "pecas_cd", dir: "desc" }, countEl: $("#ec-n-cd") });
-      }
-      $$("#ec-mixf button").forEach(function (b) { b.classList.toggle("active", b.dataset.v === S.mixf); });
-      var am = ds("acoes_mix");
-      if (failed("acoes_mix")) failBox($("#ec-t-mix"), D.acoes_mix.msg);
-      else if (am) {
-        renderTable($("#ec-t-mix"), am.filter(function (r) { return P(r.filial) && (!S.mixf || r.acao === S.mixf); }), [
-          { f: "filial", label: "Loja" }, { f: "grupo", label: "Categoria" }, { f: "acao", label: "Ação" },
-          { f: "pecas_cat", label: "Peças hoje", num: true, fmt: fi }, { f: "share_loja", label: "Mix loja", num: true, fmt: fp },
-          { f: "share_rede", label: "Mix rede", num: true, fmt: fp }, { f: "dif_pp", label: "Diferença", num: true, fmt: fpp },
-          { f: "pecas_ajuste", label: "Peças para ajustar", num: true, bar: true, fmt: fi },
-        ], { sort: { f: "pecas_ajuste", dir: "desc" }, countEl: $("#ec-n-mix"), onRow: function (r) { goLoja(r.filial); } });
-      }
-      if (failed("lojas")) { failBox($("#ec-t-soltas"), D.lojas.msg); failBox($("#ec-t-fora"), D.lojas.msg); }
-      else if (lojas) {
-        renderTable($("#ec-t-soltas"), lojas.filter(function (r) { return r.tipo !== CD && P(r.filial); }), [
-          { f: "filial", label: "Loja" }, { f: "refs_peca_solta", label: "Refs com 1 peça", num: true, bar: true, fmt: fi },
-          { f: "pct_peca_solta", label: "% das refs", num: true, fmt: fp }, { f: "refs_grade_quebrada", label: "Refs grade quebrada", num: true, fmt: fi },
-          { f: "pct_liqui", label: "% liqui", num: true, fmt: fp, hideSm: true },
-        ], { sort: { f: "refs_peca_solta", dir: "desc" }, onRow: function (r) { goProdLoja(r.filial, "Solta"); } });
-        renderTable($("#ec-t-fora"), lojas.filter(function (r) { return r.tipo === CD; }), [
-          { f: "filial", label: "Local" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
-          { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
-          { f: "pct_liqui", label: "% liqui", num: true, fmt: fp }, { f: "pct_sem_foto", label: "% sem foto", num: true, fmt: fp, hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" } });
-      }
+        c.append(h, n, sub, como, go);
+        return c;
+      }));
+
+      var q = S.qGrade.trim().toUpperCase();
+      renderTable($("#ec-t-grade"), A.grade.filter(function (r) { return txtMatch(q, r.ref, r.nome); }), [
+        { f: "filial", label: "Loja" }, { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" },
+        { f: "grupo", label: "Categoria", hideSm: true }, { f: "status", label: "Grade hoje", tag: true },
+        { f: "pecas_loja", label: "Peças na loja", num: true, fmt: fi }, { f: "falta", label: "Tamanhos que faltam" },
+        { f: "enviar", label: "Enviar do CD" }, { f: "pecas_enviar", label: "Peças", num: true, fmt: fi },
+      ], { sort: { f: "filial", dir: "asc" }, limit: 500, countEl: $("#ec-n-grade") });
+      var q2 = S.qCd.trim().toUpperCase();
+      renderTable($("#ec-t-cd"), A.cd.filter(function (r) { return txtMatch(q2, r.ref, r.nome); }), [
+        { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria", hideSm: true },
+        { f: "pecas_cd", label: "Peças no CD", num: true, bar: true, fmt: fi }, { f: "lojas_atuais", label: "Lojas hoje", num: true, fmt: fi },
+        { f: "tamanhos", label: "Tamanhos", num: true, fmt: fi, hideSm: true }, { f: "pecas_distribuir", label: "Peças a distribuir", num: true, fmt: fi },
+        { f: "sugestao", label: "Lojas sugeridas", wrap: true }, { f: "liqui", label: "Liqui", hideSm: true },
+      ], { sort: { f: "pecas_cd", dir: "desc" }, countEl: $("#ec-n-cd") });
+      renderTable($("#ec-t-mix"), A.mix.filter(function (r) { return tem(F.acao, r.acao); }), [
+        { f: "filial", label: "Loja" }, { f: "grupo", label: "Categoria" }, { f: "acao", label: "Ação" },
+        { f: "pecas_cat", label: "Peças hoje", num: true, fmt: fi }, { f: "share_loja", label: "Mix loja", num: true, fmt: fp },
+        { f: "share_rede", label: "Mix rede", num: true, fmt: fp }, { f: "dif_pp", label: "Diferença", num: true, fmt: fpp },
+        { f: "pecas_ajuste", label: "Peças para ajustar", num: true, bar: true, fmt: fi },
+      ], { sort: { f: "pecas_ajuste", dir: "desc" }, countEl: $("#ec-n-mix"), onRow: function (r) { goLoja(r.filial); } });
+
+      var porL = agrupar(rows.filter(function (r) { return r.tipo !== CD; }), function (r) { return r.filial; });
+      var tSoltas = [];
+      porL.forEach(function (rs, f) {
+        var a = agg(rs), sRefs = new Set(rs.filter(function (r) { return r.status === "Solta" && r.nszCia >= 2; }).map(function (r) { return r.ref; }));
+        tSoltas.push({ filial: f, solta: sRefs.size, pct: div(sRefs.size, a.refs), quebrada: a.refsQ, pct_liq: div(a.liq, a.pecas) });
+      });
+      renderTable($("#ec-t-soltas"), tSoltas, [
+        { f: "filial", label: "Loja" }, { f: "solta", label: "Refs com 1 peça", num: true, bar: true, fmt: fi },
+        { f: "pct", label: "% das refs", num: true, fmt: fp }, { f: "quebrada", label: "Refs grade quebrada", num: true, fmt: fi },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp, hideSm: true },
+      ], { sort: { f: "solta", dir: "desc" }, onRow: function (r) { goProdLoja(r.filial, "Solta"); } });
+      var tFora = [];
+      agrupar(rows.filter(function (r) { return r.tipo === CD; }), function (r) { return r.filial; }).forEach(function (rs, f) {
+        var a = agg(rs); tFora.push({ filial: f, pecas: a.pecas, refs: a.refs, valor: a.valor, pct_liq: div(a.liq, a.pecas), pct_sf: div(a.semFoto, a.pecas) });
+      });
+      renderTable($("#ec-t-fora"), tFora, [
+        { f: "filial", label: "Local" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
+        { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp }, { f: "pct_sf", label: "% sem foto", num: true, fmt: fp, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, vazio: "Nenhum CD / outro local no filtro de tipo de loja." });
     }
 
     // ---- VISÃO GERAL ----
-    function drawGeral(lojas) {
-      var cat = ds("categorias"), lc = ds("loja_categoria"), esc = S.escopo;
-      if (failed("categorias")) failBox($("#ec-ch-cat"), D.categorias.msg);
-      if (cat) {
-        var tot = cat.filter(function (r) { return r.escopo === esc && r.grupo === "TOTAL"; })[0] || {};
-        $$(".ec-k").forEach(function (el) { var k = el.dataset.k, v = tot[k]; setTxt(el, k === "valor" ? fbrlC(v) : k === "prof" ? fd(v) : fcomp(v || 0)); });
-        var rows = cat.filter(function (r) { return r.escopo === esc && r.grupo !== "TOTAL"; }).sort(function (a, b) { return b.pecas - a.pecas; });
-        setTxt($("#ec-topcat"), rows[0] ? rows[0].grupo : "—");
-        setTxt($("#ec-topshare"), rows[0] && tot.pecas ? fp(rows[0].pecas / tot.pecas) : "—");
-        legend($("#ec-leg-cat"), [["Fora de liquidação", C_MAIN], ["Em liquidação", C_ALT]]);
-        hbar($("#ec-ch-cat"), rows.slice(0, 20), {
-          label: function (r) { return r.grupo; }, fmt: fi,
-          segs: [{ name: "Fora de liquidação", color: C_MAIN, v: function (r) { return r.pecas - r.pecas_liqui; } }, { name: "Em liquidação", color: C_ALT, v: function (r) { return r.pecas_liqui; } }],
-          onClick: function (r) { S.cat = r.grupo; openSub("categorias"); },
-        });
-      } else loadingBox($("#ec-ch-cat"));
+    function drawGeral(m, rows) {
+      var a = agg(rows);
+      $$(".ec-k").forEach(function (el) {
+        var k = el.dataset.k;
+        setTxt(el, k === "valor" ? fbrlC(a.valor) : k === "prof" ? fd(a.prof) : fcomp(a[k] || 0));
+      });
+      var porG = []; agrupar(rows, function (r) { return r.grupo; }).forEach(function (rs, g) { var x = agg(rs); x.grupo = g; porG.push(x); });
+      porG.sort(function (x, y) { return y.pecas - x.pecas; });
+      setTxt($("#ec-take-geral"), porG.length
+        ? "Com os filtros atuais: " + fi(a.pecas) + " peças em " + fi(a.refs) + " referências e " + fi(a.lojas) + " lojas/locais. A categoria " + porG[0].grupo + " concentra " + fp(div(porG[0].pecas, a.pecas)) + " das peças."
+        : "Nenhuma peça com os filtros atuais.");
+      legend($("#ec-leg-cat"), [["Fora de liquidação", C_MAIN], ["Em liquidação", C_ALT]]);
+      hbar($("#ec-ch-cat"), porG.slice(0, 20), {
+        label: function (r) { return r.grupo; }, fmt: fi,
+        segs: [{ name: "Fora de liquidação", color: C_MAIN, v: function (r) { return r.pecas - r.liq; } }, { name: "Em liquidação", color: C_ALT, v: function (r) { return r.liq; } }],
+        onClick: function (r) { soEsse("grupo", r.grupo); },
+      });
       $$("#ec-heatm button").forEach(function (b) { b.classList.toggle("active", b.dataset.m === S.heat); });
       var box = $("#ec-heat");
-      if (failed("loja_categoria")) { failBox(box, D.loja_categoria.msg); return; }
-      if (!cat || !lc || !lojas) { loadingBox(box); return; }
-      delete box.dataset.loading;
-      var cols = cat.filter(function (r) { return r.escopo === esc && r.grupo !== "TOTAL"; }).sort(function (a, b) { return b.pecas - a.pecas; }).slice(0, 10).map(function (r) { return r.grupo; });
-      var stores = lojas.filter(function (r) { return inScope(r.tipo, esc); }).sort(function (a, b) { return b.pecas - a.pecas; });
-      var map = new Map(lc.map(function (r) { return [r.filial + "|" + r.grupo, r]; }));
-      var m = S.heat, max = 0;
-      stores.forEach(function (s) { cols.forEach(function (g) { var r = map.get(s.filial + "|" + g); if (r) max = Math.max(max, r[m]); }); });
-      var fmtM = m === "share_loja" ? fp : m === "prof" ? fd : fi;
+      var cols = porG.slice(0, 10).map(function (x) { return x.grupo; });
+      // total da loja sem o filtro de categoria/linha (base do "% do mix")
+      var totLoja = new Map();
+      m.rows.forEach(function (r) { if (passaLoja(r.filial, r.tipo)) totLoja.set(r.filial, (totLoja.get(r.filial) || 0) + r.pecas); });
+      var cel = new Map(), lojaP = new Map();
+      agrupar(rows, function (r) { return r.filial + "|" + r.grupo; }).forEach(function (rs, k) { var x = agg(rs); cel.set(k, x); });
+      rows.forEach(function (r) { lojaP.set(r.filial, (lojaP.get(r.filial) || 0) + r.pecas); });
+      var stores = Array.from(lojaP.keys()).sort(function (x, y) { return lojaP.get(y) - lojaP.get(x); });
+      var val = function (f, g) { var x = cel.get(f + "|" + g); if (!x) return null; return S.heat === "share" ? div(x.pecas, totLoja.get(f)) : S.heat === "prof" ? x.prof : x.pecas; };
+      var max = 0; stores.forEach(function (f) { cols.forEach(function (g) { var v = val(f, g); if (v != null) max = Math.max(max, v); }); });
+      var fmtM = S.heat === "share" ? fp : S.heat === "prof" ? fd : fi;
+      if (!stores.length) { vazioBox(box, "Sem dados para este filtro."); return; }
       var t = document.createElement("table"); t.className = "ec-heat";
       var th = document.createElement("thead"), hr = document.createElement("tr");
       var h0 = document.createElement("th"); h0.className = "st"; h0.textContent = "Loja"; hr.appendChild(h0);
       cols.forEach(function (g) { var h = document.createElement("th"); h.className = "num"; h.textContent = g; hr.appendChild(h); });
       th.appendChild(hr); t.appendChild(th);
       var tb = document.createElement("tbody");
-      stores.forEach(function (s) {
+      stores.forEach(function (f) {
         var tr = document.createElement("tr");
-        var td0 = document.createElement("td"); td0.className = "st"; td0.textContent = s.filial; td0.title = s.tipo;
-        td0.addEventListener("click", function () { goLoja(s.filial); }); tr.appendChild(td0);
+        var td0 = document.createElement("td"); td0.className = "st"; td0.textContent = f; td0.title = m.tipoDe.get(f) || "";
+        td0.addEventListener("click", function () { goLoja(f); }); tr.appendChild(td0);
         cols.forEach(function (g) {
-          var td = document.createElement("td"); td.className = "hv";
-          var r = map.get(s.filial + "|" + g);
-          if (r) { var p = max ? Math.round((60 * r[m]) / max) : 0; td.style.background = "color-mix(in srgb, var(--accent) " + p + "%, transparent)"; td.textContent = fmtM(r[m]); }
+          var td = document.createElement("td"), v = val(f, g); td.className = "hv";
+          if (v != null) { var p = max ? Math.round((60 * v) / max) : 0; td.style.background = "color-mix(in srgb, var(--accent) " + p + "%, transparent)"; td.textContent = fmtM(v); }
           else { td.textContent = "·"; td.style.color = "var(--text-muted)"; }
           tr.appendChild(td);
         });
@@ -3537,137 +3655,146 @@
     }
 
     // ---- LOJAS ----
-    function drawLojas(lojas) {
-      buildPicker("rank", lojas);
-      var lc = ds("loja_categoria");
-      if (failed("lojas")) failBox($("#ec-t-lojas"), D.lojas.msg);
-      if (lojas) {
-        renderTable($("#ec-t-lojas"), lojas.filter(function (r) { return picked("rank", r.filial); }), [
-          { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
-          { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
-          { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
-          { f: "pct_liqui", label: "% liqui", num: true, fmt: fp }, { f: "pct_grade_quebrada", label: "% grade quebrada", num: true, fmt: fp },
-          { f: "pct_peca_solta", label: "% peça solta", num: true, fmt: fp }, { f: "rep_pecas", label: "Receber do CD", num: true, fmt: fi },
-          { f: "cd_refs_sugeridas", label: "Refs do CD sugeridas", num: true, fmt: fi }, { f: "mix_reforcar", label: "Mix: reforçar", num: true, fmt: fi },
-          { f: "mix_reduzir", label: "Mix: reduzir", num: true, fmt: fi }, { f: "ecom", label: "E-com", num: true, fmt: fi, hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" }, countEl: $("#ec-n-lojas"), sel: function (r) { return r.filial === S.loja; },
-          onRow: function (r) { S.loja = r.filial; draw(); $("#ec-card-loja").scrollIntoView({ block: "start", behavior: "smooth" }); } });
-        var sel = $("#ec-sel-loja");
-        var ordered = lojas.slice().sort(function (a, b) { return b.pecas - a.pecas; });
-        if (!S.loja) { var first = ordered.filter(function (r) { return r.tipo !== CD; })[0]; S.loja = (first || ordered[0]).filial; }
-        if (sel.options.length !== ordered.length) sel.replaceChildren.apply(sel, ordered.map(function (r) { return new Option(r.filial, r.filial); }));
-        sel.value = S.loja;
-        var row = lojas.filter(function (r) { return r.filial === S.loja; })[0] || {};
-        $$(".ec-kl-v").forEach(function (el) { setTxt(el, fi(row[el.dataset.k])); });
-      }
-      if (failed("loja_categoria")) { failBox($("#ec-ch-mix"), D.loja_categoria.msg); return; }
-      if (!lc || !S.loja) { loadingBox($("#ec-ch-mix")); return; }
-      var rows = lc.filter(function (r) { return r.filial === S.loja; }).sort(function (a, b) { return b.pecas - a.pecas; });
-      legend($("#ec-leg-mix"), [["Loja", C_MAIN], ["Média da rede", C_MUTED]]);
-      hbar($("#ec-ch-mix"), rows.filter(function (r) { return r.share_loja >= 0.005 || r.share_rede >= 0.005; }), {
-        grouped: true, label: function (r) { return r.grupo; }, fmt: fp,
-        segs: [{ name: "Loja", color: C_MAIN, v: function (r) { return r.share_loja; } }, { name: "Média da rede", color: C_MUTED, v: function (r) { return r.share_rede; } }],
-        onClick: function (r) { S.cat = r.grupo; openSub("categorias"); },
+    function drawLojas(m, rows) {
+      buildPick("plano");
+      var A = acoesFiltradas(m);
+      if (!A) { var e = erroDe("acoes_grade", "acoes_cd", "acoes_mix"); if (e) failBox($("#ec-t-lojas"), e); else loadingBox($("#ec-t-lojas")); return; }
+      delete $("#ec-t-lojas").dataset.loading;
+      var rep = porLoja(A.grade, function (r) { return r.pecas_enviar; });
+      var cdS = new Map(); A.cd.forEach(function (r) { r.sugestao.split(", ").forEach(function (f) { cdS.set(f, (cdS.get(f) || 0) + 1); }); });
+      var mixR = porLoja(A.mix.filter(function (r) { return r.acao === "Reforçar"; }), function (r) { return r.pecas_ajuste; });
+      var mixD = porLoja(A.mix.filter(function (r) { return r.acao === "Reduzir"; }), function (r) { return r.pecas_ajuste; });
+      var lista = [];
+      agrupar(rows, function (r) { return r.filial; }).forEach(function (rs, f) {
+        var a = agg(rs);
+        lista.push({ filial: f, tipo: m.tipoDe.get(f) || "", pecas: a.pecas, refs: a.refs, prof: a.prof, valor: a.valor,
+          pct_liq: div(a.liq, a.pecas), pct_q: div(a.refsQ, a.refs), pct_s: div(a.refsS, a.refs),
+          rep: rep.get(f) || 0, cd: cdS.get(f) || 0, ref: mixR.get(f) || 0, red: mixD.get(f) || 0, ecom: a.ecom });
       });
-      renderTable($("#ec-t-loja-cat"), rows, [
+      renderTable($("#ec-t-lojas"), lista, [
+        { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
+        { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
+        { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp }, { f: "pct_q", label: "% grade quebrada", num: true, fmt: fp },
+        { f: "pct_s", label: "% peça solta", num: true, fmt: fp }, { f: "rep", label: "Receber do CD", num: true, fmt: fi },
+        { f: "cd", label: "Refs do CD sugeridas", num: true, fmt: fi }, { f: "ref", label: "Mix: reforçar", num: true, fmt: fi },
+        { f: "red", label: "Mix: reduzir", num: true, fmt: fi }, { f: "ecom", label: "E-com", num: true, fmt: fi, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, countEl: $("#ec-n-lojas"), sel: function (r) { return F.plano.has(r.filial); },
+        onRow: function (r) { goLoja(r.filial); } });
+
+      // Plano: lojas escolhidas (vazio = todas as lojas do filtro, sem CD)
+      var noPlano = function (f, tipo) { return tipo !== CD && passaLoja(f, tipo) && tem(F.plano, f); };
+      var selRows = rows.filter(function (r) { return noPlano(r.filial, r.tipo); });
+      var sa = agg(selRows);
+      var somaSel = function (mm) { var s = 0; mm.forEach(function (v, f) { if (noPlano(f, m.tipoDe.get(f))) s += v; }); return s; };
+      var vals = { rep: somaSel(rep), cd: A.cd.filter(function (r) { return r.sugestao.split(", ").some(function (f) { return noPlano(f, m.tipoDe.get(f)); }); }).length,
+        ref: somaSel(mixR), red: somaSel(mixD), solta: selRows.filter(function (r) { return r.status === "Solta"; }).length, liq: sa.liq };
+      $$(".ec-pl").forEach(function (el) { setTxt(el, fi(vals[el.dataset.k])); });
+      // mix da seleção (total sem filtro de categoria) vs rede
+      var totSel = 0, porGsel = new Map();
+      m.rows.forEach(function (r) { if (noPlano(r.filial, r.tipo)) { totSel += r.pecas; } });
+      var gRows = [];
+      agrupar(selRows, function (r) { return r.grupo; }).forEach(function (rs, g) { var x = agg(rs); gRows.push({ grupo: g, pecas: x.pecas, refs: x.refs, prof: x.prof, share: div(x.pecas, totSel), rede: m.shareRede(g), q: x.refsQ, liq: x.liq }); });
+      gRows.sort(function (x, y) { return y.pecas - x.pecas; });
+      legend($("#ec-leg-mix"), [["Seleção", C_MAIN], ["Média da rede", C_MUTED]]);
+      hbar($("#ec-ch-mix"), gRows.filter(function (r) { return r.share >= 0.005 || r.rede >= 0.005; }), {
+        grouped: true, label: function (r) { return r.grupo; }, fmt: fp,
+        segs: [{ name: "Seleção", color: C_MAIN, v: function (r) { return r.share; } }, { name: "Média da rede", color: C_MUTED, v: function (r) { return r.rede; } }],
+        onClick: function (r) { soEsse("grupo", r.grupo); openSub("categorias"); },
+      });
+      renderTable($("#ec-t-loja-cat"), gRows, [
         { f: "grupo", label: "Categoria" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
         { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "prof", label: "Peças/ref", num: true, fmt: fd },
-        { f: "share_loja", label: "Mix loja", num: true, fmt: fp }, { f: "share_rede", label: "Mix rede", num: true, fmt: fp },
-        { f: "refs_grade_quebrada", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "pecas_liqui", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
+        { f: "share", label: "Mix seleção", num: true, fmt: fp }, { f: "rede", label: "Mix rede", num: true, fmt: fp },
+        { f: "q", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "liq", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
       ], { sort: { f: "pecas", dir: "desc" } });
     }
 
     // ---- CATEGORIAS ----
-    function drawCategorias() {
-      var cat = ds("categorias"), lc = ds("loja_categoria"), grade = ds("grade_categoria");
-      if (cat) {
-        var opts = cat.filter(function (r) { return r.escopo === "Todas" && r.grupo !== "TOTAL"; }).sort(function (a, b) { return b.pecas - a.pecas; });
-        if (!S.cat && opts.length) S.cat = opts[0].grupo;
-        var sel = $("#ec-sel-cat");
-        if (sel.options.length !== opts.length) sel.replaceChildren.apply(sel, opts.map(function (r) { return new Option(r.grupo, r.grupo); }));
-        sel.value = S.cat;
-        var row = cat.filter(function (r) { return r.escopo === "Lojas" && r.grupo === S.cat; })[0] || {};
-        $$(".ec-kc").forEach(function (el) { var v = row[el.dataset.k]; setTxt(el, v == null ? "—" : el.dataset.k === "prof" ? fd(v) : fi(v)); });
-      }
-      if (failed("grade_categoria")) failBox($("#ec-ch-grade"), D.grade_categoria.msg);
-      else if (grade && S.cat) vbar($("#ec-ch-grade"), grade.filter(function (r) { return r.grupo === S.cat; }).sort(function (a, b) { return +a.tamanho.slice(1) - +b.tamanho.slice(1); }));
-      else loadingBox($("#ec-ch-grade"));
-      if (failed("loja_categoria")) failBox($("#ec-t-cat-lojas"), D.loja_categoria.msg);
-      else if (lc && S.cat) {
-        renderTable($("#ec-t-cat-lojas"), lc.filter(function (r) { return r.grupo === S.cat; }), [
-          { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
-          { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
-          { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "share_loja", label: "Mix na loja", num: true, fmt: fp },
-          { f: "refs_grade_quebrada", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "pecas_liqui", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" }, onRow: function (r) { goLoja(r.filial); } });
-      }
+    function drawCategorias(m, rows) {
+      var a = agg(rows), cats = [];
+      agrupar(rows, function (r) { return r.grupo; }).forEach(function (rs, g) {
+        var x = agg(rs), lojasN = new Set(rs.filter(function (r) { return r.tipo !== CD; }).map(function (r) { return r.filial; })).size;
+        cats.push({ grupo: g, pecas: x.pecas, share: div(x.pecas, a.pecas), refs: x.refs, lojas: lojasN, prof: x.prof, pct_liq: div(x.liq, x.pecas), q: x.refsQ, valor: x.valor });
+      });
+      renderTable($("#ec-t-cats"), cats, [
+        { f: "grupo", label: "Categoria" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
+        { f: "share", label: "% do filtro", num: true, fmt: fp }, { f: "refs", label: "Refs", num: true, fmt: fi },
+        { f: "lojas", label: "Lojas com estoque", num: true, fmt: fi }, { f: "prof", label: "Peças/ref", num: true, fmt: fd },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp }, { f: "q", label: "Refs grade quebrada", num: true, fmt: fi },
+        { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, onRow: function (r) { soEsse("grupo", r.grupo); } });
+      var tam = []; rows.forEach(function (r) { r.tam.forEach(function (x, j) { tam[j] = (tam[j] || 0) + x; }); });
+      vbar($("#ec-ch-grade"), tam.map(function (x, j) { return { tamanho: "T" + (j + 1), pecas: x || 0 }; }).filter(function (r) { return r.pecas > 0; }));
+      var totLoja = new Map();
+      m.rows.forEach(function (r) { if (passaLoja(r.filial, r.tipo)) totLoja.set(r.filial, (totLoja.get(r.filial) || 0) + r.pecas); });
+      var porL = [];
+      agrupar(rows, function (r) { return r.filial; }).forEach(function (rs, f) {
+        var x = agg(rs); porL.push({ filial: f, tipo: m.tipoDe.get(f) || "", pecas: x.pecas, refs: x.refs, prof: x.prof, share: div(x.pecas, totLoja.get(f)), q: x.refsQ, liq: x.liq });
+      });
+      renderTable($("#ec-t-cat-lojas"), porL, [
+        { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
+        { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
+        { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "share", label: "Mix na loja", num: true, fmt: fp },
+        { f: "q", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "liq", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, onRow: function (r) { if (r.tipo !== CD) goLoja(r.filial); } });
     }
 
     // ---- PRODUTOS ----
-    var skuIdx = null, skuSrc = null, prodIdx = null, prodSrc = null;
-    function drawProdutos(lojas) {
-      buildPicker("prod", lojas);
-      var prod = ds("produtos");
-      if (failed("produtos")) { failBox($("#ec-t-prod"), D.produtos.msg); return; }
-      if (!prod) { setTxt($("#ec-n-prod"), "Carregando produtos…"); return; }
-      if (prodSrc !== prod) { prodIdx = new Map(prod.map(function (r) { return [r.Ref_Cor, r]; })); prodSrc = prod; }
-      var fc = $("#ec-f-cat");
-      if (fc.options.length === 1) {
-        Array.from(new Set(prod.map(function (r) { return r.grupo; }))).sort(function (a, b) { return a.localeCompare(b, "pt-BR"); }).forEach(function (c) { fc.appendChild(new Option(c, c)); });
-        fc.value = S.fCat;
-      }
-      var q = S.qProd.trim().toUpperCase(), byStore = S.pick.prod.size > 0;
-      $("#ec-wrap-prod").hidden = byStore; $("#ec-wrap-prodloja").hidden = !byStore; $("#ec-f-st").disabled = !byStore;
-      var sku = ds("sku_loja");
-      if (failed("sku_loja")) { failBox($("#ec-t-sku"), D.sku_loja.msg); if (byStore) failBox($("#ec-t-prodloja"), D.sku_loja.msg); return; }
-      if (sku && skuSrc !== sku) { skuIdx = new Map(); sku.forEach(function (r) { var a = skuIdx.get(r.ref); if (!a) { a = []; skuIdx.set(r.ref, a); } a.push(r); }); skuSrc = sku; }
+    function drawProdutos(m, rows) {
+      ["st", "foto", "liq"].forEach(buildPick);
+      var q = S.qProd.trim().toUpperCase(), porLojaView = F.loja.size > 0;
+      $("#ec-wrap-prod").hidden = porLojaView; $("#ec-wrap-prodloja").hidden = !porLojaView;
+      var ok = function (r) {
+        return tem(F.foto, r.foto ? "Com foto" : "Sem foto") && tem(F.liq, r.liqui ? "Liqui" : "Não liqui") && txtMatch(q, r.ref, r.nome);
+      };
       var onRow = function (ref) { S.prod = ref; draw(); $("#ec-card-sku").scrollIntoView({ block: "nearest", behavior: "smooth" }); };
-      if (byStore) {
-        if (!sku) { setTxt($("#ec-n-prod"), "Carregando estoque por loja…"); return; }
-        var rows = [];
-        sku.forEach(function (r) {
-          if (!S.pick.prod.has(r.filial) || (S.fSt && r.status !== S.fSt)) return;
-          var p = prodIdx.get(r.ref) || {};
-          if ((S.fCat && p.grupo !== S.fCat) || (S.fFoto && p.foto !== S.fFoto) || (S.fLiq && p.liqui !== S.fLiq) || !txtMatch(q, r.ref, p.nome)) return;
-          rows.push({ ref: r.ref, filial: r.filial, pecas: r.pecas, grade: r.grade, status: r.status, falta: r.falta, cd: r.cd, nome: p.nome, grupo: p.grupo, foto: p.foto, liqui: p.liqui });
-        });
-        renderTable($("#ec-t-prodloja"), rows, [
+      if (porLojaView) {
+        var lr = rows.filter(function (r) { return ok(r) && tem(F.st, r.status); });
+        renderTable($("#ec-t-prodloja"), lr, [
           { f: "filial", label: "Loja" }, { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria" },
           { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "grade", label: "Grade (T1-T2-…)" },
           { f: "status", label: "Situação", tag: true }, { f: "falta", label: "Faltam" }, { f: "cd", label: "No CD (faltantes)" },
-          { f: "foto", label: "Foto", hideSm: true }, { f: "liqui", label: "Liqui", hideSm: true },
+          { f: "liqui", label: "Liqui", hideSm: true, fmt: function (v) { return v ? "Liqui" : "Não liqui"; } },
         ], { sort: { f: "pecas", dir: "desc" }, limit: 500, countEl: $("#ec-n-prod"), sel: function (r) { return r.ref === S.prod; }, onRow: function (r) { onRow(r.ref); } });
+        if (!S.prod && lr.length) S.prod = lr[0].ref;
       } else {
-        var rows2 = prod.filter(function (r) { return (!S.fCat || r.grupo === S.fCat) && (!S.fFoto || r.foto === S.fFoto) && (!S.fLiq || r.liqui === S.fLiq) && txtMatch(q, r.Ref_Cor, r.nome); });
-        if (!S.prod && rows2.length) S.prod = rows2[0].Ref_Cor;
-        renderTable($("#ec-t-prod"), rows2, [
-          { f: "Ref_Cor", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria" },
+        var lista = [];
+        agrupar(rows.filter(function (r) { return ok(r) && tem(F.st, r.status); }), function (r) { return r.ref; }).forEach(function (rs, ref) {
+          var p = m.pmap.get(ref) || {}, x = agg(rs);
+          var lojasN = new Set(rs.filter(function (r) { return r.tipo !== CD; }).map(function (r) { return r.filial; })).size;
+          var emLojas = rs.reduce(function (s, r) { return s + (r.tipo !== CD ? r.pecas : 0); }, 0);
+          lista.push({ ref: ref, nome: p.nome, grupo: p.grupo, linha: p.linha, preco: Number(p.preco) || 0, pecas: x.pecas, lojasP: emLojas,
+            cdDist: p.pecas_cd_dist || 0, lojas: lojasN, foto: p.foto, liqui: p.liqui });
+        });
+        renderTable($("#ec-t-prod"), lista, [
+          { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria" },
           { f: "linha", label: "Linha", hideSm: true }, { f: "preco", label: "Preço", num: true, fmt: fmtBRLCents.format, hideSm: true },
-          { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "pecas_lojas", label: "Em lojas", num: true, fmt: fi },
-          { f: "pecas_cd_dist", label: "No CD (distribuidora)", num: true, fmt: fi }, { f: "pecas_cd", label: "CD + outros", num: true, fmt: fi, hideSm: true },
-          { f: "lojas", label: "Nº lojas", num: true, fmt: fi }, { f: "foto", label: "Foto", hideSm: true }, { f: "liqui", label: "Liqui", hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" }, limit: 300, countEl: $("#ec-n-prod"), sel: function (r) { return r.Ref_Cor === S.prod; }, onRow: function (r) { onRow(r.Ref_Cor); } });
+          { f: "pecas", label: "Peças (filtro)", num: true, bar: true, fmt: fi }, { f: "lojasP", label: "Em lojas", num: true, fmt: fi },
+          { f: "cdDist", label: "No CD (distribuidora)", num: true, fmt: fi }, { f: "lojas", label: "Nº lojas", num: true, fmt: fi },
+          { f: "foto", label: "Foto", hideSm: true }, { f: "liqui", label: "Liqui", hideSm: true },
+        ], { sort: { f: "pecas", dir: "desc" }, limit: 300, countEl: $("#ec-n-prod"), sel: function (r) { return r.ref === S.prod; }, onRow: function (r) { onRow(r.ref); } });
+        if (!S.prod && lista.length) S.prod = lista.slice().sort(function (x, y) { return y.pecas - x.pecas; })[0].ref;
       }
-      if (!sku || !S.prod) return;
-      var p0 = prodIdx.get(S.prod);
+      if (!S.prod) { $("#ec-t-sku").replaceChildren(); return; }
+      var p0 = m.pmap.get(S.prod);
       setTxt($("#ec-sku-title"), "Distribuição por loja: " + S.prod + (p0 ? " · " + p0.nome : ""));
-      renderTable($("#ec-t-sku"), skuIdx.get(S.prod) || [], [
-        { f: "filial", label: "Loja" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
+      renderTable($("#ec-t-sku"), m.rows.filter(function (r) { return r.ref === S.prod; }), [
+        { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
         { f: "grade", label: "Grade (T1-T2-…)" }, { f: "status", label: "Situação", tag: true },
         { f: "falta", label: "Faltam" }, { f: "cd", label: "No CD (faltantes)" },
-      ], { sort: { f: "pecas", dir: "desc" }, sel: function (r) { return S.pick.prod.has(r.filial); } });
+      ], { sort: { f: "pecas", dir: "desc" }, sel: function (r) { return filtroAtivo() && passaLoja(r.filial, r.tipo); } });
     }
 
     // ---- CARREGAR PLANILHA ----
     function drawPlanilha() {
-      if (cargas) {
-        renderTable($("#ec-t-cargas"), cargas.map(function (c) { return Object.assign({}, c, { pecas: Number(c.pecas), refs: Number(c.refs), locais: Number(c.locais) }); }), [
-          { f: "data_ref", label: "Data do estoque", fmt: function (v) { return v ? v.split("-").reverse().join("/") : ""; } },
-          { f: "arquivo", label: "Arquivo" }, { f: "origem", label: "Origem" }, { f: "enviado_por", label: "Enviado por", hideSm: true },
-          { f: "pecas", label: "Peças", num: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "locais", label: "Locais", num: true, fmt: fi },
-          { f: "created_at", label: "Recebida em", fmt: function (v) { return v ? new Date(v).toLocaleString("pt-BR") : ""; } },
-        ], { sort: { f: "data_ref", dir: "desc" } });
-      }
+      if (!cargas) return;
+      renderTable($("#ec-t-cargas"), cargas.map(function (c) { return Object.assign({}, c, { pecas: Number(c.pecas), refs: Number(c.refs), locais: Number(c.locais) }); }), [
+        { f: "data_ref", label: "Data do estoque", fmt: function (v) { return v ? v.split("-").reverse().join("/") : ""; } },
+        { f: "arquivo", label: "Arquivo" }, { f: "origem", label: "Origem" }, { f: "enviado_por", label: "Enviado por", hideSm: true },
+        { f: "pecas", label: "Peças", num: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "locais", label: "Locais", num: true, fmt: fi },
+        { f: "created_at", label: "Recebida em", fmt: function (v) { return v ? new Date(v).toLocaleString("pt-BR") : ""; } },
+      ], { sort: { f: "data_ref", dir: "desc" }, vazio: "Nenhuma planilha recebida ainda." });
     }
     function enviarPlanilha(e) {
       e.preventDefault();
@@ -3679,8 +3806,7 @@
       fetch(url, { method: "POST", headers: { Authorization: "Bearer " + AUTH.token, "Content-Type": "application/octet-stream" }, body: file })
         .then(function (res) { return res.json().then(function (b) { if (!res.ok) throw new Error(b.error || "HTTP " + res.status); return b; }); })
         .then(function (b) {
-          if (b.alreadyRunning) msg.textContent = "Já tem uma planilha sendo processada. Aguardando terminar…";
-          else msg.textContent = "Planilha recebida. Processando (leva menos de 1 minuto)…";
+          msg.textContent = b.alreadyRunning ? "Já tem uma planilha sendo processada. Aguardando terminar…" : "Planilha recebida. Processando (leva menos de 1 minuto)…";
           var tentativas = 0;
           var timer = setInterval(function () {
             tentativas += 1;
@@ -3707,22 +3833,34 @@
       var isAdmin = AUTH.user && AUTH.user.role === "admin";
       $("#ec-sub-planilha-btn").hidden = !isAdmin;
       if (S.sub === "planilha" && !isAdmin) S.sub = "decisoes";
-      var vazio = cargas && cargas.length === 0;
-      var c0 = cargas && cargas[0];
+      var vazio = cargas && cargas.length === 0, c0 = cargas && cargas[0];
       setTxt($("#ec-base"), cargas == null ? "Carregando a última planilha…" : c0
         ? "Planilha de " + c0.data_ref.split("-").reverse().join("/") + " · " + fi(Number(c0.pecas)) + " peças · " + fi(Number(c0.locais)) + " locais"
         : "Nenhuma planilha carregada");
-      $("#ec-vazio").hidden = !vazio || S.sub === "planilha";
-      SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = s !== S.sub || (vazio && s !== "planilha"); });
-      if (cargas == null) return;
-      if (S.sub === "planilha") { drawPlanilha(); return; }
-      if (vazio) return;
-      var lojas = ds("lojas");
-      if (S.sub === "decisoes") drawDecisoes(lojas);
-      else if (S.sub === "geral") drawGeral(lojas);
-      else if (S.sub === "lojas") drawLojas(lojas);
-      else if (S.sub === "categorias") drawCategorias();
-      else if (S.sub === "produtos") drawProdutos(lojas);
+      var naPlanilha = S.sub === "planilha";
+      $("#ec-vazio").hidden = !vazio || naPlanilha;
+      $("#ec-filtros").hidden = naPlanilha || vazio || cargas == null;
+      if (naPlanilha) { SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = s !== "planilha"; }); $("#ec-carregando").hidden = true; drawPlanilha(); return; }
+      if (cargas == null || vazio) { SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = true; }); $("#ec-carregando").hidden = vazio; return; }
+      var m = modelo();
+      var err = erroDe("lojas", "produtos", "sku_loja");
+      if (!m) {
+        SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = true; });
+        var load = $("#ec-carregando"); load.hidden = false;
+        if (err) failBox(load, err);
+        return;
+      }
+      $("#ec-carregando").hidden = true;
+      SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = s !== S.sub; });
+      ["tipo", "loja", "grupo", "linha"].forEach(buildPick);
+      $("#ec-limpar").hidden = !filtroAtivo();
+      var rows = filtrados();
+      setTxt($("#ec-filtro-resumo"), filtroAtivo() ? fi(rows.reduce(function (s, r) { return s + r.pecas; }, 0)) + " peças no filtro" : "");
+      if (S.sub === "decisoes") drawDecisoes(m, rows);
+      else if (S.sub === "geral") drawGeral(m, rows);
+      else if (S.sub === "lojas") drawLojas(m, rows);
+      else if (S.sub === "categorias") drawCategorias(m, rows);
+      else if (S.sub === "produtos") drawProdutos(m, rows);
     }
 
     var aberto = false;
@@ -3734,7 +3872,7 @@
       carregarCargas();
     }
     function recarregar() {
-      D = {}; cargas = null; decDone = null; pickerSig = {};
+      D = {}; M = null; cargas = null; pickSig = {};
       $$("[data-loading]").forEach(function (el) { delete el.dataset.loading; });
       carregarCargas();
     }
