@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Painel Zinzane</title>
 <meta name="description" content="Painel de vendas, logística e marketing da Zinzane com dados ao vivo da Vtex e do Google Analytics.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -331,6 +333,12 @@
   .stat-value { font-family: var(--font-body); font-weight: 800; font-size: 32px; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .stat-sub { margin-top: 6px; font-size: 12.5px; color: var(--text-secondary); }
   .stat-sub b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .proj-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .proj-col + .proj-col { padding-left: 28px; border-left: 1px solid var(--border); }
+  .proj-label { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+  .proj-col .caption { margin-top: 12px; }
+  .proj-col .progress-track { margin-top: 12px; }
+  .line-chart-wrap .point-label { font-size: 11px; font-weight: 600; fill: var(--text-secondary); font-family: var(--font-body); font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
   .delta { margin-top: 8px; font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 100px; }
   .delta-up { color: var(--good); background: rgba(12,163,12,0.10); }
   .delta-down { color: var(--critical); background: rgba(208,59,59,0.10); }
@@ -369,10 +377,56 @@
   .badge.classe-c { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
   .badge.stock-low { background: rgba(208,59,59,0.12); color: var(--critical); }
   .badge.stock-ok { background: rgba(12,163,12,0.10); color: var(--good); }
+  .badge.stock-unlimited { background: var(--accent-soft); color: var(--accent); }
   .badge.role-admin { background: var(--accent); color: var(--accent-ink); }
   .badge.role-viewer { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
   .badge.dentro-estado { background: rgba(12,163,12,0.10); color: var(--good); }
   .badge.fora-estado { background: rgba(208,59,59,0.12); color: var(--critical); }
+
+  /* ---------- Produto (foto + nome), usado no card "Top produtos mais vendidos" ---------- */
+  .produto-cell { display: flex; align-items: center; gap: 16px; }
+  .produto-thumb {
+    width: 192px; height: 192px; border-radius: 14px; object-fit: cover; flex-shrink: 0;
+    background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .produto-cell .produto-nome { min-width: 0; }
+  .produto-cell .produto-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .tamanhos-toggle {
+    align-self: flex-start; background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--accent, #0a66c2); font-size: 12px; font-weight: 600;
+  }
+  .tamanhos-toggle:hover { text-decoration: underline; }
+  tr.tamanhos-row td { background: var(--surface-2); padding: 10px 14px; }
+  table.tamanhos-mini { width: 100%; border-collapse: collapse; }
+  table.tamanhos-mini th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 4px 10px; }
+  table.tamanhos-mini td { padding: 4px 10px; font-size: 13px; border-top: 1px solid var(--border); }
+  table.tamanhos-mini th.num, table.tamanhos-mini td.num { text-align: right; }
+
+  /* ---------- Cards recolhíveis (todas as abas) ---------- */
+  .card h3 { cursor: pointer; }
+  .h3-actions { display: flex; align-items: center; gap: 6px; }
+  .collapse-toggle {
+    appearance: none; border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+    transition: transform 200ms ease, background 150ms ease, color 150ms ease;
+  }
+  .collapse-toggle:hover { background: var(--surface-2); color: var(--text-primary); }
+  .card.collapsed .collapse-toggle { transform: rotate(-90deg); }
+  .card.collapsed > *:not(h3) { display: none !important; }
+  .card.collapsed { padding-bottom: 18px; }
+
+  /* ---------- Arrastar pra reorganizar os módulos (cards) dentro de cada aba ---------- */
+  .drag-handle {
+    appearance: none; border: none; background: transparent; color: var(--text-muted);
+    display: flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+    border-radius: 6px; flex-shrink: 0; cursor: grab; font-size: 16px; line-height: 1;
+    transition: background 150ms ease, color 150ms ease;
+  }
+  .drag-handle:hover { background: var(--surface-2); color: var(--text-primary); }
+  .drag-handle:active { cursor: grabbing; }
+  .card.dragging { opacity: 0.4; }
+  .card.drag-over-before { box-shadow: inset 0 3px 0 0 var(--accent); }
+  .card.drag-over-after { box-shadow: inset 0 -3px 0 0 var(--accent); }
 
   .kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
   @media (max-width: 900px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
@@ -383,6 +437,29 @@
   .legend .swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
   .legend .name { color: var(--text-primary); }
   .legend .num { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  .line-chart-wrap { position: relative; }
+  .line-chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .line-chart-wrap .axis-label { font-size: 10.5px; fill: var(--text-muted); font-family: var(--font-body); }
+  .line-chart-wrap .end-label { font-size: 12px; font-weight: 700; fill: var(--text-primary); font-family: var(--font-body); }
+  .line-chart-wrap .grid-line { stroke: var(--grid-line); stroke-width: 1; }
+  .line-chart-wrap .hover-layer:focus { outline: none; }
+  .line-chart-wrap .crosshair-line { stroke: var(--text-muted); stroke-width: 1; opacity: 0; pointer-events: none; }
+  .line-chart-wrap .hover-layer { fill: transparent; cursor: crosshair; }
+  .line-chart .legend { flex-direction: row; flex-wrap: wrap; gap: 18px; margin-top: 14px; font-size: 12.5px; }
+  .line-chart .legend .row { gap: 7px; }
+  .line-chart .legend .linekey { width: 16px; height: 2px; border-radius: 1px; flex: none; }
+  .chart-tooltip {
+    position: absolute; pointer-events: none; z-index: 5; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; box-shadow: var(--shadow);
+    font-size: 12px; opacity: 0; transition: opacity 100ms ease; white-space: nowrap;
+  }
+  .chart-tooltip .date { color: var(--text-muted); font-size: 11px; margin-bottom: 6px; }
+  .chart-tooltip .row { display: flex; align-items: center; gap: 7px; }
+  .chart-tooltip .row + .row { margin-top: 4px; }
+  .chart-tooltip .linekey { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  .chart-tooltip .name { color: var(--text-secondary); }
+  .chart-tooltip .val { margin-left: auto; padding-left: 10px; color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
 
   .empty-state { font-size: 12.5px; color: var(--text-muted); padding: 8px 0; }
   .skeleton { height: 14px; border-radius: 7px; background: var(--surface-2); position: relative; overflow: hidden; }
@@ -416,6 +493,21 @@
   .chip.active { background: var(--btn-fill); color: var(--btn-fill-ink); border-color: transparent; }
   .chip:active { transform: scale(0.92); }
 
+  /* ---------- Status filter (aba Vendas) ---------- */
+  .status-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -6px 0 14px; }
+  .status-filter .caption { white-space: nowrap; }
+  .status-chip-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .status-chip {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-secondary);
+    font-size: 11.5px; font-weight: 600; padding: 5px 12px; border-radius: 100px; cursor: pointer; transition: all 150ms ease; white-space: nowrap;
+  }
+  .status-chip.active { background: var(--btn-fill); color: var(--btn-fill-ink); border-color: transparent; }
+  .status-chip:active { transform: scale(0.94); }
+  .status-filter .link-btn {
+    appearance: none; border: none; background: transparent; color: var(--text-muted); font-size: 11.5px; font-weight: 600;
+    cursor: pointer; text-decoration: underline; padding: 0;
+  }
+
   /* ---------- Insights ---------- */
   .insight-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); }
   @media (max-width: 900px) { .insight-grid { grid-template-columns: 1fr; } }
@@ -431,6 +523,91 @@
   footer.foot {
     max-width: 1180px; margin: 30px auto 0; padding-top: 16px; border-top: 1px solid var(--border);
     font-size: 11.5px; color: var(--text-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+
+  /* ---------- Celular (<= 700px) ----------
+     Cabeçalho compacto (logo + ações numa linha, abas rolando na horizontal numa linha só em
+     vez de quebrar em 3), filtro de período rolável, cards/tabelas/fotos em escala menor.
+     `header.topbar { display: contents }` faz o .topbar-inner virar filho direto do #app, pra
+     só ele (logo + abas) ficar fixo no topo ao rolar — o filtro de período rola junto com a
+     página, em vez de comer ~1/3 da tela o tempo todo como acontecia com o cabeçalho inteiro
+     fixo. */
+  @media (max-width: 700px) {
+    body { padding-inline: 12px; padding-block: 0 28px; }
+    .login-screen { margin-inline: -12px; }
+    header.topbar { display: contents; }
+    .topbar-inner {
+      position: sticky; top: env(safe-area-inset-top, 0px); z-index: 40;
+      max-width: none; margin: 0 -12px; padding: 10px 12px 8px; gap: 8px;
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter: blur(22px) saturate(180%); -webkit-backdrop-filter: blur(22px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand .sub { display: none; }
+    .brand .logo { height: 20px; }
+    .topbar-actions { gap: 6px; }
+    .user-menu { padding-left: 0; border-left: none; }
+    .user-menu .email { display: none; }
+    .btn-secondary { padding: 7px 13px; }
+    .refresh-btn { width: 34px; height: 34px; padding: 0; justify-content: center; gap: 0; font-size: 0; }
+    .refresh-btn svg { width: 15px; height: 15px; }
+    nav.tabs {
+      order: 3; width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+      -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+    }
+    nav.tabs::-webkit-scrollbar { display: none; }
+    nav.tabs button { flex: 0 0 auto; white-space: nowrap; padding: 8px 13px; }
+
+    .filterbar { padding-block: 10px 6px; gap: 10px; }
+    .period-presets { width: 100%; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .period-presets::-webkit-scrollbar { display: none; }
+    .period-presets button { flex: 0 0 auto; white-space: nowrap; padding: 7px 13px; }
+    .period-custom { width: 100%; flex-wrap: wrap; }
+    .period-custom input[type="date"] { flex: 1 1 130px; min-width: 0; padding: 8px 12px; font-size: 14px; }
+    .period-label { margin-left: 0; width: 100%; }
+
+    main { padding-top: 12px; }
+    .section-head { margin: 22px 0 10px; }
+    .section-head h2 { font-size: 19px; }
+    .grid, .kpi-row { gap: 10px; }
+    .card { padding: 14px 14px; }
+    .card h3 { margin-bottom: 10px; }
+    .stat-value { font-size: 26px; }
+    .proj-grid { grid-template-columns: 1fr; gap: 18px; }
+    .proj-col + .proj-col { padding-left: 0; border-left: none; padding-top: 18px; border-top: 1px solid var(--border); }
+
+    /* tabelas: rolam na horizontal dentro do card em vez de estourar a página */
+    .table-wrap { -webkit-overflow-scrolling: touch; }
+    tbody td { padding: 8px 8px; }
+    thead th { padding: 0 8px 8px; }
+
+    /* Top produtos: foto grande (192px) ocuparia a tela toda — encolhe e tira a coluna
+       Categoria pra caber produto + unidades + valor + estoque sem rolar de lado */
+    .produto-thumb { width: 50px; height: 50px; border-radius: 8px; }
+    .produto-cell { gap: 8px; }
+    .tamanhos-toggle { white-space: nowrap; }
+    #card-top-produtos .table-wrap > table > thead th:nth-child(2),
+    #card-top-produtos .table-wrap > table > tbody > tr:not(.tamanhos-row) > td:nth-child(2) { display: none; }
+    #card-top-produtos thead th { white-space: normal; line-height: 1.2; vertical-align: bottom; padding-inline: 3px; font-size: 9px; letter-spacing: 0; }
+    #card-top-produtos tbody td { padding-inline: 3px; font-size: 13px; }
+    #card-top-produtos .produto-thumb { width: 40px; height: 40px; }
+    #card-top-produtos .tamanhos-toggle { font-size: 12px; }
+    #card-top-produtos .produto-cell { gap: 7px; }
+    #card-top-produtos .produto-nome { overflow-wrap: anywhere; }
+    #card-top-produtos .badge { padding: 2px 7px; font-size: 11px; }
+    #card-top-produtos tbody tr:not(.tamanhos-row) td.wrap { min-width: 0; }
+    tr.tamanhos-row td { padding: 8px 4px; white-space: normal; }
+    table.tamanhos-mini th { padding: 4px 4px; font-size: 9.5px; letter-spacing: 0; white-space: normal; }
+    table.tamanhos-mini td { padding: 4px 4px; font-size: 12px; white-space: normal; }
+    table.tamanhos-mini td.num { white-space: nowrap; }
+    table.tamanhos-mini td:first-child { word-break: break-word; }
+    /* colunas de nome (texto longo) nas demais tabelas: largura mínima razoável e a tabela
+       rola na horizontal, em vez de esmagar o nome em 6 linhas de 1 palavra */
+    tbody td.wrap { min-width: 170px; }
+
+    .abc-controls { gap: 8px; }
+    .status-filter { gap: 6px; }
+    footer.foot { margin-top: 22px; }
   }
 
   /* ---------- Estoque Cia ---------- */
@@ -516,6 +693,12 @@
   .ec-plist input { accent-color: var(--accent); }
   .ec-upload { display: grid; gap: 12px; max-width: 560px; }
   @media (max-width: 700px) { input.ec-input[type="search"] { width: 100%; } .ec-hide-sm { display: none; } }
+  .ec-filtros { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 0 0 18px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+  .ec-filtros-lbl { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-right: 2px; }
+  .ec-pick.ativo > summary { border-color: var(--accent); background: var(--accent-soft); }
+  .ec-pick.ativo > summary .lbl { color: var(--accent); }
+  .ec-pick .lbl { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+  .ec-plist .tudo { font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 3px; }
 </style>
 
 <div class="login-screen" id="loginScreen">
@@ -542,6 +725,7 @@
       <nav class="tabs" id="tabs" role="tablist">
         <button role="tab" aria-selected="true" data-tab="overview">Overview</button>
         <button role="tab" aria-selected="false" data-tab="vendas">Vendas</button>
+        <button role="tab" aria-selected="false" data-tab="detalhamento-vendas">Detalhamento vendas</button>
         <button role="tab" aria-selected="false" data-tab="estoque">Estoque Cia</button>
         <button role="tab" aria-selected="false" data-tab="logistica">Logística</button>
         <button role="tab" aria-selected="false" data-tab="marketing">Marketing</button>
@@ -594,7 +778,7 @@
       </div>
       <div class="kpi-row" id="kpiRow"></div>
 
-      <div class="grid" style="margin-top:14px">
+      <div class="grid" id="grid-overview" style="margin-top:14px">
         <div class="card col-5" id="card-receita-dispositivo"><h3>Receita por dispositivo</h3><div class="body"></div></div>
         <div class="card col-7" id="card-tracking-pedido"><h3>Status dos pedidos</h3><div class="body"></div></div>
         <div class="card col-12" id="card-ltv-categoria"><h3>LTV médio por categoria principal do cliente <button class="tag-btn" data-card="ltv-categoria" hidden>Ver tudo</button></h3><div class="body"></div></div>
@@ -606,12 +790,42 @@
         <h2>Vendas</h2>
         <span class="caption">Pedidos sincronizados da Vtex · período selecionado</span>
       </div>
-      <div class="grid">
+      <div class="status-filter" id="vendasStatusFilter" hidden>
+        <span class="caption">Status do pedido:</span>
+        <div class="status-chip-group" id="vendasStatusChips"></div>
+        <button type="button" class="link-btn" id="vendasStatusReset">Restaurar padrão</button>
+      </div>
+      <div class="grid" id="grid-vendas">
+        <div class="card col-12" id="card-projecao-dia"><h3>Projeção de fechamento · dia e mês</h3><div class="body"></div></div>
+
+        <div class="card col-12" id="card-venda-diaria"><h3>Vendas diárias</h3><div class="body"></div></div>
+
+        <div class="card col-12" id="card-top-produtos"><h3>Top produtos mais vendidos <button class="tag-btn" data-card="top-produtos" hidden>Ver tudo</button></h3><div class="body"></div></div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="panel-detalhamento-vendas" role="tabpanel" hidden>
+      <div class="section-head">
+        <h2>Detalhamento vendas</h2>
+        <span class="caption">Pedidos sincronizados da Vtex · período selecionado</span>
+      </div>
+      <div class="status-filter" id="detStatusFilter" hidden>
+        <span class="caption">Status do pedido:</span>
+        <div class="status-chip-group" id="detStatusChips"></div>
+        <button type="button" class="link-btn" id="detStatusReset">Restaurar padrão</button>
+      </div>
+      <div class="grid" id="grid-detalhamento-vendas">
         <div class="card col-4" id="card-receita-meta"><h3>Receita vs. meta</h3><div class="body"></div></div>
         <div class="card col-8" id="card-venda-categoria"><h3>Venda por categoria <button class="tag-btn" data-card="venda-categoria" hidden>Ver tudo</button></h3><div class="body"></div></div>
 
         <div class="card col-5" id="card-tipo-venda"><h3>Liquidação × Coleção</h3><div class="body"></div></div>
         <div class="card col-7" id="card-meios-pagamento"><h3>Meios de pagamento <button class="tag-btn" data-card="meios-pagamento" hidden>Ver tudo</button></h3><div class="body"></div></div>
+
+        <div class="card col-5" id="card-novos-recorrentes"><h3>Novos × Recorrentes</h3><div class="body"></div></div>
+        <div class="card col-7" id="card-cupons"><h3>Cupons e descontos</h3><div class="body"></div></div>
+
+        <div class="card col-6" id="card-sazonalidade-dia"><h3>Vendas por dia da semana</h3><div class="body"></div></div>
+        <div class="card col-6" id="card-sazonalidade-hora"><h3>Vendas por hora do dia</h3><div class="body"></div></div>
 
         <div class="card col-12" id="card-curva-abc">
           <h3>Curva ABC de produtos <button class="tag-btn" data-card="curva-abc" hidden>Ver tudo</button></h3>
@@ -642,7 +856,7 @@
         <h2>Logística</h2>
         <span class="caption">Entregas confirmadas pela transportadora · período selecionado</span>
       </div>
-      <div class="grid">
+      <div class="grid" id="grid-logistica">
         <div class="card col-4" id="card-sla-entregues"><h3>Pedidos entregues</h3><div class="body"></div></div>
         <div class="card col-4" id="card-sla-prazo"><h3>Entregas no prazo</h3><div class="body"></div></div>
         <div class="card col-4" id="card-sla-dias"><h3>Prazo médio de entrega</h3><div class="body"></div></div>
@@ -661,7 +875,7 @@
         <h2>Marketing</h2>
         <span class="caption">Google Analytics (GA4) e Vtex · período selecionado</span>
       </div>
-      <div class="grid">
+      <div class="grid" id="grid-marketing">
         <div class="card col-4" id="card-ticket-medio"><h3>Ticket médio</h3><div class="body"></div></div>
         <div class="card col-8" id="card-conversao-origem"><h3>Conversão por origem <button class="tag-btn" data-card="conversao-origem" hidden>Ver tudo</button></h3><div class="body"></div></div>
 
@@ -696,52 +910,52 @@
         </div>
       </div>
 
+      <div class="ec-filtros" id="ec-filtros">
+        <span class="ec-filtros-lbl">Filtros</span>
+        <details class="ec-pick" id="ec-pk-tipo"></details>
+        <details class="ec-pick" id="ec-pk-loja"></details>
+        <details class="ec-pick" id="ec-pk-grupo"></details>
+        <details class="ec-pick" id="ec-pk-linha"></details>
+        <button type="button" class="tag-btn" id="ec-limpar" hidden>Limpar filtros</button>
+        <span class="ec-note" id="ec-filtro-resumo"></span>
+      </div>
+
       <div class="card" id="ec-vazio" hidden>
         <h3>Nenhuma planilha de estoque carregada ainda</h3>
         <p class="ec-note">Suba a planilha "Estoque Omni" do dia em <b>Carregar planilha</b> (administrador) ou pela rotina do GitHub. Depois disso, todas as visões do Estoque Cia aparecem aqui.</p>
       </div>
+      <div class="ec-loading" id="ec-carregando" hidden><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
 
       <!-- DECISÕES -->
       <div class="ec-page" id="ec-sub-decisoes">
-        <p class="ec-take" id="ec-take">Dá para agir agora em seis frentes. As três maiores: completar a grade de <b data-dec="grade:refs">—</b> referências enviando <b data-dec="grade:pecas">—</b> peças do CD; distribuir <b data-dec="cd:pecas">—</b> peças paradas no CD; e destravar <b data-dec="defeito:pecas">—</b> peças no retorno de defeito.</p>
-        <div class="ec-dec" id="ec-dec-cards"><div class="skeleton"></div></div>
-        <div class="ec-bar">
-          <span class="ec-note">Filtrar as listas abaixo por loja:</span>
-          <details class="ec-pick" id="ec-pk-dec"></details>
-        </div>
+        <p class="ec-take" id="ec-take-dec">—</p>
+        <div class="ec-dec" id="ec-dec-cards"></div>
 
         <div class="card" id="ec-sec-grade">
           <h3>1 · Completar grade com estoque do CD</h3>
           <p class="ec-note">Para cada loja e referência, os tamanhos que faltam e o que dá para mandar já do CD (RJ DISTRIBUIDORA e RJ CQ DISTRIBUIDORA), 1 peça por tamanho. O saldo do CD é dividido priorizando grade quebrada e as lojas com mais peças da referência.</p>
-          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-grade" placeholder="Buscar Ref_Cor, nome ou categoria" aria-label="Buscar"><span class="ec-note" id="ec-n-grade"></span></div>
+          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-grade" placeholder="Buscar Ref_Cor ou nome" aria-label="Buscar"><span class="ec-note" id="ec-n-grade"></span></div>
           <div class="ec-scroll short"><table id="ec-t-grade"></table></div>
         </div>
 
         <div class="card" id="ec-sec-cd">
           <h3>2 · Distribuir referências paradas no CD</h3>
-          <p class="ec-note">Referências com 20 peças ou mais no CD e presentes em até 5 lojas. Lojas sugeridas: as que têm mais estoque da categoria e ainda não têm a referência, 1 peça por tamanho em cada. Com a venda, a sugestão passa a usar quem mais vende a categoria.</p>
-          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-cd" placeholder="Buscar Ref_Cor, nome ou categoria" aria-label="Buscar"><span class="ec-note" id="ec-n-cd"></span></div>
+          <p class="ec-note">Referências com 20 peças ou mais no CD e presentes em até 5 lojas. Lojas sugeridas: as que têm mais estoque da categoria e ainda não têm a referência, 1 peça por tamanho em cada. Com filtro de loja, aparecem só as sugestões para as lojas escolhidas.</p>
+          <div class="ec-bar"><input type="search" class="ec-input" id="ec-q-cd" placeholder="Buscar Ref_Cor ou nome" aria-label="Buscar"><span class="ec-note" id="ec-n-cd"></span></div>
           <div class="ec-scroll short"><table id="ec-t-cd"></table></div>
         </div>
 
         <div class="card" id="ec-sec-mix">
           <h3>3 e 4 · Ajustar o mix de categorias por loja</h3>
           <p class="ec-note">Onde a participação da categoria na loja está 3 p.p. ou mais longe da média das lojas. "Peças para ajustar" é quanto falta ou sobra para a loja chegar no mix da rede. Use "Reduzir" como origem de transferência e "Reforçar" como destino, conferindo com a venda.</p>
-          <div class="ec-bar">
-            <div class="segmented" id="ec-mixf">
-              <button type="button" data-v="" class="active">Todas</button>
-              <button type="button" data-v="Reforçar">Reforçar</button>
-              <button type="button" data-v="Reduzir">Reduzir</button>
-            </div>
-            <span class="ec-note" id="ec-n-mix"></span>
-          </div>
+          <div class="ec-bar"><details class="ec-pick" id="ec-pk-acao"></details><span class="ec-note" id="ec-n-mix"></span></div>
           <div class="ec-scroll short"><table id="ec-t-mix"></table></div>
         </div>
 
         <div class="ec-grid2">
           <div class="card" id="ec-sec-soltas">
             <h3>5 · Consolidar peças soltas</h3>
-            <p class="ec-note">Lojas com mais referências de 1 peça só. Clique na loja para ver as peças em Produtos e decidir entre juntar na loja com mais grade ou mandar para liquidação ou outlet.</p>
+            <p class="ec-note">Lojas com mais referências de 1 peça só (de produtos com 2 tamanhos ou mais). Clique na loja para ver as peças em Produtos e decidir entre juntar na loja com mais grade ou mandar para liquidação ou outlet.</p>
             <div class="ec-scroll short"><table id="ec-t-soltas"></table></div>
           </div>
           <div class="card" id="ec-sec-defeito">
@@ -751,7 +965,7 @@
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="ec-sec-venda">
           <h3>Próximo passo: cruzar com a venda</h3>
           <p class="ec-note">Com a venda, cada lista acima ganha prioridade por giro: cobertura em semanas por loja × categoria, ruptura (vende e não tem estoque), excesso (tem estoque e não vende), sell-through e transferência loja → loja de quem tem sobra para quem vende.</p>
         </div>
@@ -759,18 +973,7 @@
 
       <!-- VISÃO GERAL -->
       <div class="ec-page" id="ec-sub-geral" hidden>
-        <div class="ec-bar">
-          <label for="ec-escopo">Escopo
-            <select id="ec-escopo" class="ec-input">
-              <option value="Lojas">Lojas (sem CD)</option>
-              <option value="OMNI">Lojas OMNI</option>
-              <option value="Loja não OMNI">Lojas não OMNI</option>
-              <option value="CD / Outros">CD / Outros</option>
-              <option value="Todas">Tudo (lojas + CD)</option>
-            </select>
-          </label>
-        </div>
-        <p class="ec-take" style="margin:0">No escopo escolhido, a categoria <b id="ec-topcat">—</b> concentra <b id="ec-topshare">—</b> das peças.</p>
+        <p class="ec-take" id="ec-take-geral">—</p>
         <div class="ec-kpis">
           <div class="ec-kpi"><span class="ec-kl">Peças em estoque</span><b class="ec-kv ec-k" data-k="pecas">—</b></div>
           <div class="ec-kpi"><span class="ec-kl">Valor a preço de venda</span><b class="ec-kv ec-k" data-k="valor">—</b></div>
@@ -780,18 +983,18 @@
           <div class="ec-kpi"><span class="ec-kl">Disponível e-com</span><b class="ec-kv ec-k" data-k="ecom">—</b><span class="ec-kn">lojas OMNI, −1 peça por SKU</span></div>
         </div>
         <div class="ec-grid2">
-          <div class="card">
+          <div class="card" id="ec-card-cat">
             <h3>Peças por categoria</h3>
-            <p class="ec-note">Top 20 categorias do escopo, com a parte em liquidação separada. Clique para abrir a categoria.</p>
+            <p class="ec-note">Até 20 categorias, com a parte em liquidação separada. Clique numa barra para filtrar só essa categoria.</p>
             <div class="ec-legend" id="ec-leg-cat"></div>
             <div class="ec-chart" id="ec-ch-cat"></div>
           </div>
-          <div class="card">
+          <div class="card" id="ec-card-heat">
             <h3>Mapa loja × categoria</h3>
-            <p class="ec-note">10 maiores categorias do escopo. Clique na loja para abrir o plano dela.</p>
+            <p class="ec-note">As 10 maiores categorias do filtro. Clique na loja para abrir o plano dela.</p>
             <div class="segmented" id="ec-heatm" style="justify-self:start">
               <button type="button" data-m="pecas" class="active">Peças</button>
-              <button type="button" data-m="share_loja">% do mix da loja</button>
+              <button type="button" data-m="share" >% do mix da loja</button>
               <button type="button" data-m="prof">Peças por ref.</button>
             </div>
             <div class="ec-scroll" id="ec-heat"></div>
@@ -801,26 +1004,24 @@
 
       <!-- LOJAS -->
       <div class="ec-page" id="ec-sub-lojas" hidden>
-        <div class="card">
+        <div class="card" id="ec-card-lojas">
           <h3>Ranking de lojas</h3>
-          <p class="ec-note">Escolha as lojas que aparecem no ranking. As colunas de ação mostram, por loja, quanto vem do CD para completar grade, quantas referências paradas no CD ela deve receber e quanto o mix pede para reforçar ou reduzir. Clique numa loja para abrir o plano dela.</p>
-          <div class="ec-bar"><details class="ec-pick" id="ec-pk-rank"></details><span class="ec-note" id="ec-n-lojas"></span></div>
+          <p class="ec-note">Todas as colunas respeitam os filtros do topo (ex.: escolhendo VESTIDO e CALCA, peças, refs e ações são só dessas categorias). Clique numa loja para abrir o plano dela.</p>
+          <div class="ec-bar"><span class="ec-note" id="ec-n-lojas"></span></div>
           <div class="ec-scroll"><table id="ec-t-lojas"></table></div>
         </div>
         <div class="card" id="ec-card-loja">
-          <div class="ec-bar">
-            <h3>Plano da loja</h3>
-            <select id="ec-sel-loja" class="ec-input" aria-label="Loja"></select>
-          </div>
+          <h3>Plano da loja</h3>
+          <div class="ec-bar"><details class="ec-pick" id="ec-pk-plano"></details><span class="ec-note">Escolha uma ou mais lojas; em "Tudo", soma todas as lojas do filtro.</span></div>
           <div class="ec-kpis">
-            <div class="ec-kpi"><span class="ec-kl">Receber do CD (grade)</span><b class="ec-kv ec-kl-v" data-k="rep_pecas">—</b><span class="ec-kn">peças</span></div>
-            <div class="ec-kpi"><span class="ec-kl">Refs paradas no CD para receber</span><b class="ec-kv ec-kl-v" data-k="cd_refs_sugeridas">—</b></div>
-            <div class="ec-kpi"><span class="ec-kl">Mix: reforçar</span><b class="ec-kv ec-kl-v" data-k="mix_reforcar">—</b><span class="ec-kn">peças</span></div>
-            <div class="ec-kpi"><span class="ec-kl">Mix: reduzir</span><b class="ec-kv ec-kl-v" data-k="mix_reduzir">—</b><span class="ec-kn">peças</span></div>
-            <div class="ec-kpi"><span class="ec-kl">Refs com peça solta</span><b class="ec-kv ec-kl-v" data-k="refs_peca_solta">—</b></div>
-            <div class="ec-kpi"><span class="ec-kl">Peças em liquidação</span><b class="ec-kv ec-kl-v" data-k="pecas_liqui">—</b></div>
+            <div class="ec-kpi"><span class="ec-kl">Receber do CD (grade)</span><b class="ec-kv ec-pl" data-k="rep">—</b><span class="ec-kn">peças</span></div>
+            <div class="ec-kpi"><span class="ec-kl">Refs paradas no CD para receber</span><b class="ec-kv ec-pl" data-k="cd">—</b></div>
+            <div class="ec-kpi"><span class="ec-kl">Mix: reforçar</span><b class="ec-kv ec-pl" data-k="ref">—</b><span class="ec-kn">peças</span></div>
+            <div class="ec-kpi"><span class="ec-kl">Mix: reduzir</span><b class="ec-kv ec-pl" data-k="red">—</b><span class="ec-kn">peças</span></div>
+            <div class="ec-kpi"><span class="ec-kl">Refs com peça solta</span><b class="ec-kv ec-pl" data-k="solta">—</b></div>
+            <div class="ec-kpi"><span class="ec-kl">Peças em liquidação</span><b class="ec-kv ec-pl" data-k="liq">—</b></div>
           </div>
-          <p class="ec-note">Mix da loja comparado com a média das lojas da rede (sem CD).</p>
+          <p class="ec-note">Participação de cada categoria nas peças da seleção, comparada com a média das lojas da rede (sem CD).</p>
           <div class="ec-legend" id="ec-leg-mix"></div>
           <div class="ec-chart" id="ec-ch-mix"></div>
           <div class="ec-scroll short"><table id="ec-t-loja-cat"></table></div>
@@ -829,23 +1030,20 @@
 
       <!-- CATEGORIAS -->
       <div class="ec-page" id="ec-sub-categorias" hidden>
-        <div class="ec-bar"><label for="ec-sel-cat">Categoria <select id="ec-sel-cat" class="ec-input"></select></label></div>
-        <div class="ec-kpis">
-          <div class="ec-kpi"><span class="ec-kl">Peças nas lojas</span><b class="ec-kv ec-kc" data-k="pecas">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Referências</span><b class="ec-kv ec-kc" data-k="refs">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Lojas com a categoria</span><b class="ec-kv ec-kc" data-k="lojas">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Peças por referência</span><b class="ec-kv ec-kc" data-k="prof">—</b></div>
-          <div class="ec-kpi"><span class="ec-kl">Refs com grade quebrada</span><b class="ec-kv ec-kc" data-k="refs_grade_quebrada">—</b><span class="ec-kn">somando todas as lojas</span></div>
+        <div class="card" id="ec-card-cats">
+          <h3>Categorias lado a lado</h3>
+          <p class="ec-note">Uma linha por categoria do filtro. Clique numa categoria para filtrar só ela; para voltar, use "Tudo" no filtro de categorias.</p>
+          <div class="ec-scroll short"><table id="ec-t-cats"></table></div>
         </div>
         <div class="ec-grid2">
-          <div class="card">
+          <div class="card" id="ec-card-grade">
             <h3>Peças por posição de tamanho</h3>
-            <p class="ec-note">T1 a T11 são as posições da grade como vêm do sistema (ex.: T1 = PP ou 34). Só lojas.</p>
+            <p class="ec-note">T1 a T11 são as posições da grade como vêm do sistema (ex.: T1 = PP ou 34), somando as categorias e lojas do filtro.</p>
             <div class="ec-chart" id="ec-ch-grade"></div>
           </div>
-          <div class="card">
-            <h3>Onde a categoria está</h3>
-            <p class="ec-note">Lojas e CD com estoque da categoria. Clique na linha para abrir o plano da loja.</p>
+          <div class="card" id="ec-card-cat-lojas">
+            <h3>Onde as categorias estão</h3>
+            <p class="ec-note">Lojas e CD com estoque das categorias do filtro. "Mix na loja" é o peso dessas categorias no estoque total da loja. Clique na linha para abrir o plano da loja.</p>
             <div class="ec-scroll short"><table id="ec-t-cat-lojas"></table></div>
           </div>
         </div>
@@ -853,16 +1051,14 @@
 
       <!-- PRODUTOS -->
       <div class="ec-page" id="ec-sub-produtos" hidden>
-        <div class="card">
+        <div class="card" id="ec-card-prod">
           <h3>Produtos</h3>
-          <p class="ec-note">Sem loja escolhida, mostra a rede toda (até 300 referências). Escolhendo lojas, mostra cada produto em cada loja, com a grade, os tamanhos que faltam e o que o CD tem desses tamanhos (até 500 linhas).</p>
+          <p class="ec-note">Sem loja no filtro, mostra cada produto somando as lojas e locais (até 300). Com lojas no filtro, mostra cada produto em cada loja, com a grade, os tamanhos que faltam e o que o CD tem deles (até 500 linhas).</p>
           <div class="ec-bar">
-            <details class="ec-pick" id="ec-pk-prod"></details>
             <input type="search" class="ec-input" id="ec-q-prod" placeholder="Buscar Ref_Cor ou nome" aria-label="Buscar produto">
-            <label for="ec-f-cat">Categoria <select id="ec-f-cat" class="ec-input"><option value="">Todas</option></select></label>
-            <label for="ec-f-st">Grade <select id="ec-f-st" class="ec-input"><option value="">Todas</option><option>Completa</option><option>Incompleta</option><option>Quebrada</option><option>Solta</option></select></label>
-            <label for="ec-f-foto">Foto <select id="ec-f-foto" class="ec-input"><option value="">Todas</option><option>Com foto</option><option>Sem foto</option></select></label>
-            <label for="ec-f-liq">Liquidação <select id="ec-f-liq" class="ec-input"><option value="">Todos</option><option>Liqui</option><option>Não liqui</option></select></label>
+            <details class="ec-pick" id="ec-pk-st"></details>
+            <details class="ec-pick" id="ec-pk-foto"></details>
+            <details class="ec-pick" id="ec-pk-liq"></details>
             <span class="ec-note" id="ec-n-prod"></span>
           </div>
           <div class="ec-scroll" id="ec-wrap-prod"><table id="ec-t-prod"></table></div>
@@ -870,14 +1066,14 @@
         </div>
         <div class="card" id="ec-card-sku">
           <h3 id="ec-sku-title">Distribuição por loja</h3>
-          <p class="ec-note">Grade = peças por posição de tamanho, de T1 em diante (ex.: 0-2-2-1 = sem T1, 2 no T2, 2 no T3, 1 no T4). "No CD" = peças da distribuidora nos tamanhos que faltam na loja.</p>
+          <p class="ec-note">Todas as lojas e locais com a referência escolhida (as do filtro aparecem destacadas). Grade = peças por posição de tamanho, de T1 em diante. "No CD" = peças da distribuidora nos tamanhos que faltam na loja.</p>
           <div class="ec-scroll short"><table id="ec-t-sku"></table></div>
         </div>
       </div>
 
       <!-- CARREGAR PLANILHA (admin) -->
       <div class="ec-page" id="ec-sub-planilha" hidden>
-        <div class="card">
+        <div class="card" id="ec-card-upload">
           <h3>Carregar a planilha de estoque do dia</h3>
           <form class="ec-upload" id="ec-upload-form">
             <p class="ec-note">Envie a planilha "Estoque Omni" (.xlsx) como ela sai hoje. O painel lê a aba de estoque (filial × produto × cor com ES1..ES11), a aba "Todos os produtos" (categoria, linha e liquidação) e a aba OMNIS, recalcula tudo e passa a mostrar essa versão. Reenviar no mesmo dia substitui a carga do dia.</p>
@@ -887,11 +1083,11 @@
             <p class="form-msg" id="ec-upload-msg" hidden></p>
           </form>
         </div>
-        <div class="card">
+        <div class="card" id="ec-card-cargas">
           <h3>Planilhas recebidas</h3>
           <div class="ec-scroll short"><table id="ec-t-cargas"></table></div>
         </div>
-        <div class="card">
+        <div class="card" id="ec-card-github">
           <h3>Subir pelo GitHub</h3>
           <p class="ec-note">Também dá para mandar pelo GitHub: no repositório <code>dashboard-vendas-backend</code>, suba o arquivo na pasta <code>estoque/</code> (Add file → Upload files). A rotina "Enviar estoque Cia" manda a planilha para cá e ela aparece nesta lista com origem "github". Coloque a data no nome do arquivo (ex.: Estoque_Omni_2026-10-13.xlsx).</p>
         </div>
@@ -903,7 +1099,7 @@
         <h2>Administração</h2>
         <span class="caption">Gerencie quem tem acesso ao painel</span>
       </div>
-      <div class="grid">
+      <div class="grid" id="grid-admin">
         <div class="card col-5">
           <h3>Novo acesso</h3>
           <div class="body">
@@ -950,6 +1146,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
               <button type="button" class="btn-primary" style="width:auto" id="syncWarehousesBtn">Sincronizar lojas</button>
               <button type="button" class="btn-primary" style="width:auto" id="backfillItemsBtn">Recalcular pedidos já sincronizados</button>
+              <button type="button" class="btn-primary" style="width:auto" id="backfillPrazosBtn">Recalcular entregas e clientes</button>
             </div>
             <p class="form-msg" id="syncWarehousesMsg" hidden></p>
           </div>
@@ -981,6 +1178,46 @@
             </p>
             <button type="button" class="btn-primary" style="width:auto" id="debugPricingBtn">Ver campos de preço</button>
             <pre id="debugPricingOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>Diagnóstico temporário: campos de canal/origem da Vtex</h3>
+          <div class="body">
+            <p class="caption" style="margin-bottom:14px">
+              Mostra os campos que a Vtex manda sobre a origem do pedido (App, Site, Vitrine/venda assistida etc.) nos últimos pedidos sincronizados, pra eu confirmar qual campo usar antes de montar o card "Canal de venda". É só clicar, copiar o texto que aparecer e mandar de volta — depois de resolver, esse card pode ser removido.
+            </p>
+            <button type="button" class="btn-primary" style="width:auto" id="debugChannelBtn">Ver campos de canal</button>
+            <pre id="debugChannelOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>Diagnóstico temporário: fotos e referência dos produtos mais vendidos</h3>
+          <div class="body">
+            <p class="caption" style="margin-bottom:14px">
+              Mostra os arquivos de foto que a Vtex retorna (pra descobrir por que algum produto aparece sem foto no card "Top produtos mais vendidos") e os campos do SKU (RefId, ProductRefId, nomes). Usa o período e status selecionados no topo do painel. Deixe "ID do produto" em branco pra ver os 15 mais vendidos, ou cole o ID de um produto específico (aparece no resultado geral, campo <code>productId</code>) pra investigar só ele — mostra todos os tamanhos dele e qual está sendo usado pra buscar a foto nesse filtro. É só clicar, copiar o texto que aparecer e mandar de volta — depois de resolver, esse card pode ser removido.
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
+              <label for="debugProductImageId" class="caption" style="margin:0">ID do produto (opcional):</label>
+              <input type="text" id="debugProductImageId" placeholder="ex.: 41745" style="width:140px">
+            </div>
+            <button type="button" class="btn-primary" style="width:auto" id="debugProductImageBtn">Ver fotos e referência dos produtos</button>
+            <pre id="debugProductImageOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>Diagnóstico temporário: estoque aparecendo zerado</h3>
+          <div class="body">
+            <p class="caption" style="margin-bottom:14px">
+              Pra investigar um produto que tem estoque de verdade mas aparece com "0" na coluna Estoque do card "Top produtos mais vendidos". Busca ao vivo na Vtex (sem depender do cache) pra cada tamanho do produto e mostra o que está cacheado, a resposta crua de estoque da Vtex e se o SKU está marcado ativo no catálogo. Preencha o nome (como aparece no painel) ou o ID do produto. É só clicar, copiar o texto que aparecer e mandar de volta — depois de resolver, esse card pode ser removido.
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
+              <label for="debugStockName" class="caption" style="margin:0">Nome do produto:</label>
+              <input type="text" id="debugStockName" placeholder="ex.: Saia Longa Marias" style="width:220px">
+              <label for="debugStockId" class="caption" style="margin:0">ou ID do produto:</label>
+              <input type="text" id="debugStockId" placeholder="ex.: 41745" style="width:120px">
+            </div>
+            <button type="button" class="btn-primary" style="width:auto" id="debugStockBtn">Ver estoque ao vivo</button>
+            <pre id="debugStockOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
           </div>
         </div>
       </div>
@@ -1016,6 +1253,17 @@
     var label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
     return label.charAt(0).toUpperCase() + label.slice(1);
   };
+
+  // Placeholder pra quando ainda não temos (ou não achamos) a foto do produto na Vtex —
+  // evita o "ícone de imagem quebrada" do navegador enquanto a foto ainda não foi cacheada
+  // (1ª vez que esse produto aparece no ranking) ou pra produtos sem foto cadastrada.
+  var PRODUTO_PLACEHOLDER_IMG = "data:image/svg+xml;utf8," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
+    '<rect width="40" height="40" rx="8" fill="#e5e5ea"/>' +
+    '<circle cx="15" cy="15" r="3" fill="#b0b0b8"/>' +
+    '<path d="M8 30l8-10 6 7 4-5 6 8z" fill="#b0b0b8"/>' +
+    '</svg>'
+  );
 
   var STATUS_LABELS = {
     "invoiced": "Faturado", "canceled": "Cancelado", "cancelled": "Cancelado", "handling": "Em separação",
@@ -1183,6 +1431,24 @@
     var vars = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5", "--series-6"];
     return getComputedStyle(document.documentElement).getPropertyValue(vars[i % vars.length]).trim();
   }
+  // Etiqueta de estoque reutilizada nos cards "Top produtos mais vendidos" (linha agrupada e
+  // detalhamento por tamanho) e "Ranking de produtos × estoque". Quando o SKU está marcado
+  // como estoque ilimitado na Vtex (hasUnlimitedQuantity), o número de unidades não tem
+  // significado — a Vtex mantém o item sempre disponível pra venda independente da
+  // quantidade — então mostramos "Ilimitado" em vez de um número que poderia até aparecer
+  // como "0" sem realmente significar "sem estoque".
+  function estoqueBadge(estoqueDisponivel, estoqueIlimitado) {
+    var span = document.createElement("span");
+    if (estoqueIlimitado) {
+      span.className = "badge stock-unlimited";
+      span.textContent = "Ilimitado";
+      return span;
+    }
+    var baixo = estoqueDisponivel <= 5;
+    span.className = "badge " + (baixo ? "stock-low" : "stock-ok");
+    span.textContent = fmtInt.format(estoqueDisponivel);
+    return span;
+  }
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
     if (attrs) for (var k in attrs) {
@@ -1247,6 +1513,109 @@
     table.appendChild(thead); table.appendChild(tbody); wrap.appendChild(table); container.appendChild(wrap);
   }
 
+  // Mini tabela usada dentro da linha expandida de "Top produtos mais vendidos", com a
+  // venda de cada tamanho/variação (SKU) daquele produto.
+  function renderTamanhosDetalhe(container, variacoes) {
+    container.innerHTML = "";
+    if (!variacoes || !variacoes.length) {
+      container.appendChild(el("p", { class: "caption" }, [document.createTextNode("Sem detalhamento por tamanho nesse período.")]));
+      return;
+    }
+    var mini = el("table", { class: "tamanhos-mini" });
+    var mhead = el("thead", {}, [el("tr", {}, [
+      el("th", {}, [document.createTextNode("Variação")]),
+      el("th", { class: "num" }, [document.createTextNode("Unidades")]),
+      el("th", { class: "num" }, [document.createTextNode("Valor total")])
+    ])]);
+    var mbody = el("tbody");
+    variacoes.forEach(function (v) {
+      mbody.appendChild(el("tr", {}, [
+        el("td", {}, [document.createTextNode(v.nome || v.sku || "—")]),
+        el("td", { class: "num" }, [document.createTextNode(fmtInt.format(v.unidadesVendidas))]),
+        el("td", { class: "num" }, [document.createTextNode(fmtBRL.format(v.receita))])
+      ]));
+    });
+    mini.appendChild(mhead); mini.appendChild(mbody);
+    container.appendChild(mini);
+  }
+
+  // Tabela do card "Top produtos mais vendidos": foto + nome (já sem tamanho/cor repetidos,
+  // ver nomeBaseComum no backend) + categoria + unidades + valor. Quando o produto tem mais
+  // de uma variação vendida no período (r.variacoes > 1), mostra um link "N tamanhos" que
+  // expande uma linha abaixo com o detalhamento por SKU (busca sob demanda, cacheada por
+  // produto enquanto o card não é recarregado).
+  function renderTopProdutos(container, rows) {
+    container.innerHTML = "";
+    if (!rows || !rows.length) return showEmpty(container);
+    var wrap = el("div", { class: "table-wrap" });
+    var table = el("table");
+    var thead = el("thead", {}, [el("tr", {}, [
+      el("th", {}, [document.createTextNode("Produto")]),
+      el("th", {}, [document.createTextNode("Categoria")]),
+      el("th", { class: "num" }, [document.createTextNode("Unidades vendidas")]),
+      el("th", { class: "num" }, [document.createTextNode("Valor total")])
+    ])]);
+    var tbody = el("tbody");
+    var detalheCache = {};
+
+    rows.forEach(function (r) {
+      var tr = el("tr");
+      var img = document.createElement("img");
+      img.className = "produto-thumb";
+      img.loading = "lazy";
+      img.alt = r.produto || "";
+      img.src = r.imagemUrl || PRODUTO_PLACEHOLDER_IMG;
+      img.onerror = function () { this.onerror = null; this.src = PRODUTO_PLACEHOLDER_IMG; };
+
+      var info = el("div", { class: "produto-info" }, [
+        el("span", { class: "produto-nome" }, [document.createTextNode(r.produto || "—")])
+      ]);
+
+      var temVariacoes = r.variacoes > 1;
+      var toggle = null;
+      if (temVariacoes) {
+        toggle = el("button", { type: "button", class: "tamanhos-toggle" }, [document.createTextNode("▸ " + r.variacoes + " tamanhos")]);
+        info.appendChild(toggle);
+      }
+
+      var produtoCell = el("td", { class: "wrap" }, [el("div", { class: "produto-cell" }, [img, info])]);
+      tr.appendChild(produtoCell);
+      tr.appendChild(el("td", {}, [document.createTextNode(r.categoria || "—")]));
+      tr.appendChild(el("td", { class: "num" }, [document.createTextNode(fmtInt.format(r.unidadesVendidas))]));
+      tr.appendChild(el("td", { class: "num" }, [document.createTextNode(fmtBRL.format(r.receita))]));
+      tbody.appendChild(tr);
+
+      if (temVariacoes) {
+        var detalheCell = el("td", { colspan: "4" });
+        var detalheRow = el("tr", { class: "tamanhos-row" }, [detalheCell]);
+        detalheRow.hidden = true;
+        tbody.appendChild(detalheRow);
+
+        var aberto = false;
+        toggle.addEventListener("click", function () {
+          aberto = !aberto;
+          toggle.textContent = (aberto ? "▾ " : "▸ ") + r.variacoes + " tamanhos";
+          detalheRow.hidden = !aberto;
+          if (!aberto) return;
+          if (detalheCache[r.produtoId]) { renderTamanhosDetalhe(detalheCell, detalheCache[r.produtoId]); return; }
+          detalheCell.innerHTML = "";
+          detalheCell.appendChild(el("p", { class: "caption" }, [document.createTextNode("Carregando…")]));
+          get("/api/vendas/produtos-mais-vendidos/" + encodeURIComponent(r.produtoId) + "/tamanhos", Object.assign({}, periodParams(), statusParams()))
+            .then(function (variacoes) {
+              detalheCache[r.produtoId] = variacoes;
+              renderTamanhosDetalhe(detalheCell, variacoes);
+            })
+            .catch(function () {
+              detalheCell.innerHTML = "";
+              detalheCell.appendChild(el("p", { class: "empty-state" }, [document.createTextNode("Não foi possível carregar os tamanhos agora.")]));
+            });
+        });
+      }
+    });
+
+    table.appendChild(thead); table.appendChild(tbody); wrap.appendChild(table); container.appendChild(wrap);
+  }
+
   function renderDonut(container, rows, opts) {
     container.innerHTML = "";
     if (!rows || !rows.length) return showEmpty(container);
@@ -1283,6 +1652,273 @@
       ]));
     });
     container.appendChild(el("div", { class: "donut-wrap" }, [svg, legend]));
+  }
+
+  // Arredonda o topo do eixo Y pra um número "redondo" (0 / 1.000 / 2.000 ...), como pede
+  // o guia de dataviz — nunca o valor máximo cru, que fica com ticks tortos.
+  function niceTicks(maxValue, tickCount) {
+    if (!(maxValue > 0)) return [0, 1];
+    var rawStep = maxValue / (tickCount - 1);
+    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    var norm = rawStep / mag;
+    var niceNorm = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+    var step = niceNorm * mag;
+    var niceMax = Math.ceil(maxValue / step) * step;
+    var ticks = [];
+    for (var v = 0; v <= niceMax + step / 1000; v += step) ticks.push(Math.round(v * 100) / 100);
+    return ticks;
+  }
+
+  /**
+   * Gráfico de linha com crosshair + tooltip (obrigatório por padrão pro tipo "linha",
+   * conforme o guia de dataviz). `seriesArr`: [{ name, color, values: number[], dates: string[] }]
+   * — `values`/`dates` alinhados por ÍNDICE (dia 0, dia 1, ...), não por data de calendário:
+   * é assim que o período atual e o período anterior (mesmo tamanho, datas diferentes) ficam
+   * sobrepostos corretamente no eixo X, um por cima do outro dia a dia.
+   */
+  function renderLineChart(container, seriesArr, opts) {
+    opts = opts || {};
+    container.innerHTML = "";
+    var format = opts.format || function (v) { return fmtInt.format(v); };
+    seriesArr = (seriesArr || []).filter(function (s) { return s && s.values && s.values.length; });
+    var n = seriesArr.reduce(function (m, s) { return Math.max(m, s.values.length); }, 0);
+    if (!seriesArr.length || !n) return showEmpty(container);
+
+    var showLegend = seriesArr.length >= 2;
+    // Em tela estreita (celular) o viewBox fixo de 960px encolhia o gráfico inteiro, deixando
+    // rótulos de eixo e do valor final minúsculos. Aí usamos a largura real do container como
+    // largura do viewBox (1 unidade do SVG ~ 1px de tela, texto fica no tamanho nominal) e
+    // margens menores; em telas largas continua exatamente como antes (960x300).
+    var containerW = container.clientWidth || 0;
+    var compact = containerW > 0 && containerW < 560;
+    var W = compact ? Math.max(containerW, 260) : 960;
+    var H = compact ? 240 : 300;
+    // A margem direita precisa comportar o rótulo do valor final (ex.: "R$ 14.706") — com valores
+    // de 5 dígitos ele passava da borda do SVG e ficava cortado, principalmente no celular.
+    var endLabelText = format(seriesArr[0].values[seriesArr[0].values.length - 1]);
+    var endLabelMargin = Math.ceil(endLabelText.length * 7.4) + 18;
+    var marginTop = 16, marginRight = Math.max(compact ? 52 : 74, endLabelMargin), marginBottom = 26, marginLeft = compact ? 50 : 64;
+    var plotW = W - marginLeft - marginRight, plotH = H - marginTop - marginBottom;
+
+    var maxVal = 0;
+    seriesArr.forEach(function (s) { s.values.forEach(function (v) { if (v > maxVal) maxVal = v; }); });
+    var ticks = niceTicks(maxVal, 5);
+    var niceMax = ticks[ticks.length - 1] || 1;
+
+    function xAt(i) { return n <= 1 ? marginLeft + plotW / 2 : marginLeft + (i / (n - 1)) * plotW; }
+    function yAt(v) { return marginTop + plotH - (v / niceMax) * plotH; }
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+    var surfaceColor = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim() || "#fff";
+
+    // Gridlines (hairline, recessivas) + rótulos do eixo Y
+    ticks.forEach(function (t) {
+      var y = yAt(t);
+      var line = document.createElementNS(svgNS, "line");
+      line.setAttribute("class", "grid-line");
+      line.setAttribute("x1", marginLeft); line.setAttribute("x2", W - marginRight);
+      line.setAttribute("y1", y); line.setAttribute("y2", y);
+      svg.appendChild(line);
+      var label = document.createElementNS(svgNS, "text");
+      label.setAttribute("class", "axis-label");
+      label.setAttribute("x", marginLeft - 10); label.setAttribute("y", y + 3.5);
+      label.setAttribute("text-anchor", "end");
+      label.textContent = format(t);
+      svg.appendChild(label);
+    });
+
+    // Rótulos do eixo X — no máximo 6, nunca um por dia (viraria ilegível com 90 dias)
+    var primaryDates = (seriesArr[0] && seriesArr[0].dates) || [];
+    var xTickCount = Math.min(compact ? 4 : 6, n);
+    var xTickIdx = [];
+    for (var k = 0; k < xTickCount; k++) {
+      xTickIdx.push(xTickCount <= 1 ? 0 : Math.round((k / (xTickCount - 1)) * (n - 1)));
+    }
+    var seenIdx = {};
+    xTickIdx.forEach(function (i) {
+      if (seenIdx[i]) return;
+      seenIdx[i] = true;
+      var label = document.createElementNS(svgNS, "text");
+      label.setAttribute("class", "axis-label");
+      label.setAttribute("x", xAt(i));
+      label.setAttribute("y", H - marginBottom + 18);
+      label.setAttribute("text-anchor", i === 0 ? "start" : (i === n - 1 ? "end" : "middle"));
+      label.textContent = primaryDates[i] || ("Dia " + (i + 1));
+      svg.appendChild(label);
+    });
+
+    // Linhas (2px, junção/ponta arredondada) + marcador final (>=8px, com anel na cor da
+    // superfície) — o rótulo direto de valor fica só na série "atual" (índice 0): com as
+    // duas linhas convergindo perto do fim, empilhar os dois valores vira ruído (ver
+    // marks-and-anatomy.md) — a legenda + tooltip cobrem a série de comparação.
+    seriesArr.forEach(function (s, si) {
+      var color = s.color || seriesColor(si);
+      var lastI = s.values.length - 1;
+      var d = s.values.map(function (v, i) { return (i === 0 ? "M " : "L ") + xAt(i) + "," + yAt(v); }).join(" ");
+      var path = document.createElementNS(svgNS, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", color);
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("stroke-linecap", "round");
+      svg.appendChild(path);
+
+      var ring = document.createElementNS(svgNS, "circle");
+      ring.setAttribute("cx", xAt(lastI)); ring.setAttribute("cy", yAt(s.values[lastI])); ring.setAttribute("r", 6);
+      ring.setAttribute("fill", surfaceColor);
+      svg.appendChild(ring);
+      var dot = document.createElementNS(svgNS, "circle");
+      dot.setAttribute("cx", xAt(lastI)); dot.setAttribute("cy", yAt(s.values[lastI])); dot.setAttribute("r", 4.5);
+      dot.setAttribute("fill", color);
+      svg.appendChild(dot);
+
+      if (si === 0) {
+        var endLabel = document.createElementNS(svgNS, "text");
+        endLabel.setAttribute("class", "end-label");
+        endLabel.setAttribute("x", xAt(lastI) + 10);
+        endLabel.setAttribute("y", yAt(s.values[lastI]) + 4);
+        endLabel.textContent = format(s.values[lastI]);
+        svg.appendChild(endLabel);
+      }
+    });
+
+    // Rótulos de valor SEMPRE visíveis (não dependem de hover — no celular nem existe hover).
+    // Só na série "atual" (índice 0). Com muitos pontos (ex.: 90 dias) não cabe um rótulo por
+    // ponto, então escolhemos gananciosamente do maior valor pro menor e pulamos qualquer
+    // rótulo que invadiria o espaço horizontal de um já posto (assim nunca ficam empilhados/sobrepostos); com poucos pontos, todos os valores > 0 aparecem.
+    // O último ponto já tem o rótulo grande da ponta, então entra só como área reservada.
+    (function () {
+      var s0 = seriesArr[0];
+      var lastI0 = s0.values.length - 1;
+      var color0 = s0.color || seriesColor(0);
+      // Celular: sem o prefixo "R$ " (o eixo Y já diz a moeda) pra caber mais rótulos
+      var fmtPoint = opts.pointFormat || (compact ? function (v) { return format(v).replace(/^R\$\s?/, ""); } : format);
+      var placed = [];
+      var endText = format(s0.values[lastI0]);
+      placed.push({ x1: xAt(lastI0) - 24, x2: xAt(lastI0) + 14 + endText.length * 7.5 });
+      var order = [];
+      s0.values.forEach(function (v, i) { if (i !== lastI0 && v > 0) order.push(i); });
+      order.sort(function (a, b) { return s0.values[b] - s0.values[a]; });
+      order.forEach(function (i) {
+        var v = s0.values[i];
+        var text = fmtPoint(v);
+        var w = text.length * 6.6 + 6;
+        var cx = Math.min(Math.max(xAt(i), marginLeft + w / 2), W - marginRight - w / 2 + 6);
+        var py = yAt(v);
+        var above = py - 10 >= marginTop + 4;
+        var ty = above ? py - 9 : py + 17;
+        var box = { x1: cx - w / 2 - 3, x2: cx + w / 2 + 3 };
+        for (var q = 0; q < placed.length; q++) {
+          var o = placed[q];
+          if (box.x1 < o.x2 && box.x2 > o.x1) return;
+        }
+        placed.push(box);
+        var pt = document.createElementNS(svgNS, "circle");
+        pt.setAttribute("cx", xAt(i)); pt.setAttribute("cy", py); pt.setAttribute("r", 3);
+        pt.setAttribute("fill", color0); pt.setAttribute("stroke", surfaceColor); pt.setAttribute("stroke-width", 1.5);
+        svg.appendChild(pt);
+        var tl = document.createElementNS(svgNS, "text");
+        tl.setAttribute("class", "point-label");
+        tl.setAttribute("x", cx); tl.setAttribute("y", ty);
+        tl.setAttribute("text-anchor", "middle");
+        tl.textContent = text;
+        svg.appendChild(tl);
+      });
+    })();
+
+    // Camada de interação: crosshair vertical + um ponto de destaque por série, sempre
+    // visível ao hover/foco — nunca a única forma de ler um valor (rótulo final + legenda
+    // já cobrem o essencial sem precisar passar o mouse).
+    var crosshair = document.createElementNS(svgNS, "line");
+    crosshair.setAttribute("class", "crosshair-line");
+    crosshair.setAttribute("y1", marginTop); crosshair.setAttribute("y2", H - marginBottom);
+    svg.appendChild(crosshair);
+    var hoverDots = seriesArr.map(function (s, si) {
+      var c = document.createElementNS(svgNS, "circle");
+      c.setAttribute("r", 4.5);
+      c.setAttribute("fill", s.color || seriesColor(si));
+      c.setAttribute("stroke", surfaceColor);
+      c.setAttribute("stroke-width", 2);
+      c.style.opacity = 0;
+      svg.appendChild(c);
+      return c;
+    });
+    var hoverRect = document.createElementNS(svgNS, "rect");
+    hoverRect.setAttribute("class", "hover-layer");
+    hoverRect.setAttribute("x", marginLeft); hoverRect.setAttribute("y", marginTop);
+    hoverRect.setAttribute("width", Math.max(plotW, 1)); hoverRect.setAttribute("height", Math.max(plotH, 1));
+    hoverRect.setAttribute("tabindex", "0");
+    svg.appendChild(hoverRect);
+
+    var wrap = el("div", { class: "line-chart-wrap line-chart" }, [svg]);
+    var tooltip = el("div", { class: "chart-tooltip" });
+    wrap.appendChild(tooltip);
+    container.appendChild(wrap);
+
+    var focusIdx = 0;
+    function showAt(i) {
+      i = Math.max(0, Math.min(n - 1, i));
+      focusIdx = i;
+      crosshair.setAttribute("x1", xAt(i)); crosshair.setAttribute("x2", xAt(i));
+      crosshair.style.opacity = 1;
+      tooltip.innerHTML = "";
+      tooltip.appendChild(el("div", { class: "date" }, [document.createTextNode(primaryDates[i] || ("Dia " + (i + 1)))]));
+      seriesArr.forEach(function (s, si) {
+        var v = s.values[i];
+        var color = s.color || seriesColor(si);
+        hoverDots[si].style.opacity = v == null ? 0 : 1;
+        if (v != null) { hoverDots[si].setAttribute("cx", xAt(i)); hoverDots[si].setAttribute("cy", yAt(v)); }
+        tooltip.appendChild(el("div", { class: "row" }, [
+          el("span", { class: "linekey", style: "background:" + color }),
+          el("span", { class: "name" }, [document.createTextNode(s.name)]),
+          el("span", { class: "val" }, [document.createTextNode(v == null ? "—" : format(v))])
+        ]));
+      });
+      var px = (xAt(i) / W) * wrap.clientWidth;
+      var ttW = tooltip.offsetWidth || 170;
+      var left = Math.min(Math.max(px + 14, 0), Math.max(wrap.clientWidth - ttW - 4, 0));
+      tooltip.style.left = left + "px";
+      tooltip.style.top = "4px";
+      tooltip.style.opacity = 1;
+    }
+    function hide() {
+      crosshair.style.opacity = 0;
+      hoverDots.forEach(function (d) { d.style.opacity = 0; });
+      tooltip.style.opacity = 0;
+    }
+    function indexFromClientX(clientX) {
+      var rect = svg.getBoundingClientRect();
+      var relX = rect.width ? ((clientX - rect.left) / rect.width) * W : 0;
+      var frac = plotW ? (relX - marginLeft) / plotW : 0;
+      return Math.round(frac * (n - 1));
+    }
+    hoverRect.addEventListener("pointermove", function (e) { showAt(indexFromClientX(e.clientX)); });
+    hoverRect.addEventListener("pointerdown", function (e) { showAt(indexFromClientX(e.clientX)); });
+    hoverRect.addEventListener("pointerleave", hide);
+    hoverRect.addEventListener("focus", function () { showAt(focusIdx); });
+    hoverRect.addEventListener("blur", hide);
+    hoverRect.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight") { showAt(focusIdx + 1); e.preventDefault(); }
+      else if (e.key === "ArrowLeft") { showAt(focusIdx - 1); e.preventDefault(); }
+    });
+
+    if (showLegend) {
+      var legend = el("div", { class: "legend" });
+      seriesArr.forEach(function (s, si) {
+        var total = s.values.reduce(function (a, b) { return a + (b || 0); }, 0);
+        legend.appendChild(el("div", { class: "row" }, [
+          el("span", { class: "linekey", style: "background:" + (s.color || seriesColor(si)) }),
+          el("span", { class: "name" }, [document.createTextNode(s.name)]),
+          el("span", { class: "num" }, [document.createTextNode(format(total))])
+        ]));
+      });
+      wrap.appendChild(legend);
+    }
   }
 
   function renderStat(container, value, sub) {
@@ -1443,6 +2079,78 @@
   var expFreteVendas = expandableCard("frete-regiao-vendas", 10);
   var expReceitaRegiao = expandableCard("receita-regiao", 12);
   var expRanking = expandableCard("ranking-estoque", 15);
+  var expTopProdutos = expandableCard("top-produtos", 15);
+
+  // Filtro de status: os status possíveis não são uma lista fixa (dependem do que a Vtex
+  // manda), por isso são descobertos a partir de /api/overview/tracking-pedido — chamado SEM
+  // filtro de data, pra pegar o universo histórico completo e os chips não aparecerem/sumirem
+  // conforme o período selecionado muda. Padrão = tudo marcado exceto cancelado, pra manter os
+  // números que o painel já mostrava antes desse filtro existir. O mesmo filtro vale tanto
+  // pra aba Vendas (projeção, vendas diárias, top produtos) quanto pra Detalhamento vendas
+  // (que depende dele na maioria dos cards) — por isso aparece nas duas abas, com os dois
+  // conjuntos de chips sempre sincronizados entre si.
+  var VENDAS_STATUS = { all: [], active: null }; // active: array de status marcados; null = filtro ainda não carregado (usa o padrão do backend)
+  function statusParams() {
+    return VENDAS_STATUS.active ? { status: VENDAS_STATUS.active.join(",") } : {};
+  }
+
+  var STATUS_CHIPS_IDS = ["vendasStatusChips", "detStatusChips"];
+  var STATUS_FILTER_WRAPPER_IDS = ["vendasStatusFilter", "detStatusFilter"];
+  var STATUS_RESET_BTN_IDS = ["vendasStatusReset", "detStatusReset"];
+
+  function renderStatusChips() {
+    STATUS_CHIPS_IDS.forEach(function (id) {
+      var chips = document.getElementById(id);
+      if (!chips) return;
+      chips.innerHTML = "";
+      VENDAS_STATUS.all.forEach(function (s) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "status-chip" + (VENDAS_STATUS.active.indexOf(s) > -1 ? " active" : "");
+        btn.dataset.status = s;
+        btn.textContent = STATUS_LABELS[s] || s;
+        chips.appendChild(btn);
+      });
+    });
+  }
+
+  var statusFilterLoaded = false;
+  function ensureStatusFilter() {
+    if (statusFilterLoaded) return;
+    statusFilterLoaded = true;
+    get("/api/overview/tracking-pedido").then(function (rows) {
+      var statuses = (rows || []).map(function (r) { return r.status; }).filter(Boolean);
+      if (!statuses.length) return;
+      VENDAS_STATUS.all = statuses;
+      VENDAS_STATUS.active = statuses.filter(function (s) { return s !== "canceled" && s !== "cancelled"; });
+      renderStatusChips();
+      STATUS_FILTER_WRAPPER_IDS.forEach(function (id) { var wrap = document.getElementById(id); if (wrap) wrap.hidden = false; });
+    }).catch(function () {});
+  }
+
+  STATUS_CHIPS_IDS.forEach(function (id) {
+    var chips = document.getElementById(id);
+    if (!chips) return;
+    chips.addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-status]");
+      if (!btn) return;
+      btn.classList.toggle("active");
+      VENDAS_STATUS.active = Array.prototype.slice.call(chips.querySelectorAll(".status-chip.active")).map(function (b) { return b.dataset.status; });
+      if (VENDAS_STATUS.active.length === 0) { btn.classList.add("active"); VENDAS_STATUS.active = [btn.dataset.status]; }
+      renderStatusChips();
+      invalidateAndReload();
+    });
+  });
+
+  STATUS_RESET_BTN_IDS.forEach(function (id) {
+    var btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      VENDAS_STATUS.active = VENDAS_STATUS.all.filter(function (s) { return s !== "canceled" && s !== "cancelled"; });
+      renderStatusChips();
+      invalidateAndReload();
+    });
+  });
 
   var categoriasLoaded = false;
   function ensureCategoriasOptions() {
@@ -1463,7 +2171,7 @@
   function loadAbc() {
     var abcBody = cardBody("card-curva-abc");
     skeleton(abcBody, 8);
-    get("/api/vendas/curva-abc", Object.assign({}, periodParams(), {
+    get("/api/vendas/curva-abc", Object.assign({}, periodParams(), statusParams(), {
       categoria: abcState.categoria === "todas" ? undefined : abcState.categoria,
       metric: abcState.metric,
       classes: abcState.classes.join(",")
@@ -1494,12 +2202,124 @@
     loadAbc();
   });
 
+  var DIA_SEMANA_NOMES = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
+
+  // Projeção de fechamento do dia: não depende do período selecionado no topo do painel (a
+  // API sempre olha pra "hoje" pra trás numa janela fixa — ver PROJECAO_LOOKBACK_DIAS no
+  // backend), só do filtro de status. Por isso não usa periodParams() aqui.
+  var MES_NOMES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+  // Card com duas colunas: fechamento do DIA e fechamento do MÊS (cada uma decide sozinha o
+  // que mostrar conforme o próprio "estado" — o dia pode estar "cedo demais" e o mês já ter
+  // estimativa, ou vice-versa).
+  function projCol(label) {
+    var col = el("div", { class: "proj-col" });
+    col.appendChild(el("div", { class: "proj-label" }, [document.createTextNode(label)]));
+    return col;
+  }
+  // renderStat limpa o container que recebe; aqui precisamos manter o rótulo da coluna
+  function statIn(col, value, sub) { var h = el("div"); col.appendChild(h); renderStat(h, value, sub); }
+  function loadProjecao() {
+    var body = cardBody("card-projecao-dia");
+    skeleton(body, 3);
+    get("/api/vendas/projecao-fechamento-dia", statusParams()).then(function (d) {
+      var dia = DIA_SEMANA_NOMES[d.diaSemana] || "hoje";
+      var horaLabel = fmtInt.format(d.horaAtual) + "h";
+      body.innerHTML = "";
+      var grid = el("div", { class: "proj-grid" });
+
+      // ----- Dia -----
+      var colDia = projCol("Hoje · " + dia);
+      if (d.estado === "dados_insuficientes") {
+        statIn(colDia, fmtBRL.format(d.receitaHoje), "Vendido até agora · ainda não há histórico suficiente de " + dia + "s pra projetar o dia.");
+      } else if (d.estado === "cedo_demais") {
+        statIn(colDia, fmtBRL.format(d.receitaHoje), "Vendido até as " + horaLabel + " · ainda é cedo pra projetar o fechamento com confiança.");
+      } else {
+        statIn(colDia, fmtBRL.format(d.projecaoFechamento), "Projeção de fechamento de hoje");
+        colDia.appendChild(el("p", { class: "caption" }, [
+          document.createTextNode(
+            "Vendido até as " + horaLabel + ": " + fmtBRL.format(d.receitaHoje) +
+            " · historicamente " + fmtPct(d.percentualDecorrido, 0) + " da receita de um(a) " + dia + " já acontece até essa hora" +
+            " · média histórica do dia: " + fmtBRL.format(d.mediaHistoricaDiaSemana) + " (" + fmtInt.format(d.diasAmostra) + (d.diasAmostra === 1 ? " amostra" : " amostras") + ")"
+          )
+        ]));
+      }
+      grid.appendChild(colDia);
+
+      // ----- Mês -----
+      var m = d.mensal;
+      if (m) {
+        var mesNome = MES_NOMES[Number(String(m.mes).slice(5, 7)) - 1] || "mês";
+        var colMes = projCol("Mês · " + mesNome);
+        var andamento = "dia " + fmtInt.format(m.diaDoMes) + " de " + fmtInt.format(m.diasNoMes);
+        if (m.estado === "dados_insuficientes" || m.projecaoMes == null) {
+          statIn(colMes, fmtBRL.format(m.receitaMes), "Vendido no mês até agora (" + andamento + ") · ainda não há histórico suficiente pra projetar o fechamento.");
+        } else {
+          statIn(colMes, fmtBRL.format(m.projecaoMes), "Projeção de fechamento de " + mesNome);
+          renderProgress(colMes, m.projecaoMes > 0 ? (m.receitaMes / m.projecaoMes) * 100 : 0,
+            fmtBRL.format(m.receitaMes) + " vendidos no mês (" + andamento + ") · " + fmtPct(m.projecaoMes > 0 ? (m.receitaMes / m.projecaoMes) * 100 : 0, 0) + " da projeção");
+          colMes.appendChild(el("p", { class: "caption" }, [document.createTextNode(
+            m.estado === "ok"
+              ? "Estimativa = vendido no mês + o que falta de hoje + a média histórica de cada dia que ainda falta (por dia da semana, últimas 12 semanas)."
+              : "Estimativa pelo ritmo do próprio mês (média diária até ontem) — ainda não há histórico suficiente pra usar o padrão por dia da semana."
+          )]));
+        }
+        grid.appendChild(colMes);
+      }
+      body.appendChild(grid);
+    }).catch(function () { showError(body); });
+  }
+
+  // Aba "Vendas": só o essencial do dia a dia (projeção, evolução diária e top produtos).
+  // Tudo o mais que já existia aqui foi pra "Detalhamento vendas" (loadDetalhamentoVendas
+  // logo abaixo) — pedido explícito do usuário pra deixar essa aba mais enxuta.
   function loadVendas() {
+    ensureStatusFilter();
+    loadProjecao();
+
+    var diariaBody = cardBody("card-venda-diaria");
+    skeleton(diariaBody, 4);
+    Promise.all([
+      get("/api/vendas/venda-diaria", Object.assign({}, periodParams(), statusParams())),
+      PERIOD.compare ? get("/api/vendas/venda-diaria", Object.assign({}, prevPeriodParams(), statusParams())) : Promise.resolve(null)
+    ]).then(function (res) {
+      var atual = res[0] || [];
+      var anterior = res[1];
+      var fmtDiaMes = function (iso) { var p = iso.split("-"); return p[2] + "/" + p[1]; };
+      var series = [{
+        name: "Período atual",
+        color: seriesColor(0),
+        values: atual.map(function (r) { return r.receita; }),
+        dates: atual.map(function (r) { return fmtDiaMes(r.data); })
+      }];
+      if (anterior && anterior.length) {
+        series.push({
+          name: "Período anterior",
+          color: seriesColor(1),
+          values: anterior.map(function (r) { return r.receita; }),
+          dates: anterior.map(function (r) { return fmtDiaMes(r.data); })
+        });
+      }
+      renderLineChart(diariaBody, series, { format: function (v) { return fmtBRL.format(v); } });
+    }).catch(function () { showError(diariaBody); });
+
+    var topProdutosBody = cardBody("card-top-produtos");
+    skeleton(topProdutosBody, 8);
+    get("/api/vendas/produtos-mais-vendidos", Object.assign({}, periodParams(), statusParams(), { limit: 60 })).then(function (rows) {
+      expTopProdutos(rows, function (body, rs) {
+        renderTopProdutos(body, rs);
+      });
+    }).catch(function () { showError(topProdutosBody); });
+  }
+
+  // Aba "Detalhamento vendas": todo o resto que antes vivia em "Vendas".
+  function loadDetalhamentoVendas() {
     ensureCategoriasOptions();
+    ensureStatusFilter();
 
     var metaBody = cardBody("card-receita-meta");
     skeleton(metaBody, 2);
-    get("/api/vendas/receita-vs-meta", periodParams()).then(function (d) {
+    get("/api/vendas/receita-vs-meta", Object.assign({}, periodParams(), statusParams())).then(function (d) {
       var subtitulo = d.meta
         ? ("Meta de " + fmtMes(d.mes) + ": <b>" + fmtBRL.format(d.meta) + "</b>")
         : ("Sem meta cadastrada para " + fmtMes(d.mes));
@@ -1509,27 +2329,88 @@
 
     var catBody = cardBody("card-venda-categoria");
     skeleton(catBody, 6);
-    get("/api/vendas/por-categoria", periodParams()).then(function (rows) {
+    get("/api/vendas/por-categoria", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       expCategoria(rows, function (body, rs) { renderBarList(body, rs, { label: function (r) { return r.categoria; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } }); });
     }).catch(function () { showError(catBody); });
 
     var tipoBody = cardBody("card-tipo-venda");
     skeleton(tipoBody, 2);
-    get("/api/vendas/por-tipo", periodParams()).then(function (rows) {
+    get("/api/vendas/por-tipo", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       renderDonut(tipoBody, rows, { value: function (r) { return r.receita; }, label: function (r) { return r.tipo; }, format: function (v) { return fmtBRL.format(v); } });
     }).catch(function () { showError(tipoBody); });
+
+    var novosBody = cardBody("card-novos-recorrentes");
+    skeleton(novosBody, 2);
+    get("/api/vendas/novos-recorrentes", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
+      renderDonut(novosBody, rows, { value: function (r) { return r.receita; }, label: function (r) { return r.tipo; }, format: function (v) { return fmtBRL.format(v); } });
+      var novo = rows.find(function (r) { return r.tipo === "Novo"; });
+      var recorrente = rows.find(function (r) { return r.tipo === "Recorrente"; });
+      var clientesNovo = novo ? novo.clientes : 0;
+      var clientesRecorrente = recorrente ? recorrente.clientes : 0;
+      var totalClientes = clientesNovo + clientesRecorrente;
+      if (totalClientes > 0) {
+        novosBody.appendChild(el("p", { class: "caption", style: "margin-top:12px" }, [
+          document.createTextNode(fmtPct((clientesRecorrente / totalClientes) * 100, 0) + " dos clientes do período já eram recorrentes.")
+        ]));
+      }
+    }).catch(function () { showError(novosBody); });
+
+    var cupomBody = cardBody("card-cupons");
+    skeleton(cupomBody, 6);
+    Promise.all([get("/api/vendas/cupons", Object.assign({}, periodParams(), statusParams())), get("/api/vendas/comparativo-cupom", Object.assign({}, periodParams(), statusParams()))])
+      .then(function (res) {
+        var cupons = res[0] || [];
+        var comparativo = res[1] || [];
+        renderTable(cupomBody, [
+          { label: "Cupom", value: function (r) { return r.cupom; } },
+          { label: "Pedidos", num: true, value: function (r) { return fmtInt.format(r.pedidos); } },
+          { label: "Receita", num: true, value: function (r) { return fmtBRL.format(r.receita); } },
+          { label: "Desconto", num: true, value: function (r) { return fmtBRL.format(r.desconto); } },
+          { label: "Ticket médio", num: true, value: function (r) { return fmtBRLCents.format(r.ticketMedio); } }
+        ], cupons);
+        var comCupom = comparativo.find(function (r) { return r.grupo === "Com cupom"; });
+        var semCupom = comparativo.find(function (r) { return r.grupo === "Sem cupom"; });
+        if (comCupom && semCupom) {
+          var totalPedidos = comCupom.pedidos + semCupom.pedidos;
+          var pctComCupom = totalPedidos ? (comCupom.pedidos / totalPedidos) * 100 : 0;
+          cupomBody.appendChild(el("p", { class: "caption", style: "margin-top:12px" }, [
+            document.createTextNode(
+              fmtPct(pctComCupom, 0) + " dos pedidos usaram cupom · ticket médio com cupom " + fmtBRLCents.format(comCupom.ticketMedio) +
+              " vs. sem cupom " + fmtBRLCents.format(semCupom.ticketMedio)
+            )
+          ]));
+        }
+      }).catch(function () { showError(cupomBody); });
+
+    var DIA_SEMANA_LABELS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+    var DIA_SEMANA_ORDEM = [1, 2, 3, 4, 5, 6, 0]; // segunda -> domingo, como na planilha de análise
+
+    var diaBody = cardBody("card-sazonalidade-dia");
+    var horaBody = cardBody("card-sazonalidade-hora");
+    skeleton(diaBody, 7);
+    skeleton(horaBody, 8);
+    get("/api/vendas/sazonalidade", Object.assign({}, periodParams(), statusParams())).then(function (d) {
+      var porDia = DIA_SEMANA_ORDEM.map(function (dow) {
+        var found = (d.porDiaSemana || []).find(function (r) { return r.diaSemana === dow; });
+        return { label: DIA_SEMANA_LABELS[dow], receita: found ? found.receita : 0 };
+      });
+      renderBarList(diaBody, porDia, { label: function (r) { return r.label; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } });
+
+      var porHora = (d.porHora || []).map(function (r) { return { label: r.hora + "h", receita: r.receita }; });
+      renderBarList(horaBody, porHora, { label: function (r) { return r.label; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } });
+    }).catch(function () { showError(diaBody); showError(horaBody); });
 
     loadAbc();
 
     var pagBody = cardBody("card-meios-pagamento");
     skeleton(pagBody, 6);
-    get("/api/vendas/meios-pagamento", periodParams()).then(function (rows) {
+    get("/api/vendas/meios-pagamento", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       expPagamento(rows, function (body, rs) { renderBarList(body, rs, { label: function (r) { return r.metodo; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } }); });
     }).catch(function () { showError(pagBody); });
 
     var freteBody = cardBody("card-frete-regiao-vendas");
     skeleton(freteBody, 6);
-    get("/api/vendas/eficiencia-frete-regiao", periodParams()).then(function (rows) {
+    get("/api/vendas/eficiencia-frete-regiao", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       var sorted = rows.slice().sort(function (a, b) { return b.pedidos - a.pedidos; });
       expFreteVendas(sorted, function (body, rs) {
         renderTable(body, [
@@ -1543,7 +2424,7 @@
 
     var regiaoBody = cardBody("card-receita-regiao");
     skeleton(regiaoBody, 6);
-    Promise.all([get("/api/vendas/receita-por-regiao", periodParams()), PERIOD.compare ? get("/api/vendas/receita-por-regiao", prevPeriodParams()) : Promise.resolve(null)])
+    Promise.all([get("/api/vendas/receita-por-regiao", Object.assign({}, periodParams(), statusParams())), PERIOD.compare ? get("/api/vendas/receita-por-regiao", Object.assign({}, prevPeriodParams(), statusParams())) : Promise.resolve(null)])
       .then(function (res) {
         expReceitaRegiao(res[0], function (body, rs) {
           renderTable(body, withDeltaColumn([
@@ -1557,14 +2438,14 @@
 
     var rankBody = cardBody("card-ranking-estoque");
     skeleton(rankBody, 8);
-    get("/api/vendas/ranking-produtos-estoque", Object.assign({}, periodParams(), { limit: 500 })).then(function (rows) {
+    get("/api/vendas/ranking-produtos-estoque", Object.assign({}, periodParams(), statusParams(), { limit: 500 })).then(function (rows) {
       expRanking(rows, function (body, rs) {
         renderTable(body, [
           { label: "Produto", wrap: true, value: function (r) { return r.produto; } },
           { label: "Vendidas", num: true, value: function (r) { return fmtInt.format(r.unidadesVendidas); } },
-          { label: "Estoque", render: function (r) { var span = document.createElement("span"); var low = r.estoqueDisponivel <= 5; span.className = "badge " + (low ? "stock-low" : "stock-ok"); span.textContent = fmtInt.format(r.estoqueDisponivel); return span; } },
+          { label: "Estoque", render: function (r) { return estoqueBadge(r.estoqueDisponivel, r.estoqueIlimitado); } },
           { label: "Sugestão de reposição", num: true, render: function (r) {
-              if (!r.sugestaoReposicao) return document.createTextNode("—");
+              if (r.estoqueIlimitado || !r.sugestaoReposicao) return document.createTextNode("—");
               var span = document.createElement("span");
               span.className = "badge stock-low";
               span.textContent = "+" + fmtInt.format(r.sugestaoReposicao);
@@ -1708,7 +2589,7 @@
         var d = res[0], prev = res[1];
         renderStat(entreguesBody, fmtInt.format(d.entregues), "pedidos com entrega confirmada");
         if (prev) appendDelta(entreguesBody, pctDelta(d.entregues, prev.entregues));
-        renderStat(prazoBody, fmtPct(d.noPrazoPct, 0), "dentro do prazo prometido");
+        renderStat(prazoBody, fmtPct(d.noPrazoPct, 0), "dentro do prazo prometido · " + fmtInt.format(d.avaliadas || 0) + " entregas avaliadas");
         if (d.noPrazoPct != null) renderProgress(prazoBody, d.noPrazoPct);
         if (prev) appendDelta(prazoBody, pctDelta(d.noPrazoPct, prev.noPrazoPct));
         renderStat(diasBody, fmtDays(d.prazoMedioReal), "prometido: " + fmtDays(d.prazoMedioPrometido));
@@ -1724,6 +2605,7 @@
         { label: "Pedidos", num: true, value: function (r) { return fmtInt.format(r.pedidos); } },
         { label: "Prazo real", num: true, value: function (r) { return fmtDays(r.prazoMedioReal); } },
         { label: "Prazo prometido", num: true, value: function (r) { return fmtDays(r.prazoMedioPrometido); } },
+        { label: "No prazo", num: true, value: function (r) { return fmtPct(r.noPrazoPct, 0); } },
         { label: "Frete médio", num: true, value: function (r) { return fmtBRLCents.format(r.custoMedioFrete); } }
       ], sorted);
     }).catch(function () { showError(fullBody); });
@@ -2118,6 +3000,9 @@
     }, "warehouses");
   });
 
+  document.getElementById("backfillPrazosBtn").addEventListener("click", function () {
+    runAdminAction("backfillPrazosBtn", "syncWarehousesMsg", "/api/sync/backfill-order-fields", "Iniciando…", "Entregas e clientes recalculados com sucesso.", "backfill-order-fields");
+  });
   document.getElementById("backfillItemsBtn").addEventListener("click", function () {
     runAdminAction("backfillItemsBtn", "syncWarehousesMsg", "/api/sync/backfill-categories", "Iniciando…", "Pedidos recalculados com sucesso.", "backfill-categories");
   });
@@ -2140,22 +3025,80 @@
     }).finally(function () { btn.disabled = false; btn.textContent = original; });
   });
 
+  document.getElementById("debugChannelBtn").addEventListener("click", function () {
+    var btn = document.getElementById("debugChannelBtn");
+    var out = document.getElementById("debugChannelOutput");
+    var original = btn.textContent;
+    btn.disabled = true; btn.textContent = "Buscando…";
+    get("/api/debug/sample-order-channel").then(function (res) {
+      out.hidden = false;
+      out.textContent = JSON.stringify(res, null, 2);
+    }).catch(function (err) {
+      out.hidden = false;
+      out.textContent = "Falha: " + err.message;
+    }).finally(function () { btn.disabled = false; btn.textContent = original; });
+  });
+
+  document.getElementById("debugProductImageBtn").addEventListener("click", function () {
+    var btn = document.getElementById("debugProductImageBtn");
+    var out = document.getElementById("debugProductImageOutput");
+    var productId = (document.getElementById("debugProductImageId").value || "").trim();
+    var original = btn.textContent;
+    btn.disabled = true; btn.textContent = "Buscando…";
+    // Usa o mesmo período/status selecionados no topo do painel, pra investigar exatamente
+    // o que o card "Top produtos mais vendidos" está mostrando agora (o SKU representativo
+    // de cada produto depende do filtro ativo).
+    get("/api/debug/sample-product-image", Object.assign({}, periodParams(), statusParams(), productId ? { productId: productId } : {})).then(function (res) {
+      out.hidden = false;
+      out.textContent = JSON.stringify(res, null, 2);
+    }).catch(function (err) {
+      out.hidden = false;
+      out.textContent = "Falha: " + err.message;
+    }).finally(function () { btn.disabled = false; btn.textContent = original; });
+  });
+
+  document.getElementById("debugStockBtn").addEventListener("click", function () {
+    var btn = document.getElementById("debugStockBtn");
+    var out = document.getElementById("debugStockOutput");
+    var productName = (document.getElementById("debugStockName").value || "").trim();
+    var productId = (document.getElementById("debugStockId").value || "").trim();
+    var original = btn.textContent;
+    if (!productName && !productId) {
+      out.hidden = false;
+      out.textContent = "Preencha o nome ou o ID do produto.";
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Buscando…";
+    get("/api/debug/sample-product-stock", Object.assign({}, productId ? { productId: productId } : { productName: productName })).then(function (res) {
+      out.hidden = false;
+      out.textContent = JSON.stringify(res, null, 2);
+    }).catch(function (err) {
+      out.hidden = false;
+      out.textContent = "Falha: " + err.message;
+    }).finally(function () { btn.disabled = false; btn.textContent = original; });
+  });
+
   // ==================== Estoque Cia ====================
   // Menu com o estoque de todas as lojas + CD, a partir da planilha "Estoque Omni" que é
-  // carregada todo dia (botão "Carregar planilha" ou rotina do GitHub). Todos os números
-  // vêm prontos do backend (/api/estoque-cia/dataset/:nome, calculados em
-  // src/estoqueCia/processar.js); aqui só filtramos, ordenamos e desenhamos.
+  // carregada todo dia (botão "Carregar planilha" ou rotina do GitHub). O backend entrega a
+  // base produto × loja já enriquecida (/api/estoque-cia/dataset/sku_loja, ver
+  // src/estoqueCia/processar.js) e as listas de ação; aqui o navegador junta com produtos e
+  // lojas e recalcula tudo para a combinação de filtros escolhida (todo filtro é de
+  // múltipla escolha, com "Tudo").
   var EstoqueCia = (function () {
     var D3_URL = "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js";
     var CD = "CD / Outros";
+    var RETORNO_DEFEITO = "RJ RETORNO DEFEITO";
+    var TIPOS = ["OMNI", "Loja não OMNI", CD];
     var NF = new Intl.NumberFormat("pt-BR");
     var fi = function (v) { return v == null || v === "" || isNaN(v) ? "—" : NF.format(Math.round(v)); };
-    var fd = function (v) { return v == null || isNaN(v) ? "—" : new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
-    var fp = function (v) { return v == null || isNaN(v) ? "—" : new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
+    var fd = function (v) { return v == null || isNaN(v) || !isFinite(v) ? "—" : new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
+    var fp = function (v) { return v == null || isNaN(v) || !isFinite(v) ? "—" : new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v); };
     var fpp = function (v) { return (v > 0 ? "+" : "") + fd(v) + " p.p."; };
     var fbrlC = function (v) { return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", notation: "compact", maximumFractionDigits: 1 }).format(v || 0); };
     var fcomp = function (v) { return v >= 10000 ? new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 }).format(v) : fi(v); };
-    var inScope = function (tipo, esc) { return esc === "Todas" || (esc === "Lojas" ? tipo !== CD : tipo === esc); };
+    var div = function (a, b) { return b ? a / b : 0; };
+    var pl = function (n, um, varios) { return fi(n) + " " + (n === 1 ? um : varios); };
     var STCLS = { Quebrada: "bad", Solta: "warn", Incompleta: "mut", Completa: "ok" };
     var C_MAIN = "var(--accent)", C_ALT = "var(--series-2)", C_MUTED = "var(--text-muted)";
 
@@ -2163,9 +3106,10 @@
     var $ = function (s) { return root().querySelector(s); };
     var $$ = function (s) { return Array.prototype.slice.call(root().querySelectorAll(s)); };
 
-    var S = { sub: "decisoes", escopo: "Lojas", heat: "pecas", loja: null, cat: null, mixf: "", qGrade: "", qCd: "",
-      qProd: "", fCat: "", fSt: "", fFoto: "", fLiq: "", prod: null, sorts: {},
-      pick: { dec: new Set(), rank: new Set(), prod: new Set() } };
+    // Filtros: cada um é um Set; vazio = "Tudo".
+    var F = { tipo: new Set(), loja: new Set(), grupo: new Set(), linha: new Set(),
+      acao: new Set(), plano: new Set(), st: new Set(), foto: new Set(), liq: new Set() };
+    var S = { sub: "decisoes", heat: "pecas", qGrade: "", qCd: "", qProd: "", prod: null, sorts: {} };
     var D = {};          // cache dos datasets: nome -> {status, rows, msg}
     var cargas = null;   // lista de cargas (null = não carregou ainda)
     var wired = false;
@@ -2176,7 +3120,7 @@
       if (!d) {
         D[nome] = { status: "loading" };
         apiFetch("/api/estoque-cia/dataset/" + nome).then(function (r) {
-          D[nome] = { status: "ok", rows: r.rows, dataRef: r.dataRef };
+          D[nome] = { status: "ok", rows: r.rows };
           draw();
         }).catch(function (e) {
           D[nome] = { status: "error", msg: e.message };
@@ -2186,7 +3130,10 @@
       }
       return d.status === "ok" ? d.rows : null;
     }
-    var failed = function (nome) { return D[nome] && D[nome].status === "error"; };
+    function erroDe() {
+      for (var i = 0; i < arguments.length; i++) { var d = D[arguments[i]]; if (d && d.status === "error") return d.msg || "erro"; }
+      return null;
+    }
     function carregarCargas() {
       return apiFetch("/api/estoque-cia/cargas").then(function (r) { cargas = r.cargas || []; draw(); })
         .catch(function () { cargas = cargas || []; draw(); });
@@ -2199,10 +3146,68 @@
       return loadD3.p;
     }
 
+    // Base produto × loja juntando produtos (categoria, linha, preço, foto, liquidação) e lojas (tipo).
+    var M = null;
+    function modelo() {
+      var lojas = ds("lojas"), prod = ds("produtos"), sku = ds("sku_loja");
+      if (!lojas || !prod || !sku) return null;
+      if (M && M.src === sku && M.srcP === prod && M.srcL === lojas) return M;
+      var tipoDe = new Map(lojas.map(function (r) { return [r.filial, r.tipo]; }));
+      var pmap = new Map(prod.map(function (r) { return [r.Ref_Cor, r]; }));
+      var tamCia = new Map();
+      var rows = sku.map(function (r) {
+        var p = pmap.get(r.ref) || {};
+        var tam = String(r.grade || "").split("-").map(Number);
+        var bits = tamCia.get(r.ref) || 0;
+        tam.forEach(function (x, j) { if (x > 0) bits |= (1 << j); });
+        tamCia.set(r.ref, bits);
+        return { ref: r.ref, filial: r.filial, tipo: tipoDe.get(r.filial) || "", grupo: p.grupo || "SEM GRUPO", linha: p.linha || "SEM LINHA",
+          nome: p.nome || "", preco: Number(p.preco) || 0, liqui: p.liqui === "Liqui", foto: p.foto === "Com foto",
+          pecas: Number(r.pecas) || 0, ecom: Number(r.ecom) || 0, status: r.status || "", falta: r.falta || "", cd: r.cd || "", grade: r.grade, tam: tam };
+      });
+      var pop = function (n) { var c = 0; while (n) { c += n & 1; n >>>= 1; } return c; };
+      rows.forEach(function (r) { r.nszCia = pop(tamCia.get(r.ref) || 0); });
+      var uniq = function (f) { return Array.from(new Set(rows.map(f))).sort(function (a, b) { return a.localeCompare(b, "pt-BR"); }); };
+      // mix médio da rede (lojas, todas as categorias) — referência fixa pro ajuste de mix
+      var redeG = new Map(), redeT = 0;
+      rows.forEach(function (r) { if (r.tipo !== CD) { redeG.set(r.grupo, (redeG.get(r.grupo) || 0) + r.pecas); redeT += r.pecas; } });
+      M = { src: sku, srcP: prod, srcL: lojas, rows: rows, pmap: pmap, tipoDe: tipoDe, lojas: lojas,
+        grupos: uniq(function (r) { return r.grupo; }), linhas: uniq(function (r) { return r.linha; }),
+        shareRede: function (g) { return div(redeG.get(g) || 0, redeT); } };
+      return M;
+    }
+    var tem = function (set, v) { return set.size === 0 || set.has(v); };
+    var passaLoja = function (filial, tipo) { return tem(F.tipo, tipo) && tem(F.loja, filial); };
+    var passaProd = function (grupo, linha) { return tem(F.grupo, grupo) && (linha == null || tem(F.linha, linha)); };
+    var passa = function (r) { return passaLoja(r.filial, r.tipo) && passaProd(r.grupo, r.linha); };
+    function filtrados() { var m = modelo(); return m ? m.rows.filter(passa) : null; }
+    var filtroAtivo = function () { return F.tipo.size || F.loja.size || F.grupo.size || F.linha.size; };
+
+    function agg(rows) {
+      var refs = new Set(), refsQ = new Set(), refsS = new Set(), lojas = new Set();
+      var a = { pecas: 0, valor: 0, liq: 0, semFoto: 0, ecom: 0 };
+      rows.forEach(function (r) {
+        a.pecas += r.pecas; a.valor += r.pecas * r.preco; a.ecom += r.ecom;
+        if (r.liqui) a.liq += r.pecas;
+        if (!r.foto) a.semFoto += r.pecas;
+        refs.add(r.ref); lojas.add(r.filial);
+        if (r.status === "Quebrada") refsQ.add(r.ref);
+        if (r.status === "Solta") refsS.add(r.ref);
+      });
+      a.refs = refs.size; a.refsQ = refsQ.size; a.refsS = refsS.size; a.lojas = lojas.size;
+      a.prof = div(a.pecas, a.refs);
+      return a;
+    }
+    function agrupar(rows, f) {
+      var m = new Map();
+      rows.forEach(function (r) { var k = f(r), a = m.get(k); if (!a) { a = []; m.set(k, a); } a.push(r); });
+      return m;
+    }
+
     // ---- utilidades de UI ----
     function failBox(el, msg) {
       if (!el) return;
-      var f = document.createElement("div"); f.className = "ec-fail"; f.textContent = msg || "Não foi possível carregar. Clique em Atualizar.";
+      var f = document.createElement("div"); f.className = "ec-fail"; f.textContent = "Não foi possível carregar (" + (msg || "erro") + "). Clique em Atualizar.";
       el.replaceChildren(f);
     }
     function loadingBox(el) {
@@ -2221,6 +3226,7 @@
         s.append(i, document.createTextNode(it[0])); return s;
       }));
     }
+    function vazioBox(el, txt) { var p = document.createElement("p"); p.className = "empty-state"; p.textContent = txt; el.replaceChildren(p); }
 
     // tooltip
     var tip = document.createElement("div"); tip.className = "ec-tip"; tip.hidden = true;
@@ -2253,7 +3259,7 @@
       if (!window.d3) { loadingBox(box); return; }
       delete box.dataset.loading;
       box.replaceChildren();
-      if (!rows.length) { var p = document.createElement("p"); p.className = "empty-state"; p.textContent = "Sem dados para este filtro."; box.appendChild(p); return; }
+      if (!rows.length) { vazioBox(box, "Sem dados para este filtro."); return; }
       var W = Math.max(280, box.clientWidth || 600);
       var rh = o.grouped ? 20 : 18, gap = o.grouped ? 8 : 6;
       var svg = d3.select(box).append("svg").attr("width", "100%");
@@ -2289,7 +3295,7 @@
       if (!window.d3) { loadingBox(box); return; }
       delete box.dataset.loading;
       box.replaceChildren();
-      if (!rows.length) { var p = document.createElement("p"); p.className = "empty-state"; p.textContent = "Sem dados para esta categoria."; box.appendChild(p); return; }
+      if (!rows.length) { vazioBox(box, "Sem dados para este filtro."); return; }
       var W = Math.max(260, box.clientWidth || 500), H = 200, m = { t: 18, r: 6, b: 22, l: 6 };
       var svg = d3.select(box).append("svg").attr("width", "100%").attr("viewBox", "0 0 " + W + " " + H).attr("height", H);
       var x = d3.scaleBand(rows.map(function (r) { return r.tamanho; }), [m.l, W - m.r]).padding(0.25);
@@ -2336,8 +3342,13 @@
       });
       thead.appendChild(htr);
       var maxBar = {};
-      cols.filter(function (c) { return c.bar; }).forEach(function (c) { maxBar[c.f] = Math.max.apply(null, rows.map(function (r) { return Number(r[c.f]) || 0; }).concat([1])); });
+      cols.filter(function (c) { return c.bar; }).forEach(function (c) { maxBar[c.f] = rows.reduce(function (m, r) { return Math.max(m, Number(r[c.f]) || 0); }, 1); });
       var tb = document.createElement("tbody");
+      if (!rs.length) {
+        var tr0 = document.createElement("tr"), td0 = document.createElement("td");
+        td0.colSpan = cols.length; td0.className = "empty-state"; td0.textContent = opt.vazio || "Nada para mostrar com os filtros atuais.";
+        tr0.appendChild(td0); tb.appendChild(tr0);
+      }
       rs.forEach(function (r) {
         var tr = document.createElement("tr");
         if (opt.sel && opt.sel(r)) tr.classList.add("sel");
@@ -2366,53 +3377,95 @@
       if (opt.countEl) opt.countEl.textContent = total > rs.length ? "Mostrando " + fi(rs.length) + " de " + fi(total) : fi(total) + " linhas";
     }
 
-    // ---- seletor de lojas ----
-    var pickerSig = {};
-    function buildPicker(key, lojas) {
-      var el = $("#ec-pk-" + key);
+    // ---- seletor de múltipla escolha (com "Tudo") ----
+    // cfg: { titulo, opcoes(): [{v, hint}], atalhos: [[rótulo, fn(opcoes) -> valores]] }
+    var PICKS = {
+      tipo: { titulo: "Tipo de loja", opcoes: function () { return TIPOS.map(function (t) { return { v: t }; }); },
+        atalhos: [["Só lojas (sem CD)", function () { return ["OMNI", "Loja não OMNI"]; }]] },
+      loja: { titulo: "Lojas", busca: true, opcoes: function () {
+          var m = modelo(); if (!m) return [];
+          return m.lojas.filter(function (r) { return tem(F.tipo, r.tipo); }).slice().sort(function (a, b) { return a.filial.localeCompare(b.filial, "pt-BR"); }).map(function (r) { return { v: r.filial, hint: r.tipo }; });
+        },
+        atalhos: [["Só OMNI", function (o) { return o.filter(function (x) { return x.hint === "OMNI"; }).map(function (x) { return x.v; }); }],
+          ["Só não OMNI", function (o) { return o.filter(function (x) { return x.hint === "Loja não OMNI"; }).map(function (x) { return x.v; }); }]] },
+      grupo: { titulo: "Categorias", busca: true, opcoes: function () { var m = modelo(); return m ? m.grupos.map(function (g) { return { v: g }; }) : []; } },
+      linha: { titulo: "Linhas", busca: true, opcoes: function () { var m = modelo(); return m ? m.linhas.map(function (g) { return { v: g }; }) : []; } },
+      acao: { titulo: "Ação", opcoes: function () { return [{ v: "Reforçar" }, { v: "Reduzir" }]; } },
+      plano: { titulo: "Lojas do plano", busca: true, opcoes: function () {
+          var m = modelo(); if (!m) return [];
+          return m.lojas.filter(function (r) { return r.tipo !== CD && passaLoja(r.filial, r.tipo); }).slice().sort(function (a, b) { return a.filial.localeCompare(b.filial, "pt-BR"); }).map(function (r) { return { v: r.filial, hint: r.tipo }; });
+        } },
+      st: { titulo: "Grade", opcoes: function () { return ["Completa", "Incompleta", "Quebrada", "Solta"].map(function (v) { return { v: v }; }); } },
+      foto: { titulo: "Foto", opcoes: function () { return [{ v: "Com foto" }, { v: "Sem foto" }]; } },
+      liq: { titulo: "Liquidação", opcoes: function () { return [{ v: "Liqui" }, { v: "Não liqui" }]; } },
+    };
+    var pickSig = {};
+    function buildPick(key) {
+      var el = $("#ec-pk-" + key), cfg = PICKS[key], set = F[key];
       if (!el) return;
-      var set = S.pick[key];
       if (!el.dataset.ready) {
         el.dataset.ready = "1";
         var sum = document.createElement("summary");
-        sum.append(document.createTextNode("Lojas:"));
+        sum.append(document.createTextNode(cfg.titulo + ":"));
         var lbl0 = document.createElement("span"); lbl0.className = "lbl"; sum.appendChild(lbl0);
         var pop = document.createElement("div"); pop.className = "ec-pop";
-        var q = document.createElement("input"); q.type = "search"; q.className = "ec-input"; q.placeholder = "Buscar loja"; q.setAttribute("aria-label", "Buscar loja");
-        var chips = document.createElement("div"); chips.className = "ec-chips";
-        [["Todas", "all"], ["Só OMNI", "OMNI"], ["Só não OMNI", "Loja não OMNI"], ["Só CD / outros", CD], ["Limpar", "all"]].forEach(function (c) {
-          var b = document.createElement("button"); b.type = "button"; b.className = "tag-btn"; b.textContent = c[0];
-          b.addEventListener("click", function () {
-            set.clear();
-            if (c[1] !== "all") (ds("lojas") || []).filter(function (r) { return r.tipo === c[1]; }).forEach(function (r) { set.add(r.filial); });
-            pickerSig[key] = null; draw();
+        if (cfg.busca) {
+          var q = document.createElement("input"); q.type = "search"; q.className = "ec-input"; q.placeholder = "Buscar"; q.setAttribute("aria-label", "Buscar " + cfg.titulo.toLowerCase());
+          q.addEventListener("input", function () { pickSig[key] = null; buildPick(key); });
+          pop.appendChild(q);
+        }
+        if (cfg.atalhos) {
+          var chips = document.createElement("div"); chips.className = "ec-chips";
+          cfg.atalhos.forEach(function (a) {
+            var b = document.createElement("button"); b.type = "button"; b.className = "tag-btn"; b.textContent = a[0];
+            b.addEventListener("click", function () { set.clear(); a[1](cfg.opcoes()).forEach(function (v) { set.add(v); }); mudou(key); });
+            chips.appendChild(b);
           });
-          chips.appendChild(b);
-        });
+          pop.appendChild(chips);
+        }
         var list = document.createElement("div"); list.className = "ec-plist";
-        q.addEventListener("input", function () { pickerSig[key] = null; draw(); });
-        pop.append(q, chips, list);
+        pop.appendChild(list);
         el.append(sum, pop);
         document.addEventListener("click", function (ev) { if (el.open && !el.contains(ev.target)) el.open = false; });
       }
-      el.querySelector(".lbl").textContent = set.size === 0 ? "Todas" : set.size === 1 ? Array.from(set)[0] : set.size + " selecionadas";
-      if (!lojas) return;
-      var qv = el.querySelector("input[type=search]").value.trim().toUpperCase();
-      var sig = qv + "|" + Array.from(set).sort().join(";") + "|" + lojas.length;
-      if (pickerSig[key] === sig) return;
-      pickerSig[key] = sig;
-      var rows = lojas.slice().sort(function (a, b) { return a.filial.localeCompare(b.filial, "pt-BR"); }).filter(function (r) { return !qv || r.filial.indexOf(qv) >= 0; });
+      var opcoes = cfg.opcoes();
+      // remove do filtro o que não existe mais nas opções (ex.: loja de um tipo desmarcado)
+      if (opcoes.length) { var validos = new Set(opcoes.map(function (o) { return o.v; })); Array.from(set).forEach(function (v) { if (!validos.has(v)) set.delete(v); }); }
+      el.classList.toggle("ativo", set.size > 0);
+      el.querySelector(".lbl").textContent = set.size === 0 ? "Tudo" : set.size === 1 ? Array.from(set)[0] : set.size + " selecionados";
+      var qEl = el.querySelector("input[type=search]"), qv = qEl ? qEl.value.trim().toUpperCase() : "";
+      var sig = qv + "|" + Array.from(set).sort().join(";") + "|" + opcoes.map(function (o) { return o.v; }).join(";");
+      if (pickSig[key] === sig) return;
+      pickSig[key] = sig;
       var listEl = el.querySelector(".ec-plist");
-      listEl.replaceChildren.apply(listEl, rows.map(function (r) {
+      var linhas = [];
+      var lTudo = document.createElement("label"); lTudo.className = "tudo";
+      var cbT = document.createElement("input"); cbT.type = "checkbox"; cbT.checked = set.size === 0;
+      cbT.addEventListener("change", function () { set.clear(); mudou(key); });
+      var nT = document.createElement("span"); nT.textContent = "Tudo";
+      lTudo.append(cbT, nT); linhas.push(lTudo);
+      opcoes.filter(function (o) { return !qv || String(o.v).toUpperCase().indexOf(qv) >= 0; }).forEach(function (o) {
         var l = document.createElement("label");
-        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = set.has(r.filial);
-        cb.addEventListener("change", function () { if (cb.checked) set.add(r.filial); else set.delete(r.filial); pickerSig[key] = null; draw(); });
-        var n = document.createElement("span"); n.textContent = r.filial;
-        var t = document.createElement("span"); t.className = "tp"; t.textContent = r.tipo;
-        l.append(cb, n, t); return l;
-      }));
+        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = set.has(o.v);
+        cb.addEventListener("change", function () {
+          if (cb.checked) set.add(o.v); else set.delete(o.v);
+          if (set.size === opcoes.length) set.clear(); // marcou todos = Tudo
+          mudou(key);
+        });
+        var n = document.createElement("span"); n.textContent = o.v;
+        l.append(cb, n);
+        if (o.hint) { var t = document.createElement("span"); t.className = "tp"; t.textContent = o.hint; l.appendChild(t); }
+        linhas.push(l);
+      });
+      listEl.replaceChildren.apply(listEl, linhas);
     }
-    var picked = function (key, filial) { return S.pick[key].size === 0 || S.pick[key].has(filial); };
+    function mudou(key) {
+      pickSig[key] = null;
+      if (key === "tipo") { pickSig.loja = null; pickSig.plano = null; }
+      if (key === "loja") pickSig.plano = null;
+      draw();
+    }
+    function soEsse(key, v) { F[key] = new Set([v]); mudou(key); }
 
     // ---- navegação ----
     var SUBS = ["decisoes", "geral", "lojas", "categorias", "produtos", "planilha"];
@@ -2421,164 +3474,177 @@
       $$("#ec-subnav button").forEach(function (b) { b.classList.toggle("active", b.dataset.sub === sub); });
       draw();
     }
-    function goLoja(f) { S.loja = f; openSub("lojas"); var c = $("#ec-card-loja"); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
-    function goProdLoja(f, st) { S.pick.prod = new Set([f]); pickerSig.prod = null; S.fSt = st || ""; $("#ec-f-st").value = S.fSt; openSub("produtos"); }
+    function goLoja(f) { F.plano = new Set([f]); pickSig.plano = null; openSub("lojas"); var c = $("#ec-card-loja"); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
+    function goProdLoja(f, st) { F.loja = new Set([f]); F.st = new Set(st ? [st] : []); pickSig.loja = null; pickSig.st = null; openSub("produtos"); }
 
     function wire() {
       if (wired) return; wired = true;
       $("#ec-subnav").addEventListener("click", function (e) { var b = e.target.closest("button[data-sub]"); if (b) openSub(b.dataset.sub); });
-      $("#ec-escopo").addEventListener("change", function (e) { S.escopo = e.target.value; draw(); });
       $("#ec-heatm").addEventListener("click", function (e) { var b = e.target.closest("button[data-m]"); if (b) { S.heat = b.dataset.m; draw(); } });
-      $("#ec-mixf").addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) { S.mixf = b.dataset.v; draw(); } });
       $("#ec-q-grade").addEventListener("input", function (e) { S.qGrade = e.target.value; draw(); });
       $("#ec-q-cd").addEventListener("input", function (e) { S.qCd = e.target.value; draw(); });
-      $("#ec-sel-loja").addEventListener("change", function (e) { S.loja = e.target.value; draw(); });
-      $("#ec-sel-cat").addEventListener("change", function (e) { S.cat = e.target.value; draw(); });
       $("#ec-q-prod").addEventListener("input", function (e) { S.qProd = e.target.value; draw(); });
-      $("#ec-f-cat").addEventListener("change", function (e) { S.fCat = e.target.value; draw(); });
-      $("#ec-f-st").addEventListener("change", function (e) { S.fSt = e.target.value; draw(); });
-      $("#ec-f-foto").addEventListener("change", function (e) { S.fFoto = e.target.value; draw(); });
-      $("#ec-f-liq").addEventListener("change", function (e) { S.fLiq = e.target.value; draw(); });
+      $("#ec-limpar").addEventListener("click", function () { ["tipo", "loja", "grupo", "linha"].forEach(function (k) { F[k].clear(); pickSig[k] = null; }); pickSig.plano = null; draw(); });
       $("#ec-upload-form").addEventListener("submit", enviarPlanilha);
       $("#ec-data").value = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
       var rz; window.addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { if (!root().hidden) draw(); }, 200); });
     }
 
+    // ---- ações filtradas (usadas em Decisões, Lojas e Plano) ----
+    function acoesFiltradas(m) {
+      var ag = ds("acoes_grade"), ac = ds("acoes_cd"), am = ds("acoes_mix");
+      if (!ag || !ac || !am) return null;
+      var linhaDe = function (ref) { var p = m.pmap.get(ref); return p ? p.linha : null; };
+      var grade = ag.filter(function (r) { return passaLoja(r.filial, r.tipo) && passaProd(r.grupo, linhaDe(r.ref)); });
+      var cd = [];
+      ac.forEach(function (r) {
+        if (!passaProd(r.grupo, linhaDe(r.ref))) return;
+        var sug = String(r.sugestao || "").split(", ").filter(function (f) { return f && passaLoja(f, m.tipoDe.get(f)); });
+        if (!sug.length) return;
+        cd.push(Object.assign({}, r, { sugestao: sug.join(", "), lojas_sugeridas: sug.length, pecas_distribuir: sug.length * r.tamanhos }));
+      });
+      var mix = am.filter(function (r) { return passaLoja(r.filial, r.tipo) && passaProd(r.grupo, null); });
+      return { grade: grade, cd: cd, mix: mix };
+    }
+    function porLoja(rows, f) { var mm = new Map(); rows.forEach(function (r) { mm.set(r.filial, (mm.get(r.filial) || 0) + f(r)); }); return mm; }
+
     // ---- DECISÕES ----
-    var DSUB = {
-      grade: function (r) { return fi(r.refs) + " referências · " + fi(r.lojas) + " lojas"; },
-      cd: function (r) { return fi(r.refs) + " referências · " + fi(r.lojas) + " lojas recebem"; },
-      reforcar: function (r) { return fi(r.refs) + " loja × categoria · " + fi(r.lojas) + " lojas"; },
-      reduzir: function (r) { return fi(r.refs) + " loja × categoria · " + fi(r.lojas) + " lojas"; },
-      soltas: function (r) { return fi(r.refs) + " referências · " + fi(r.lojas) + " lojas"; },
-      defeito: function (r) { return fi(r.refs) + " referências paradas"; },
-    };
     var DSEC = { grade: "ec-sec-grade", cd: "ec-sec-cd", reforcar: "ec-sec-mix", reduzir: "ec-sec-mix", soltas: "ec-sec-soltas", defeito: "ec-sec-defeito" };
-    var decDone = null;
-    function drawDecisoes(lojas) {
-      var dec = ds("decisoes"), box = $("#ec-dec-cards");
-      if (failed("decisoes")) failBox(box, D.decisoes.msg);
-      if (dec) {
-        $$("[data-dec]").forEach(function (el) {
-          var p = el.dataset.dec.split(":"), r = dec.filter(function (x) { return x.id === p[0]; })[0];
-          setTxt(el, r ? fi(r[p[1]]) : "—");
+    function drawDecisoes(m, rows) {
+      buildPick("acao");
+      var A = acoesFiltradas(m), dec = ds("decisoes");
+      var err = erroDe("acoes_grade", "acoes_cd", "acoes_mix", "decisoes");
+      if (err) { failBox($("#ec-dec-cards"), err); return; }
+      if (!A || !dec) { loadingBox($("#ec-dec-cards")); return; }
+      delete $("#ec-dec-cards").dataset.loading;
+      var soltas = rows.filter(function (r) { return r.tipo !== CD && r.status === "Solta" && r.nszCia >= 2; });
+      var defeito = rows.filter(function (r) { return r.filial === RETORNO_DEFEITO; });
+      var mixR = A.mix.filter(function (r) { return r.acao === "Reforçar"; }), mixD = A.mix.filter(function (r) { return r.acao === "Reduzir"; });
+      var uniq = function (a) { return new Set(a).size; };
+      var soma = function (a, f) { return a.reduce(function (s, r) { return s + f(r); }, 0); };
+      var sugLojas = new Set(); A.cd.forEach(function (r) { r.sugestao.split(", ").forEach(function (f) { sugLojas.add(f); }); });
+      var V = {
+        grade: { pecas: soma(A.grade, function (r) { return r.pecas_enviar; }), sub: pl(uniq(A.grade.map(function (r) { return r.ref; })), "referência", "referências") + " · " + pl(uniq(A.grade.map(function (r) { return r.filial; })), "loja", "lojas"), refs: uniq(A.grade.map(function (r) { return r.ref; })) },
+        cd: { pecas: soma(A.cd, function (r) { return r.pecas_distribuir; }), sub: pl(A.cd.length, "referência", "referências") + " · " + pl(sugLojas.size, "loja recebe", "lojas recebem") },
+        reforcar: { pecas: soma(mixR, function (r) { return r.pecas_ajuste; }), sub: pl(mixR.length, "loja × categoria", "loja × categoria") + " · " + pl(uniq(mixR.map(function (r) { return r.filial; })), "loja", "lojas") },
+        reduzir: { pecas: soma(mixD, function (r) { return r.pecas_ajuste; }), sub: pl(mixD.length, "loja × categoria", "loja × categoria") + " · " + pl(uniq(mixD.map(function (r) { return r.filial; })), "loja", "lojas") },
+        soltas: { pecas: soma(soltas, function (r) { return r.pecas; }), sub: pl(uniq(soltas.map(function (r) { return r.ref; })), "referência", "referências") + " · " + pl(uniq(soltas.map(function (r) { return r.filial; })), "loja", "lojas") },
+        defeito: { pecas: soma(defeito, function (r) { return r.pecas; }), sub: pl(uniq(defeito.map(function (r) { return r.ref; })), "referência parada", "referências paradas") },
+      };
+      setTxt($("#ec-take-dec"), (filtroAtivo() ? "Com os filtros escolhidos, as três maiores frentes: " : "Dá para agir agora em seis frentes. As três maiores: ")
+        + "completar a grade de " + fi(V.grade.refs) + " referências enviando " + fi(V.grade.pecas) + " peças do CD; distribuir "
+        + fi(V.cd.pecas) + " peças paradas no CD; e destravar " + fi(V.defeito.pecas) + " peças no retorno de defeito.");
+      var box = $("#ec-dec-cards");
+      box.replaceChildren.apply(box, dec.slice().sort(function (a, b) { return a.ordem - b.ordem; }).map(function (r) {
+        var v = V[r.id] || { pecas: r.pecas, sub: "" };
+        var c = document.createElement("div"); c.className = "ec-dcard";
+        var h = document.createElement("div"); h.className = "ec-dhead";
+        var st = document.createElement("span"); st.className = "ec-step"; st.textContent = r.ordem;
+        var tt = document.createElement("span"); tt.textContent = r.acao;
+        h.append(st, tt);
+        var n = document.createElement("div"); n.className = "ec-dnum";
+        var b = document.createElement("b"); b.className = "ec-kv"; b.textContent = fi(v.pecas);
+        var u = document.createElement("span"); u.className = "ec-kn"; u.textContent = "peças";
+        n.append(b, u);
+        var sub = document.createElement("span"); sub.className = "ec-kn"; sub.textContent = v.sub;
+        var como = document.createElement("p"); como.className = "ec-note"; como.textContent = r.como;
+        var go = document.createElement("button"); go.type = "button"; go.className = "tag-btn ec-dgo"; go.textContent = "Ver lista";
+        go.addEventListener("click", function () {
+          if (r.id === "reforcar" || r.id === "reduzir") { F.acao = new Set([r.id === "reforcar" ? "Reforçar" : "Reduzir"]); mudou("acao"); }
+          document.getElementById(DSEC[r.id]).scrollIntoView({ block: "start", behavior: "smooth" });
         });
-        if (decDone !== dec) {
-          decDone = dec;
-          box.replaceChildren.apply(box, dec.slice().sort(function (a, b) { return a.ordem - b.ordem; }).map(function (r) {
-            var c = document.createElement("div"); c.className = "ec-dcard";
-            var h = document.createElement("div"); h.className = "ec-dhead";
-            var st = document.createElement("span"); st.className = "ec-step"; st.textContent = r.ordem;
-            var tt = document.createElement("span"); tt.textContent = r.acao;
-            h.append(st, tt);
-            var n = document.createElement("div"); n.className = "ec-dnum";
-            var v = document.createElement("b"); v.className = "ec-kv"; v.textContent = fi(r.pecas);
-            var u = document.createElement("span"); u.className = "ec-kn"; u.textContent = "peças";
-            n.append(v, u);
-            var sub = document.createElement("span"); sub.className = "ec-kn"; sub.textContent = DSUB[r.id] ? DSUB[r.id](r) : "";
-            var como = document.createElement("p"); como.className = "ec-note"; como.textContent = r.como;
-            var go = document.createElement("button"); go.type = "button"; go.className = "tag-btn ec-dgo"; go.textContent = "Ver lista";
-            go.addEventListener("click", function () {
-              if (r.id === "reforcar" || r.id === "reduzir") { S.mixf = r.id === "reforcar" ? "Reforçar" : "Reduzir"; draw(); }
-              document.getElementById(DSEC[r.id]).scrollIntoView({ block: "start", behavior: "smooth" });
-            });
-            c.append(h, n, sub, como, go);
-            return c;
-          }));
-        }
-      }
-      buildPicker("dec", lojas);
-      var P = function (f) { return picked("dec", f); };
-      var ag = ds("acoes_grade");
-      if (failed("acoes_grade")) failBox($("#ec-t-grade"), D.acoes_grade.msg);
-      else if (ag) {
-        var q = S.qGrade.trim().toUpperCase();
-        renderTable($("#ec-t-grade"), ag.filter(function (r) { return P(r.filial) && txtMatch(q, r.ref, r.nome, r.grupo); }), [
-          { f: "filial", label: "Loja" }, { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" },
-          { f: "grupo", label: "Categoria", hideSm: true }, { f: "status", label: "Grade hoje", tag: true },
-          { f: "pecas_loja", label: "Peças na loja", num: true, fmt: fi }, { f: "falta", label: "Tamanhos que faltam" },
-          { f: "enviar", label: "Enviar do CD" }, { f: "pecas_enviar", label: "Peças", num: true, fmt: fi },
-        ], { sort: { f: "filial", dir: "asc" }, limit: 500, countEl: $("#ec-n-grade") });
-      }
-      var ac = ds("acoes_cd");
-      if (failed("acoes_cd")) failBox($("#ec-t-cd"), D.acoes_cd.msg);
-      else if (ac) {
-        var q2 = S.qCd.trim().toUpperCase(), sel = S.pick.dec;
-        renderTable($("#ec-t-cd"), ac.filter(function (r) { return (sel.size === 0 || String(r.sugestao).split(", ").some(function (s) { return sel.has(s); })) && txtMatch(q2, r.ref, r.nome, r.grupo); }), [
-          { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria", hideSm: true },
-          { f: "pecas_cd", label: "Peças no CD", num: true, bar: true, fmt: fi }, { f: "lojas_atuais", label: "Lojas hoje", num: true, fmt: fi },
-          { f: "tamanhos", label: "Tamanhos", num: true, fmt: fi, hideSm: true }, { f: "pecas_distribuir", label: "Peças a distribuir", num: true, fmt: fi },
-          { f: "sugestao", label: "Lojas sugeridas", wrap: true }, { f: "liqui", label: "Liqui", hideSm: true },
-        ], { sort: { f: "pecas_cd", dir: "desc" }, countEl: $("#ec-n-cd") });
-      }
-      $$("#ec-mixf button").forEach(function (b) { b.classList.toggle("active", b.dataset.v === S.mixf); });
-      var am = ds("acoes_mix");
-      if (failed("acoes_mix")) failBox($("#ec-t-mix"), D.acoes_mix.msg);
-      else if (am) {
-        renderTable($("#ec-t-mix"), am.filter(function (r) { return P(r.filial) && (!S.mixf || r.acao === S.mixf); }), [
-          { f: "filial", label: "Loja" }, { f: "grupo", label: "Categoria" }, { f: "acao", label: "Ação" },
-          { f: "pecas_cat", label: "Peças hoje", num: true, fmt: fi }, { f: "share_loja", label: "Mix loja", num: true, fmt: fp },
-          { f: "share_rede", label: "Mix rede", num: true, fmt: fp }, { f: "dif_pp", label: "Diferença", num: true, fmt: fpp },
-          { f: "pecas_ajuste", label: "Peças para ajustar", num: true, bar: true, fmt: fi },
-        ], { sort: { f: "pecas_ajuste", dir: "desc" }, countEl: $("#ec-n-mix"), onRow: function (r) { goLoja(r.filial); } });
-      }
-      if (failed("lojas")) { failBox($("#ec-t-soltas"), D.lojas.msg); failBox($("#ec-t-fora"), D.lojas.msg); }
-      else if (lojas) {
-        renderTable($("#ec-t-soltas"), lojas.filter(function (r) { return r.tipo !== CD && P(r.filial); }), [
-          { f: "filial", label: "Loja" }, { f: "refs_peca_solta", label: "Refs com 1 peça", num: true, bar: true, fmt: fi },
-          { f: "pct_peca_solta", label: "% das refs", num: true, fmt: fp }, { f: "refs_grade_quebrada", label: "Refs grade quebrada", num: true, fmt: fi },
-          { f: "pct_liqui", label: "% liqui", num: true, fmt: fp, hideSm: true },
-        ], { sort: { f: "refs_peca_solta", dir: "desc" }, onRow: function (r) { goProdLoja(r.filial, "Solta"); } });
-        renderTable($("#ec-t-fora"), lojas.filter(function (r) { return r.tipo === CD; }), [
-          { f: "filial", label: "Local" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
-          { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
-          { f: "pct_liqui", label: "% liqui", num: true, fmt: fp }, { f: "pct_sem_foto", label: "% sem foto", num: true, fmt: fp, hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" } });
-      }
+        c.append(h, n, sub, como, go);
+        return c;
+      }));
+
+      var q = S.qGrade.trim().toUpperCase();
+      renderTable($("#ec-t-grade"), A.grade.filter(function (r) { return txtMatch(q, r.ref, r.nome); }), [
+        { f: "filial", label: "Loja" }, { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" },
+        { f: "grupo", label: "Categoria", hideSm: true }, { f: "status", label: "Grade hoje", tag: true },
+        { f: "pecas_loja", label: "Peças na loja", num: true, fmt: fi }, { f: "falta", label: "Tamanhos que faltam" },
+        { f: "enviar", label: "Enviar do CD" }, { f: "pecas_enviar", label: "Peças", num: true, fmt: fi },
+      ], { sort: { f: "filial", dir: "asc" }, limit: 500, countEl: $("#ec-n-grade") });
+      var q2 = S.qCd.trim().toUpperCase();
+      renderTable($("#ec-t-cd"), A.cd.filter(function (r) { return txtMatch(q2, r.ref, r.nome); }), [
+        { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria", hideSm: true },
+        { f: "pecas_cd", label: "Peças no CD", num: true, bar: true, fmt: fi }, { f: "lojas_atuais", label: "Lojas hoje", num: true, fmt: fi },
+        { f: "tamanhos", label: "Tamanhos", num: true, fmt: fi, hideSm: true }, { f: "pecas_distribuir", label: "Peças a distribuir", num: true, fmt: fi },
+        { f: "sugestao", label: "Lojas sugeridas", wrap: true }, { f: "liqui", label: "Liqui", hideSm: true },
+      ], { sort: { f: "pecas_cd", dir: "desc" }, countEl: $("#ec-n-cd") });
+      renderTable($("#ec-t-mix"), A.mix.filter(function (r) { return tem(F.acao, r.acao); }), [
+        { f: "filial", label: "Loja" }, { f: "grupo", label: "Categoria" }, { f: "acao", label: "Ação" },
+        { f: "pecas_cat", label: "Peças hoje", num: true, fmt: fi }, { f: "share_loja", label: "Mix loja", num: true, fmt: fp },
+        { f: "share_rede", label: "Mix rede", num: true, fmt: fp }, { f: "dif_pp", label: "Diferença", num: true, fmt: fpp },
+        { f: "pecas_ajuste", label: "Peças para ajustar", num: true, bar: true, fmt: fi },
+      ], { sort: { f: "pecas_ajuste", dir: "desc" }, countEl: $("#ec-n-mix"), onRow: function (r) { goLoja(r.filial); } });
+
+      var porL = agrupar(rows.filter(function (r) { return r.tipo !== CD; }), function (r) { return r.filial; });
+      var tSoltas = [];
+      porL.forEach(function (rs, f) {
+        var a = agg(rs), sRefs = new Set(rs.filter(function (r) { return r.status === "Solta" && r.nszCia >= 2; }).map(function (r) { return r.ref; }));
+        tSoltas.push({ filial: f, solta: sRefs.size, pct: div(sRefs.size, a.refs), quebrada: a.refsQ, pct_liq: div(a.liq, a.pecas) });
+      });
+      renderTable($("#ec-t-soltas"), tSoltas, [
+        { f: "filial", label: "Loja" }, { f: "solta", label: "Refs com 1 peça", num: true, bar: true, fmt: fi },
+        { f: "pct", label: "% das refs", num: true, fmt: fp }, { f: "quebrada", label: "Refs grade quebrada", num: true, fmt: fi },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp, hideSm: true },
+      ], { sort: { f: "solta", dir: "desc" }, onRow: function (r) { goProdLoja(r.filial, "Solta"); } });
+      var tFora = [];
+      agrupar(rows.filter(function (r) { return r.tipo === CD; }), function (r) { return r.filial; }).forEach(function (rs, f) {
+        var a = agg(rs); tFora.push({ filial: f, pecas: a.pecas, refs: a.refs, valor: a.valor, pct_liq: div(a.liq, a.pecas), pct_sf: div(a.semFoto, a.pecas) });
+      });
+      renderTable($("#ec-t-fora"), tFora, [
+        { f: "filial", label: "Local" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
+        { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp }, { f: "pct_sf", label: "% sem foto", num: true, fmt: fp, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, vazio: "Nenhum CD / outro local no filtro de tipo de loja." });
     }
 
     // ---- VISÃO GERAL ----
-    function drawGeral(lojas) {
-      var cat = ds("categorias"), lc = ds("loja_categoria"), esc = S.escopo;
-      if (failed("categorias")) failBox($("#ec-ch-cat"), D.categorias.msg);
-      if (cat) {
-        var tot = cat.filter(function (r) { return r.escopo === esc && r.grupo === "TOTAL"; })[0] || {};
-        $$(".ec-k").forEach(function (el) { var k = el.dataset.k, v = tot[k]; setTxt(el, k === "valor" ? fbrlC(v) : k === "prof" ? fd(v) : fcomp(v || 0)); });
-        var rows = cat.filter(function (r) { return r.escopo === esc && r.grupo !== "TOTAL"; }).sort(function (a, b) { return b.pecas - a.pecas; });
-        setTxt($("#ec-topcat"), rows[0] ? rows[0].grupo : "—");
-        setTxt($("#ec-topshare"), rows[0] && tot.pecas ? fp(rows[0].pecas / tot.pecas) : "—");
-        legend($("#ec-leg-cat"), [["Fora de liquidação", C_MAIN], ["Em liquidação", C_ALT]]);
-        hbar($("#ec-ch-cat"), rows.slice(0, 20), {
-          label: function (r) { return r.grupo; }, fmt: fi,
-          segs: [{ name: "Fora de liquidação", color: C_MAIN, v: function (r) { return r.pecas - r.pecas_liqui; } }, { name: "Em liquidação", color: C_ALT, v: function (r) { return r.pecas_liqui; } }],
-          onClick: function (r) { S.cat = r.grupo; openSub("categorias"); },
-        });
-      } else loadingBox($("#ec-ch-cat"));
+    function drawGeral(m, rows) {
+      var a = agg(rows);
+      $$(".ec-k").forEach(function (el) {
+        var k = el.dataset.k;
+        setTxt(el, k === "valor" ? fbrlC(a.valor) : k === "prof" ? fd(a.prof) : fcomp(a[k] || 0));
+      });
+      var porG = []; agrupar(rows, function (r) { return r.grupo; }).forEach(function (rs, g) { var x = agg(rs); x.grupo = g; porG.push(x); });
+      porG.sort(function (x, y) { return y.pecas - x.pecas; });
+      setTxt($("#ec-take-geral"), porG.length
+        ? "Com os filtros atuais: " + fi(a.pecas) + " peças em " + fi(a.refs) + " referências e " + fi(a.lojas) + " lojas/locais. A categoria " + porG[0].grupo + " concentra " + fp(div(porG[0].pecas, a.pecas)) + " das peças."
+        : "Nenhuma peça com os filtros atuais.");
+      legend($("#ec-leg-cat"), [["Fora de liquidação", C_MAIN], ["Em liquidação", C_ALT]]);
+      hbar($("#ec-ch-cat"), porG.slice(0, 20), {
+        label: function (r) { return r.grupo; }, fmt: fi,
+        segs: [{ name: "Fora de liquidação", color: C_MAIN, v: function (r) { return r.pecas - r.liq; } }, { name: "Em liquidação", color: C_ALT, v: function (r) { return r.liq; } }],
+        onClick: function (r) { soEsse("grupo", r.grupo); },
+      });
       $$("#ec-heatm button").forEach(function (b) { b.classList.toggle("active", b.dataset.m === S.heat); });
       var box = $("#ec-heat");
-      if (failed("loja_categoria")) { failBox(box, D.loja_categoria.msg); return; }
-      if (!cat || !lc || !lojas) { loadingBox(box); return; }
-      delete box.dataset.loading;
-      var cols = cat.filter(function (r) { return r.escopo === esc && r.grupo !== "TOTAL"; }).sort(function (a, b) { return b.pecas - a.pecas; }).slice(0, 10).map(function (r) { return r.grupo; });
-      var stores = lojas.filter(function (r) { return inScope(r.tipo, esc); }).sort(function (a, b) { return b.pecas - a.pecas; });
-      var map = new Map(lc.map(function (r) { return [r.filial + "|" + r.grupo, r]; }));
-      var m = S.heat, max = 0;
-      stores.forEach(function (s) { cols.forEach(function (g) { var r = map.get(s.filial + "|" + g); if (r) max = Math.max(max, r[m]); }); });
-      var fmtM = m === "share_loja" ? fp : m === "prof" ? fd : fi;
+      var cols = porG.slice(0, 10).map(function (x) { return x.grupo; });
+      // total da loja sem o filtro de categoria/linha (base do "% do mix")
+      var totLoja = new Map();
+      m.rows.forEach(function (r) { if (passaLoja(r.filial, r.tipo)) totLoja.set(r.filial, (totLoja.get(r.filial) || 0) + r.pecas); });
+      var cel = new Map(), lojaP = new Map();
+      agrupar(rows, function (r) { return r.filial + "|" + r.grupo; }).forEach(function (rs, k) { var x = agg(rs); cel.set(k, x); });
+      rows.forEach(function (r) { lojaP.set(r.filial, (lojaP.get(r.filial) || 0) + r.pecas); });
+      var stores = Array.from(lojaP.keys()).sort(function (x, y) { return lojaP.get(y) - lojaP.get(x); });
+      var val = function (f, g) { var x = cel.get(f + "|" + g); if (!x) return null; return S.heat === "share" ? div(x.pecas, totLoja.get(f)) : S.heat === "prof" ? x.prof : x.pecas; };
+      var max = 0; stores.forEach(function (f) { cols.forEach(function (g) { var v = val(f, g); if (v != null) max = Math.max(max, v); }); });
+      var fmtM = S.heat === "share" ? fp : S.heat === "prof" ? fd : fi;
+      if (!stores.length) { vazioBox(box, "Sem dados para este filtro."); return; }
       var t = document.createElement("table"); t.className = "ec-heat";
       var th = document.createElement("thead"), hr = document.createElement("tr");
       var h0 = document.createElement("th"); h0.className = "st"; h0.textContent = "Loja"; hr.appendChild(h0);
       cols.forEach(function (g) { var h = document.createElement("th"); h.className = "num"; h.textContent = g; hr.appendChild(h); });
       th.appendChild(hr); t.appendChild(th);
       var tb = document.createElement("tbody");
-      stores.forEach(function (s) {
+      stores.forEach(function (f) {
         var tr = document.createElement("tr");
-        var td0 = document.createElement("td"); td0.className = "st"; td0.textContent = s.filial; td0.title = s.tipo;
-        td0.addEventListener("click", function () { goLoja(s.filial); }); tr.appendChild(td0);
+        var td0 = document.createElement("td"); td0.className = "st"; td0.textContent = f; td0.title = m.tipoDe.get(f) || "";
+        td0.addEventListener("click", function () { goLoja(f); }); tr.appendChild(td0);
         cols.forEach(function (g) {
-          var td = document.createElement("td"); td.className = "hv";
-          var r = map.get(s.filial + "|" + g);
-          if (r) { var p = max ? Math.round((60 * r[m]) / max) : 0; td.style.background = "color-mix(in srgb, var(--accent) " + p + "%, transparent)"; td.textContent = fmtM(r[m]); }
+          var td = document.createElement("td"), v = val(f, g); td.className = "hv";
+          if (v != null) { var p = max ? Math.round((60 * v) / max) : 0; td.style.background = "color-mix(in srgb, var(--accent) " + p + "%, transparent)"; td.textContent = fmtM(v); }
           else { td.textContent = "·"; td.style.color = "var(--text-muted)"; }
           tr.appendChild(td);
         });
@@ -2589,137 +3655,146 @@
     }
 
     // ---- LOJAS ----
-    function drawLojas(lojas) {
-      buildPicker("rank", lojas);
-      var lc = ds("loja_categoria");
-      if (failed("lojas")) failBox($("#ec-t-lojas"), D.lojas.msg);
-      if (lojas) {
-        renderTable($("#ec-t-lojas"), lojas.filter(function (r) { return picked("rank", r.filial); }), [
-          { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
-          { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
-          { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
-          { f: "pct_liqui", label: "% liqui", num: true, fmt: fp }, { f: "pct_grade_quebrada", label: "% grade quebrada", num: true, fmt: fp },
-          { f: "pct_peca_solta", label: "% peça solta", num: true, fmt: fp }, { f: "rep_pecas", label: "Receber do CD", num: true, fmt: fi },
-          { f: "cd_refs_sugeridas", label: "Refs do CD sugeridas", num: true, fmt: fi }, { f: "mix_reforcar", label: "Mix: reforçar", num: true, fmt: fi },
-          { f: "mix_reduzir", label: "Mix: reduzir", num: true, fmt: fi }, { f: "ecom", label: "E-com", num: true, fmt: fi, hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" }, countEl: $("#ec-n-lojas"), sel: function (r) { return r.filial === S.loja; },
-          onRow: function (r) { S.loja = r.filial; draw(); $("#ec-card-loja").scrollIntoView({ block: "start", behavior: "smooth" }); } });
-        var sel = $("#ec-sel-loja");
-        var ordered = lojas.slice().sort(function (a, b) { return b.pecas - a.pecas; });
-        if (!S.loja) { var first = ordered.filter(function (r) { return r.tipo !== CD; })[0]; S.loja = (first || ordered[0]).filial; }
-        if (sel.options.length !== ordered.length) sel.replaceChildren.apply(sel, ordered.map(function (r) { return new Option(r.filial, r.filial); }));
-        sel.value = S.loja;
-        var row = lojas.filter(function (r) { return r.filial === S.loja; })[0] || {};
-        $$(".ec-kl-v").forEach(function (el) { setTxt(el, fi(row[el.dataset.k])); });
-      }
-      if (failed("loja_categoria")) { failBox($("#ec-ch-mix"), D.loja_categoria.msg); return; }
-      if (!lc || !S.loja) { loadingBox($("#ec-ch-mix")); return; }
-      var rows = lc.filter(function (r) { return r.filial === S.loja; }).sort(function (a, b) { return b.pecas - a.pecas; });
-      legend($("#ec-leg-mix"), [["Loja", C_MAIN], ["Média da rede", C_MUTED]]);
-      hbar($("#ec-ch-mix"), rows.filter(function (r) { return r.share_loja >= 0.005 || r.share_rede >= 0.005; }), {
-        grouped: true, label: function (r) { return r.grupo; }, fmt: fp,
-        segs: [{ name: "Loja", color: C_MAIN, v: function (r) { return r.share_loja; } }, { name: "Média da rede", color: C_MUTED, v: function (r) { return r.share_rede; } }],
-        onClick: function (r) { S.cat = r.grupo; openSub("categorias"); },
+    function drawLojas(m, rows) {
+      buildPick("plano");
+      var A = acoesFiltradas(m);
+      if (!A) { var e = erroDe("acoes_grade", "acoes_cd", "acoes_mix"); if (e) failBox($("#ec-t-lojas"), e); else loadingBox($("#ec-t-lojas")); return; }
+      delete $("#ec-t-lojas").dataset.loading;
+      var rep = porLoja(A.grade, function (r) { return r.pecas_enviar; });
+      var cdS = new Map(); A.cd.forEach(function (r) { r.sugestao.split(", ").forEach(function (f) { cdS.set(f, (cdS.get(f) || 0) + 1); }); });
+      var mixR = porLoja(A.mix.filter(function (r) { return r.acao === "Reforçar"; }), function (r) { return r.pecas_ajuste; });
+      var mixD = porLoja(A.mix.filter(function (r) { return r.acao === "Reduzir"; }), function (r) { return r.pecas_ajuste; });
+      var lista = [];
+      agrupar(rows, function (r) { return r.filial; }).forEach(function (rs, f) {
+        var a = agg(rs);
+        lista.push({ filial: f, tipo: m.tipoDe.get(f) || "", pecas: a.pecas, refs: a.refs, prof: a.prof, valor: a.valor,
+          pct_liq: div(a.liq, a.pecas), pct_q: div(a.refsQ, a.refs), pct_s: div(a.refsS, a.refs),
+          rep: rep.get(f) || 0, cd: cdS.get(f) || 0, ref: mixR.get(f) || 0, red: mixD.get(f) || 0, ecom: a.ecom });
       });
-      renderTable($("#ec-t-loja-cat"), rows, [
+      renderTable($("#ec-t-lojas"), lista, [
+        { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
+        { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
+        { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp }, { f: "pct_q", label: "% grade quebrada", num: true, fmt: fp },
+        { f: "pct_s", label: "% peça solta", num: true, fmt: fp }, { f: "rep", label: "Receber do CD", num: true, fmt: fi },
+        { f: "cd", label: "Refs do CD sugeridas", num: true, fmt: fi }, { f: "ref", label: "Mix: reforçar", num: true, fmt: fi },
+        { f: "red", label: "Mix: reduzir", num: true, fmt: fi }, { f: "ecom", label: "E-com", num: true, fmt: fi, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, countEl: $("#ec-n-lojas"), sel: function (r) { return F.plano.has(r.filial); },
+        onRow: function (r) { goLoja(r.filial); } });
+
+      // Plano: lojas escolhidas (vazio = todas as lojas do filtro, sem CD)
+      var noPlano = function (f, tipo) { return tipo !== CD && passaLoja(f, tipo) && tem(F.plano, f); };
+      var selRows = rows.filter(function (r) { return noPlano(r.filial, r.tipo); });
+      var sa = agg(selRows);
+      var somaSel = function (mm) { var s = 0; mm.forEach(function (v, f) { if (noPlano(f, m.tipoDe.get(f))) s += v; }); return s; };
+      var vals = { rep: somaSel(rep), cd: A.cd.filter(function (r) { return r.sugestao.split(", ").some(function (f) { return noPlano(f, m.tipoDe.get(f)); }); }).length,
+        ref: somaSel(mixR), red: somaSel(mixD), solta: selRows.filter(function (r) { return r.status === "Solta"; }).length, liq: sa.liq };
+      $$(".ec-pl").forEach(function (el) { setTxt(el, fi(vals[el.dataset.k])); });
+      // mix da seleção (total sem filtro de categoria) vs rede
+      var totSel = 0, porGsel = new Map();
+      m.rows.forEach(function (r) { if (noPlano(r.filial, r.tipo)) { totSel += r.pecas; } });
+      var gRows = [];
+      agrupar(selRows, function (r) { return r.grupo; }).forEach(function (rs, g) { var x = agg(rs); gRows.push({ grupo: g, pecas: x.pecas, refs: x.refs, prof: x.prof, share: div(x.pecas, totSel), rede: m.shareRede(g), q: x.refsQ, liq: x.liq }); });
+      gRows.sort(function (x, y) { return y.pecas - x.pecas; });
+      legend($("#ec-leg-mix"), [["Seleção", C_MAIN], ["Média da rede", C_MUTED]]);
+      hbar($("#ec-ch-mix"), gRows.filter(function (r) { return r.share >= 0.005 || r.rede >= 0.005; }), {
+        grouped: true, label: function (r) { return r.grupo; }, fmt: fp,
+        segs: [{ name: "Seleção", color: C_MAIN, v: function (r) { return r.share; } }, { name: "Média da rede", color: C_MUTED, v: function (r) { return r.rede; } }],
+        onClick: function (r) { soEsse("grupo", r.grupo); openSub("categorias"); },
+      });
+      renderTable($("#ec-t-loja-cat"), gRows, [
         { f: "grupo", label: "Categoria" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
         { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "prof", label: "Peças/ref", num: true, fmt: fd },
-        { f: "share_loja", label: "Mix loja", num: true, fmt: fp }, { f: "share_rede", label: "Mix rede", num: true, fmt: fp },
-        { f: "refs_grade_quebrada", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "pecas_liqui", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
+        { f: "share", label: "Mix seleção", num: true, fmt: fp }, { f: "rede", label: "Mix rede", num: true, fmt: fp },
+        { f: "q", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "liq", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
       ], { sort: { f: "pecas", dir: "desc" } });
     }
 
     // ---- CATEGORIAS ----
-    function drawCategorias() {
-      var cat = ds("categorias"), lc = ds("loja_categoria"), grade = ds("grade_categoria");
-      if (cat) {
-        var opts = cat.filter(function (r) { return r.escopo === "Todas" && r.grupo !== "TOTAL"; }).sort(function (a, b) { return b.pecas - a.pecas; });
-        if (!S.cat && opts.length) S.cat = opts[0].grupo;
-        var sel = $("#ec-sel-cat");
-        if (sel.options.length !== opts.length) sel.replaceChildren.apply(sel, opts.map(function (r) { return new Option(r.grupo, r.grupo); }));
-        sel.value = S.cat;
-        var row = cat.filter(function (r) { return r.escopo === "Lojas" && r.grupo === S.cat; })[0] || {};
-        $$(".ec-kc").forEach(function (el) { var v = row[el.dataset.k]; setTxt(el, v == null ? "—" : el.dataset.k === "prof" ? fd(v) : fi(v)); });
-      }
-      if (failed("grade_categoria")) failBox($("#ec-ch-grade"), D.grade_categoria.msg);
-      else if (grade && S.cat) vbar($("#ec-ch-grade"), grade.filter(function (r) { return r.grupo === S.cat; }).sort(function (a, b) { return +a.tamanho.slice(1) - +b.tamanho.slice(1); }));
-      else loadingBox($("#ec-ch-grade"));
-      if (failed("loja_categoria")) failBox($("#ec-t-cat-lojas"), D.loja_categoria.msg);
-      else if (lc && S.cat) {
-        renderTable($("#ec-t-cat-lojas"), lc.filter(function (r) { return r.grupo === S.cat; }), [
-          { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
-          { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
-          { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "share_loja", label: "Mix na loja", num: true, fmt: fp },
-          { f: "refs_grade_quebrada", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "pecas_liqui", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" }, onRow: function (r) { goLoja(r.filial); } });
-      }
+    function drawCategorias(m, rows) {
+      var a = agg(rows), cats = [];
+      agrupar(rows, function (r) { return r.grupo; }).forEach(function (rs, g) {
+        var x = agg(rs), lojasN = new Set(rs.filter(function (r) { return r.tipo !== CD; }).map(function (r) { return r.filial; })).size;
+        cats.push({ grupo: g, pecas: x.pecas, share: div(x.pecas, a.pecas), refs: x.refs, lojas: lojasN, prof: x.prof, pct_liq: div(x.liq, x.pecas), q: x.refsQ, valor: x.valor });
+      });
+      renderTable($("#ec-t-cats"), cats, [
+        { f: "grupo", label: "Categoria" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
+        { f: "share", label: "% do filtro", num: true, fmt: fp }, { f: "refs", label: "Refs", num: true, fmt: fi },
+        { f: "lojas", label: "Lojas com estoque", num: true, fmt: fi }, { f: "prof", label: "Peças/ref", num: true, fmt: fd },
+        { f: "pct_liq", label: "% liqui", num: true, fmt: fp }, { f: "q", label: "Refs grade quebrada", num: true, fmt: fi },
+        { f: "valor", label: "Valor (venda)", num: true, fmt: fmtBRL.format, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, onRow: function (r) { soEsse("grupo", r.grupo); } });
+      var tam = []; rows.forEach(function (r) { r.tam.forEach(function (x, j) { tam[j] = (tam[j] || 0) + x; }); });
+      vbar($("#ec-ch-grade"), tam.map(function (x, j) { return { tamanho: "T" + (j + 1), pecas: x || 0 }; }).filter(function (r) { return r.pecas > 0; }));
+      var totLoja = new Map();
+      m.rows.forEach(function (r) { if (passaLoja(r.filial, r.tipo)) totLoja.set(r.filial, (totLoja.get(r.filial) || 0) + r.pecas); });
+      var porL = [];
+      agrupar(rows, function (r) { return r.filial; }).forEach(function (rs, f) {
+        var x = agg(rs); porL.push({ filial: f, tipo: m.tipoDe.get(f) || "", pecas: x.pecas, refs: x.refs, prof: x.prof, share: div(x.pecas, totLoja.get(f)), q: x.refsQ, liq: x.liq });
+      });
+      renderTable($("#ec-t-cat-lojas"), porL, [
+        { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true },
+        { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi },
+        { f: "prof", label: "Peças/ref", num: true, fmt: fd }, { f: "share", label: "Mix na loja", num: true, fmt: fp },
+        { f: "q", label: "Refs grade quebrada", num: true, fmt: fi }, { f: "liq", label: "Peças liqui", num: true, fmt: fi, hideSm: true },
+      ], { sort: { f: "pecas", dir: "desc" }, onRow: function (r) { if (r.tipo !== CD) goLoja(r.filial); } });
     }
 
     // ---- PRODUTOS ----
-    var skuIdx = null, skuSrc = null, prodIdx = null, prodSrc = null;
-    function drawProdutos(lojas) {
-      buildPicker("prod", lojas);
-      var prod = ds("produtos");
-      if (failed("produtos")) { failBox($("#ec-t-prod"), D.produtos.msg); return; }
-      if (!prod) { setTxt($("#ec-n-prod"), "Carregando produtos…"); return; }
-      if (prodSrc !== prod) { prodIdx = new Map(prod.map(function (r) { return [r.Ref_Cor, r]; })); prodSrc = prod; }
-      var fc = $("#ec-f-cat");
-      if (fc.options.length === 1) {
-        Array.from(new Set(prod.map(function (r) { return r.grupo; }))).sort(function (a, b) { return a.localeCompare(b, "pt-BR"); }).forEach(function (c) { fc.appendChild(new Option(c, c)); });
-        fc.value = S.fCat;
-      }
-      var q = S.qProd.trim().toUpperCase(), byStore = S.pick.prod.size > 0;
-      $("#ec-wrap-prod").hidden = byStore; $("#ec-wrap-prodloja").hidden = !byStore; $("#ec-f-st").disabled = !byStore;
-      var sku = ds("sku_loja");
-      if (failed("sku_loja")) { failBox($("#ec-t-sku"), D.sku_loja.msg); if (byStore) failBox($("#ec-t-prodloja"), D.sku_loja.msg); return; }
-      if (sku && skuSrc !== sku) { skuIdx = new Map(); sku.forEach(function (r) { var a = skuIdx.get(r.ref); if (!a) { a = []; skuIdx.set(r.ref, a); } a.push(r); }); skuSrc = sku; }
+    function drawProdutos(m, rows) {
+      ["st", "foto", "liq"].forEach(buildPick);
+      var q = S.qProd.trim().toUpperCase(), porLojaView = F.loja.size > 0;
+      $("#ec-wrap-prod").hidden = porLojaView; $("#ec-wrap-prodloja").hidden = !porLojaView;
+      var ok = function (r) {
+        return tem(F.foto, r.foto ? "Com foto" : "Sem foto") && tem(F.liq, r.liqui ? "Liqui" : "Não liqui") && txtMatch(q, r.ref, r.nome);
+      };
       var onRow = function (ref) { S.prod = ref; draw(); $("#ec-card-sku").scrollIntoView({ block: "nearest", behavior: "smooth" }); };
-      if (byStore) {
-        if (!sku) { setTxt($("#ec-n-prod"), "Carregando estoque por loja…"); return; }
-        var rows = [];
-        sku.forEach(function (r) {
-          if (!S.pick.prod.has(r.filial) || (S.fSt && r.status !== S.fSt)) return;
-          var p = prodIdx.get(r.ref) || {};
-          if ((S.fCat && p.grupo !== S.fCat) || (S.fFoto && p.foto !== S.fFoto) || (S.fLiq && p.liqui !== S.fLiq) || !txtMatch(q, r.ref, p.nome)) return;
-          rows.push({ ref: r.ref, filial: r.filial, pecas: r.pecas, grade: r.grade, status: r.status, falta: r.falta, cd: r.cd, nome: p.nome, grupo: p.grupo, foto: p.foto, liqui: p.liqui });
-        });
-        renderTable($("#ec-t-prodloja"), rows, [
+      if (porLojaView) {
+        var lr = rows.filter(function (r) { return ok(r) && tem(F.st, r.status); });
+        renderTable($("#ec-t-prodloja"), lr, [
           { f: "filial", label: "Loja" }, { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria" },
           { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "grade", label: "Grade (T1-T2-…)" },
           { f: "status", label: "Situação", tag: true }, { f: "falta", label: "Faltam" }, { f: "cd", label: "No CD (faltantes)" },
-          { f: "foto", label: "Foto", hideSm: true }, { f: "liqui", label: "Liqui", hideSm: true },
+          { f: "liqui", label: "Liqui", hideSm: true, fmt: function (v) { return v ? "Liqui" : "Não liqui"; } },
         ], { sort: { f: "pecas", dir: "desc" }, limit: 500, countEl: $("#ec-n-prod"), sel: function (r) { return r.ref === S.prod; }, onRow: function (r) { onRow(r.ref); } });
+        if (!S.prod && lr.length) S.prod = lr[0].ref;
       } else {
-        var rows2 = prod.filter(function (r) { return (!S.fCat || r.grupo === S.fCat) && (!S.fFoto || r.foto === S.fFoto) && (!S.fLiq || r.liqui === S.fLiq) && txtMatch(q, r.Ref_Cor, r.nome); });
-        if (!S.prod && rows2.length) S.prod = rows2[0].Ref_Cor;
-        renderTable($("#ec-t-prod"), rows2, [
-          { f: "Ref_Cor", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria" },
+        var lista = [];
+        agrupar(rows.filter(function (r) { return ok(r) && tem(F.st, r.status); }), function (r) { return r.ref; }).forEach(function (rs, ref) {
+          var p = m.pmap.get(ref) || {}, x = agg(rs);
+          var lojasN = new Set(rs.filter(function (r) { return r.tipo !== CD; }).map(function (r) { return r.filial; })).size;
+          var emLojas = rs.reduce(function (s, r) { return s + (r.tipo !== CD ? r.pecas : 0); }, 0);
+          lista.push({ ref: ref, nome: p.nome, grupo: p.grupo, linha: p.linha, preco: Number(p.preco) || 0, pecas: x.pecas, lojasP: emLojas,
+            cdDist: p.pecas_cd_dist || 0, lojas: lojasN, foto: p.foto, liqui: p.liqui });
+        });
+        renderTable($("#ec-t-prod"), lista, [
+          { f: "ref", label: "Ref_Cor" }, { f: "nome", label: "Nome" }, { f: "grupo", label: "Categoria" },
           { f: "linha", label: "Linha", hideSm: true }, { f: "preco", label: "Preço", num: true, fmt: fmtBRLCents.format, hideSm: true },
-          { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi }, { f: "pecas_lojas", label: "Em lojas", num: true, fmt: fi },
-          { f: "pecas_cd_dist", label: "No CD (distribuidora)", num: true, fmt: fi }, { f: "pecas_cd", label: "CD + outros", num: true, fmt: fi, hideSm: true },
-          { f: "lojas", label: "Nº lojas", num: true, fmt: fi }, { f: "foto", label: "Foto", hideSm: true }, { f: "liqui", label: "Liqui", hideSm: true },
-        ], { sort: { f: "pecas", dir: "desc" }, limit: 300, countEl: $("#ec-n-prod"), sel: function (r) { return r.Ref_Cor === S.prod; }, onRow: function (r) { onRow(r.Ref_Cor); } });
+          { f: "pecas", label: "Peças (filtro)", num: true, bar: true, fmt: fi }, { f: "lojasP", label: "Em lojas", num: true, fmt: fi },
+          { f: "cdDist", label: "No CD (distribuidora)", num: true, fmt: fi }, { f: "lojas", label: "Nº lojas", num: true, fmt: fi },
+          { f: "foto", label: "Foto", hideSm: true }, { f: "liqui", label: "Liqui", hideSm: true },
+        ], { sort: { f: "pecas", dir: "desc" }, limit: 300, countEl: $("#ec-n-prod"), sel: function (r) { return r.ref === S.prod; }, onRow: function (r) { onRow(r.ref); } });
+        if (!S.prod && lista.length) S.prod = lista.slice().sort(function (x, y) { return y.pecas - x.pecas; })[0].ref;
       }
-      if (!sku || !S.prod) return;
-      var p0 = prodIdx.get(S.prod);
+      if (!S.prod) { $("#ec-t-sku").replaceChildren(); return; }
+      var p0 = m.pmap.get(S.prod);
       setTxt($("#ec-sku-title"), "Distribuição por loja: " + S.prod + (p0 ? " · " + p0.nome : ""));
-      renderTable($("#ec-t-sku"), skuIdx.get(S.prod) || [], [
-        { f: "filial", label: "Loja" }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
+      renderTable($("#ec-t-sku"), m.rows.filter(function (r) { return r.ref === S.prod; }), [
+        { f: "filial", label: "Loja" }, { f: "tipo", label: "Tipo", hideSm: true }, { f: "pecas", label: "Peças", num: true, bar: true, fmt: fi },
         { f: "grade", label: "Grade (T1-T2-…)" }, { f: "status", label: "Situação", tag: true },
         { f: "falta", label: "Faltam" }, { f: "cd", label: "No CD (faltantes)" },
-      ], { sort: { f: "pecas", dir: "desc" }, sel: function (r) { return S.pick.prod.has(r.filial); } });
+      ], { sort: { f: "pecas", dir: "desc" }, sel: function (r) { return filtroAtivo() && passaLoja(r.filial, r.tipo); } });
     }
 
     // ---- CARREGAR PLANILHA ----
     function drawPlanilha() {
-      if (cargas) {
-        renderTable($("#ec-t-cargas"), cargas.map(function (c) { return Object.assign({}, c, { pecas: Number(c.pecas), refs: Number(c.refs), locais: Number(c.locais) }); }), [
-          { f: "data_ref", label: "Data do estoque", fmt: function (v) { return v ? v.split("-").reverse().join("/") : ""; } },
-          { f: "arquivo", label: "Arquivo" }, { f: "origem", label: "Origem" }, { f: "enviado_por", label: "Enviado por", hideSm: true },
-          { f: "pecas", label: "Peças", num: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "locais", label: "Locais", num: true, fmt: fi },
-          { f: "created_at", label: "Recebida em", fmt: function (v) { return v ? new Date(v).toLocaleString("pt-BR") : ""; } },
-        ], { sort: { f: "data_ref", dir: "desc" } });
-      }
+      if (!cargas) return;
+      renderTable($("#ec-t-cargas"), cargas.map(function (c) { return Object.assign({}, c, { pecas: Number(c.pecas), refs: Number(c.refs), locais: Number(c.locais) }); }), [
+        { f: "data_ref", label: "Data do estoque", fmt: function (v) { return v ? v.split("-").reverse().join("/") : ""; } },
+        { f: "arquivo", label: "Arquivo" }, { f: "origem", label: "Origem" }, { f: "enviado_por", label: "Enviado por", hideSm: true },
+        { f: "pecas", label: "Peças", num: true, fmt: fi }, { f: "refs", label: "Refs", num: true, fmt: fi }, { f: "locais", label: "Locais", num: true, fmt: fi },
+        { f: "created_at", label: "Recebida em", fmt: function (v) { return v ? new Date(v).toLocaleString("pt-BR") : ""; } },
+      ], { sort: { f: "data_ref", dir: "desc" }, vazio: "Nenhuma planilha recebida ainda." });
     }
     function enviarPlanilha(e) {
       e.preventDefault();
@@ -2731,8 +3806,7 @@
       fetch(url, { method: "POST", headers: { Authorization: "Bearer " + AUTH.token, "Content-Type": "application/octet-stream" }, body: file })
         .then(function (res) { return res.json().then(function (b) { if (!res.ok) throw new Error(b.error || "HTTP " + res.status); return b; }); })
         .then(function (b) {
-          if (b.alreadyRunning) msg.textContent = "Já tem uma planilha sendo processada. Aguardando terminar…";
-          else msg.textContent = "Planilha recebida. Processando (leva menos de 1 minuto)…";
+          msg.textContent = b.alreadyRunning ? "Já tem uma planilha sendo processada. Aguardando terminar…" : "Planilha recebida. Processando (leva menos de 1 minuto)…";
           var tentativas = 0;
           var timer = setInterval(function () {
             tentativas += 1;
@@ -2759,22 +3833,34 @@
       var isAdmin = AUTH.user && AUTH.user.role === "admin";
       $("#ec-sub-planilha-btn").hidden = !isAdmin;
       if (S.sub === "planilha" && !isAdmin) S.sub = "decisoes";
-      var vazio = cargas && cargas.length === 0;
-      var c0 = cargas && cargas[0];
+      var vazio = cargas && cargas.length === 0, c0 = cargas && cargas[0];
       setTxt($("#ec-base"), cargas == null ? "Carregando a última planilha…" : c0
         ? "Planilha de " + c0.data_ref.split("-").reverse().join("/") + " · " + fi(Number(c0.pecas)) + " peças · " + fi(Number(c0.locais)) + " locais"
         : "Nenhuma planilha carregada");
-      $("#ec-vazio").hidden = !vazio || S.sub === "planilha";
-      SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = s !== S.sub || (vazio && s !== "planilha"); });
-      if (cargas == null) return;
-      if (S.sub === "planilha") { drawPlanilha(); return; }
-      if (vazio) return;
-      var lojas = ds("lojas");
-      if (S.sub === "decisoes") drawDecisoes(lojas);
-      else if (S.sub === "geral") drawGeral(lojas);
-      else if (S.sub === "lojas") drawLojas(lojas);
-      else if (S.sub === "categorias") drawCategorias();
-      else if (S.sub === "produtos") drawProdutos(lojas);
+      var naPlanilha = S.sub === "planilha";
+      $("#ec-vazio").hidden = !vazio || naPlanilha;
+      $("#ec-filtros").hidden = naPlanilha || vazio || cargas == null;
+      if (naPlanilha) { SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = s !== "planilha"; }); $("#ec-carregando").hidden = true; drawPlanilha(); return; }
+      if (cargas == null || vazio) { SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = true; }); $("#ec-carregando").hidden = vazio; return; }
+      var m = modelo();
+      var err = erroDe("lojas", "produtos", "sku_loja");
+      if (!m) {
+        SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = true; });
+        var load = $("#ec-carregando"); load.hidden = false;
+        if (err) failBox(load, err);
+        return;
+      }
+      $("#ec-carregando").hidden = true;
+      SUBS.forEach(function (s) { $("#ec-sub-" + s).hidden = s !== S.sub; });
+      ["tipo", "loja", "grupo", "linha"].forEach(buildPick);
+      $("#ec-limpar").hidden = !filtroAtivo();
+      var rows = filtrados();
+      setTxt($("#ec-filtro-resumo"), filtroAtivo() ? fi(rows.reduce(function (s, r) { return s + r.pecas; }, 0)) + " peças no filtro" : "");
+      if (S.sub === "decisoes") drawDecisoes(m, rows);
+      else if (S.sub === "geral") drawGeral(m, rows);
+      else if (S.sub === "lojas") drawLojas(m, rows);
+      else if (S.sub === "categorias") drawCategorias(m, rows);
+      else if (S.sub === "produtos") drawProdutos(m, rows);
     }
 
     var aberto = false;
@@ -2786,7 +3872,7 @@
       carregarCargas();
     }
     function recarregar() {
-      D = {}; cargas = null; decDone = null; pickerSig = {};
+      D = {}; M = null; cargas = null; pickSig = {};
       $$("[data-loading]").forEach(function (el) { delete el.dataset.loading; });
       carregarCargas();
     }
@@ -2795,7 +3881,7 @@
   function loadEstoque() { EstoqueCia.abrir(); }
 
   // ==================== Tabs ====================
-  var LOADERS = { overview: loadOverview, vendas: loadVendas, estoque: loadEstoque, logistica: loadLogistica, marketing: loadMarketing, insights: loadInsights, admin: loadAdmin };
+  var LOADERS = { overview: loadOverview, vendas: loadVendas, "detalhamento-vendas": loadDetalhamentoVendas, estoque: loadEstoque, logistica: loadLogistica, marketing: loadMarketing, insights: loadInsights, admin: loadAdmin };
   var loaded = {};
 
   function activateTab(name) {
@@ -2827,6 +3913,171 @@
     setTimeout(function () { btn.classList.remove("spinning"); }, 700);
   }
   document.getElementById("refreshBtn").addEventListener("click", refreshAll);
+
+  // ==================== Cards recolhíveis (todas as abas) ====================
+  // Genérico de propósito: funciona pra qualquer card, estático (já no HTML) ou criado
+  // dinamicamente em JS (KPIs da Visão Geral, cards de Insights) — não depende de nenhuma
+  // classe específica dentro do card, só esconde tudo que não é o <h3> quando colapsado.
+  // Roda de novo a cada mutação no <main> (via MutationObserver abaixo) pra pegar cards
+  // criados depois do carregamento inicial, sem precisar chamar isso manualmente em cada
+  // função loadX().
+  var COLLAPSE_STORAGE_KEY = "zz_collapsed_cards";
+  var collapsedCards = {};
+  try { collapsedCards = JSON.parse(safeLocalGet(COLLAPSE_STORAGE_KEY) || "{}"); } catch (e) { collapsedCards = {}; }
+  function persistCollapsedCards() { safeLocalSet(COLLAPSE_STORAGE_KEY, JSON.stringify(collapsedCards)); }
+
+  function setupCollapsibleCards() {
+    document.querySelectorAll(".card").forEach(function (card) {
+      var h3 = card.querySelector("h3");
+      if (!h3 || h3.dataset.collapseReady) return;
+      h3.dataset.collapseReady = "1";
+
+      // Move os elementos que já existiam dentro do h3 (ex.: botão "Ver tudo") pra um
+      // wrapper junto com o novo botão de recolher, mantendo o h3 com só 2 itens flex
+      // (título + ações) — sem isso, "justify-content:space-between" no h3 espalharia
+      // "Ver tudo" e o botão de recolher em posições erradas quando os dois existem.
+      var actions = el("span", { class: "h3-actions" });
+      Array.prototype.slice.call(h3.children).forEach(function (child) { actions.appendChild(child); });
+      var toggle = el("button", { type: "button", class: "collapse-toggle", "aria-label": "Recolher ou expandir" });
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+      actions.appendChild(toggle);
+      h3.appendChild(actions);
+
+      if (card.id && collapsedCards[card.id]) card.classList.add("collapsed");
+
+      h3.addEventListener("click", function (e) {
+        if (e.target.closest(".tag-btn") || e.target.closest(".drag-handle")) return; // não recolhe ao clicar em "Ver tudo" ou no puxador de arrastar
+        card.classList.toggle("collapsed");
+        if (card.id) {
+          if (card.classList.contains("collapsed")) collapsedCards[card.id] = true;
+          else delete collapsedCards[card.id];
+          persistCollapsedCards();
+        }
+      });
+    });
+  }
+
+  // ==================== Arrastar pra reorganizar os módulos (todas as abas) ====================
+  // Cada container de cards com id estável (os .grid de cada aba, o kpiRow da Visão Geral e o
+  // insightGrid de Insights) vira uma "zona" de arrastar-e-soltar independente — só reordena
+  // dentro do mesmo container, nunca entre abas diferentes. O puxador (⠿) fica dentro do
+  // .h3-actions já criado por setupCollapsibleCards (por isso essa função tem que rodar
+  // primeiro — ver enhanceCards abaixo). A identidade de cada card pra salvar a ordem é o
+  // `id` quando existe; sem id (caso dos KPIs e Insights, recriados do zero a cada
+  // atualização) usamos o texto do título, que é sempre o mesmo pro mesmo cartão.
+  var GRID_ORDER_KEY = "zz_grid_order";
+  var gridOrder = {};
+  try { gridOrder = JSON.parse(safeLocalGet(GRID_ORDER_KEY) || "{}"); } catch (e) { gridOrder = {}; }
+  function persistGridOrder() { safeLocalSet(GRID_ORDER_KEY, JSON.stringify(gridOrder)); }
+
+  function cardKey(card) {
+    if (card.id) return "id:" + card.id;
+    var h3 = card.querySelector("h3");
+    var titulo = h3 ? h3.firstChild && h3.firstChild.textContent : "";
+    return "titulo:" + (titulo || "").trim();
+  }
+
+  function cardsOf(container) {
+    return Array.prototype.slice.call(container.children).filter(function (c) { return c.classList && c.classList.contains("card"); });
+  }
+
+  // Reaplica a ordem salva sem mexer em nada se já estiver certa — importante porque isso
+  // roda de novo a cada atualização dos KPIs/Insights (que recriam os cards do zero, sempre
+  // na mesma ordem "de fábrica"), então sem essa checagem a gente ficaria reordenando o DOM
+  // (com um pequeno flicker) toda vez que o período do painel mudasse.
+  function applySavedOrder(container) {
+    var salvo = gridOrder[container.id];
+    if (!salvo || !salvo.length) return;
+    var cards = cardsOf(container);
+    var atual = cards.map(cardKey);
+    var alvo = salvo.filter(function (k) { return atual.indexOf(k) !== -1; });
+    atual.forEach(function (k) { if (alvo.indexOf(k) === -1) alvo.push(k); }); // cards novos vão pro fim
+    var mudou = alvo.length !== atual.length || alvo.some(function (k, i) { return k !== atual[i]; });
+    if (!mudou) return;
+    var porChave = {};
+    cards.forEach(function (c) { porChave[cardKey(c)] = c; });
+    alvo.forEach(function (k) { if (porChave[k]) container.appendChild(porChave[k]); });
+  }
+
+  function saveOrder(container) {
+    gridOrder[container.id] = cardsOf(container).map(cardKey);
+    persistGridOrder();
+  }
+
+  var dragState = null;
+
+  function clearDragOverMarks() {
+    document.querySelectorAll(".card.drag-over-before, .card.drag-over-after").forEach(function (c) {
+      c.classList.remove("drag-over-before", "drag-over-after");
+    });
+  }
+
+  function setupDragHandles() {
+    document.querySelectorAll(".grid, .kpi-row, .insight-grid").forEach(function (container) {
+      if (!container.id) return; // só reordena containers com id estável
+
+      if (!container.dataset.dragZoneReady) {
+        container.dataset.dragZoneReady = "1";
+        container.addEventListener("dragover", function (e) {
+          if (!dragState || dragState.container !== container) return;
+          e.preventDefault();
+          var alvo = e.target.closest(".card");
+          clearDragOverMarks();
+          if (!alvo || alvo === dragState.card) return;
+          var rect = alvo.getBoundingClientRect();
+          alvo.classList.add((e.clientY - rect.top) < rect.height / 2 ? "drag-over-before" : "drag-over-after");
+        });
+        container.addEventListener("drop", function (e) {
+          if (!dragState || dragState.container !== container) return;
+          e.preventDefault();
+          var alvo = e.target.closest(".card");
+          clearDragOverMarks();
+          if (alvo && alvo !== dragState.card) {
+            var rect = alvo.getBoundingClientRect();
+            var antes = (e.clientY - rect.top) < rect.height / 2;
+            container.insertBefore(dragState.card, antes ? alvo : alvo.nextSibling);
+          }
+          saveOrder(container);
+        });
+      }
+
+      cardsOf(container).forEach(function (card) {
+        if (card.dataset.dragHandleReady) return;
+        var h3 = card.querySelector("h3");
+        var actions = h3 && h3.querySelector(".h3-actions");
+        if (!actions) return; // espera setupCollapsibleCards criar o .h3-actions primeiro
+        card.dataset.dragHandleReady = "1";
+
+        var handle = el("span", { class: "drag-handle", title: "Arraste pra reorganizar", draggable: "true", "aria-label": "Arrastar pra reorganizar" }, [document.createTextNode("⠿")]);
+        actions.insertBefore(handle, actions.firstChild);
+
+        handle.addEventListener("dragstart", function (e) {
+          dragState = { card: card, container: container };
+          card.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+          try { e.dataTransfer.setDragImage(card, 20, 20); } catch (err) {}
+          try { e.dataTransfer.setData("text/plain", cardKey(card)); } catch (err) {}
+        });
+        handle.addEventListener("dragend", function () {
+          card.classList.remove("dragging");
+          clearDragOverMarks();
+          dragState = null;
+        });
+      });
+
+      applySavedOrder(container);
+    });
+  }
+
+  function enhanceCards() {
+    setupCollapsibleCards();
+    setupDragHandles();
+  }
+  enhanceCards();
+  var mainEl = document.querySelector("main");
+  if (mainEl && window.MutationObserver) {
+    new MutationObserver(enhanceCards).observe(mainEl, { childList: true, subtree: true });
+  }
 
   function boot() {
     applyPreset("90");

@@ -245,12 +245,14 @@ function processarEstoque({ itens, produtos }) {
   produtosOut.sort((a, b) => b.pecas - a.pecas);
 
   // ---- 11. produto × loja (com grade e o que o CD tem dos tamanhos que faltam) ----
+  // É a base dos filtros do painel: com ela + produtos + lojas o navegador recalcula
+  // qualquer combinação de tipo de loja, lojas, categorias e linhas.
   const skuLoja = linhas.map((l) => {
     const loja = ehLoja(l);
     const cd = cdOriginal.get(l.ref);
     return {
-      ref: l.ref, filial: l.filial, pecas: l.q,
-      status: loja ? l.status : "",
+      ref: l.ref, filial: l.filial, pecas: l.q, ecom: l.ecom,
+      status: l.status,
       falta: loja ? l.faltaIdx.map((j) => "T" + (j + 1)).join(",") : "",
       grade: l.tam.slice(0, ultimoTam.get(l.ref)).join("-"),
       cd: loja && cd ? l.faltaIdx.filter((j) => cd[j] > 0).map((j) => `T${j + 1}:${cd[j]}`).join(" ") : "",
