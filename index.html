@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Painel Zinzane</title>
 <meta name="description" content="Painel de vendas, logística e marketing da Zinzane com dados ao vivo da Vtex e do Google Analytics.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -331,6 +333,12 @@
   .stat-value { font-family: var(--font-body); font-weight: 800; font-size: 32px; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .stat-sub { margin-top: 6px; font-size: 12.5px; color: var(--text-secondary); }
   .stat-sub b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .proj-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .proj-col + .proj-col { padding-left: 28px; border-left: 1px solid var(--border); }
+  .proj-label { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+  .proj-col .caption { margin-top: 12px; }
+  .proj-col .progress-track { margin-top: 12px; }
+  .line-chart-wrap .point-label { font-size: 11px; font-weight: 600; fill: var(--text-secondary); font-family: var(--font-body); font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
   .delta { margin-top: 8px; font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 100px; }
   .delta-up { color: var(--good); background: rgba(12,163,12,0.10); }
   .delta-down { color: var(--critical); background: rgba(208,59,59,0.10); }
@@ -369,10 +377,56 @@
   .badge.classe-c { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
   .badge.stock-low { background: rgba(208,59,59,0.12); color: var(--critical); }
   .badge.stock-ok { background: rgba(12,163,12,0.10); color: var(--good); }
+  .badge.stock-unlimited { background: var(--accent-soft); color: var(--accent); }
   .badge.role-admin { background: var(--accent); color: var(--accent-ink); }
   .badge.role-viewer { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
   .badge.dentro-estado { background: rgba(12,163,12,0.10); color: var(--good); }
   .badge.fora-estado { background: rgba(208,59,59,0.12); color: var(--critical); }
+
+  /* ---------- Produto (foto + nome), usado no card "Top produtos mais vendidos" ---------- */
+  .produto-cell { display: flex; align-items: center; gap: 16px; }
+  .produto-thumb {
+    width: 192px; height: 192px; border-radius: 14px; object-fit: cover; flex-shrink: 0;
+    background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .produto-cell .produto-nome { min-width: 0; }
+  .produto-cell .produto-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .tamanhos-toggle {
+    align-self: flex-start; background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--accent, #0a66c2); font-size: 12px; font-weight: 600;
+  }
+  .tamanhos-toggle:hover { text-decoration: underline; }
+  tr.tamanhos-row td { background: var(--surface-2); padding: 10px 14px; }
+  table.tamanhos-mini { width: 100%; border-collapse: collapse; }
+  table.tamanhos-mini th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 4px 10px; }
+  table.tamanhos-mini td { padding: 4px 10px; font-size: 13px; border-top: 1px solid var(--border); }
+  table.tamanhos-mini th.num, table.tamanhos-mini td.num { text-align: right; }
+
+  /* ---------- Cards recolhíveis (todas as abas) ---------- */
+  .card h3 { cursor: pointer; }
+  .h3-actions { display: flex; align-items: center; gap: 6px; }
+  .collapse-toggle {
+    appearance: none; border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+    transition: transform 200ms ease, background 150ms ease, color 150ms ease;
+  }
+  .collapse-toggle:hover { background: var(--surface-2); color: var(--text-primary); }
+  .card.collapsed .collapse-toggle { transform: rotate(-90deg); }
+  .card.collapsed > *:not(h3) { display: none !important; }
+  .card.collapsed { padding-bottom: 18px; }
+
+  /* ---------- Arrastar pra reorganizar os módulos (cards) dentro de cada aba ---------- */
+  .drag-handle {
+    appearance: none; border: none; background: transparent; color: var(--text-muted);
+    display: flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+    border-radius: 6px; flex-shrink: 0; cursor: grab; font-size: 16px; line-height: 1;
+    transition: background 150ms ease, color 150ms ease;
+  }
+  .drag-handle:hover { background: var(--surface-2); color: var(--text-primary); }
+  .drag-handle:active { cursor: grabbing; }
+  .card.dragging { opacity: 0.4; }
+  .card.drag-over-before { box-shadow: inset 0 3px 0 0 var(--accent); }
+  .card.drag-over-after { box-shadow: inset 0 -3px 0 0 var(--accent); }
 
   .kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
   @media (max-width: 900px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
@@ -383,6 +437,29 @@
   .legend .swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
   .legend .name { color: var(--text-primary); }
   .legend .num { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  .line-chart-wrap { position: relative; }
+  .line-chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .line-chart-wrap .axis-label { font-size: 10.5px; fill: var(--text-muted); font-family: var(--font-body); }
+  .line-chart-wrap .end-label { font-size: 12px; font-weight: 700; fill: var(--text-primary); font-family: var(--font-body); }
+  .line-chart-wrap .grid-line { stroke: var(--grid-line); stroke-width: 1; }
+  .line-chart-wrap .hover-layer:focus { outline: none; }
+  .line-chart-wrap .crosshair-line { stroke: var(--text-muted); stroke-width: 1; opacity: 0; pointer-events: none; }
+  .line-chart-wrap .hover-layer { fill: transparent; cursor: crosshair; }
+  .line-chart .legend { flex-direction: row; flex-wrap: wrap; gap: 18px; margin-top: 14px; font-size: 12.5px; }
+  .line-chart .legend .row { gap: 7px; }
+  .line-chart .legend .linekey { width: 16px; height: 2px; border-radius: 1px; flex: none; }
+  .chart-tooltip {
+    position: absolute; pointer-events: none; z-index: 5; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; box-shadow: var(--shadow);
+    font-size: 12px; opacity: 0; transition: opacity 100ms ease; white-space: nowrap;
+  }
+  .chart-tooltip .date { color: var(--text-muted); font-size: 11px; margin-bottom: 6px; }
+  .chart-tooltip .row { display: flex; align-items: center; gap: 7px; }
+  .chart-tooltip .row + .row { margin-top: 4px; }
+  .chart-tooltip .linekey { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  .chart-tooltip .name { color: var(--text-secondary); }
+  .chart-tooltip .val { margin-left: auto; padding-left: 10px; color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
 
   .empty-state { font-size: 12.5px; color: var(--text-muted); padding: 8px 0; }
   .skeleton { height: 14px; border-radius: 7px; background: var(--surface-2); position: relative; overflow: hidden; }
@@ -416,6 +493,21 @@
   .chip.active { background: var(--btn-fill); color: var(--btn-fill-ink); border-color: transparent; }
   .chip:active { transform: scale(0.92); }
 
+  /* ---------- Status filter (aba Vendas) ---------- */
+  .status-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -6px 0 14px; }
+  .status-filter .caption { white-space: nowrap; }
+  .status-chip-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .status-chip {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-secondary);
+    font-size: 11.5px; font-weight: 600; padding: 5px 12px; border-radius: 100px; cursor: pointer; transition: all 150ms ease; white-space: nowrap;
+  }
+  .status-chip.active { background: var(--btn-fill); color: var(--btn-fill-ink); border-color: transparent; }
+  .status-chip:active { transform: scale(0.94); }
+  .status-filter .link-btn {
+    appearance: none; border: none; background: transparent; color: var(--text-muted); font-size: 11.5px; font-weight: 600;
+    cursor: pointer; text-decoration: underline; padding: 0;
+  }
+
   /* ---------- Insights ---------- */
   .insight-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); }
   @media (max-width: 900px) { .insight-grid { grid-template-columns: 1fr; } }
@@ -431,6 +523,91 @@
   footer.foot {
     max-width: 1180px; margin: 30px auto 0; padding-top: 16px; border-top: 1px solid var(--border);
     font-size: 11.5px; color: var(--text-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+
+  /* ---------- Celular (<= 700px) ----------
+     Cabeçalho compacto (logo + ações numa linha, abas rolando na horizontal numa linha só em
+     vez de quebrar em 3), filtro de período rolável, cards/tabelas/fotos em escala menor.
+     `header.topbar { display: contents }` faz o .topbar-inner virar filho direto do #app, pra
+     só ele (logo + abas) ficar fixo no topo ao rolar — o filtro de período rola junto com a
+     página, em vez de comer ~1/3 da tela o tempo todo como acontecia com o cabeçalho inteiro
+     fixo. */
+  @media (max-width: 700px) {
+    body { padding-inline: 12px; padding-block: 0 28px; }
+    .login-screen { margin-inline: -12px; }
+    header.topbar { display: contents; }
+    .topbar-inner {
+      position: sticky; top: env(safe-area-inset-top, 0px); z-index: 40;
+      max-width: none; margin: 0 -12px; padding: 10px 12px 8px; gap: 8px;
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter: blur(22px) saturate(180%); -webkit-backdrop-filter: blur(22px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand .sub { display: none; }
+    .brand .logo { height: 20px; }
+    .topbar-actions { gap: 6px; }
+    .user-menu { padding-left: 0; border-left: none; }
+    .user-menu .email { display: none; }
+    .btn-secondary { padding: 7px 13px; }
+    .refresh-btn { width: 34px; height: 34px; padding: 0; justify-content: center; gap: 0; font-size: 0; }
+    .refresh-btn svg { width: 15px; height: 15px; }
+    nav.tabs {
+      order: 3; width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+      -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+    }
+    nav.tabs::-webkit-scrollbar { display: none; }
+    nav.tabs button { flex: 0 0 auto; white-space: nowrap; padding: 8px 13px; }
+
+    .filterbar { padding-block: 10px 6px; gap: 10px; }
+    .period-presets { width: 100%; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .period-presets::-webkit-scrollbar { display: none; }
+    .period-presets button { flex: 0 0 auto; white-space: nowrap; padding: 7px 13px; }
+    .period-custom { width: 100%; flex-wrap: wrap; }
+    .period-custom input[type="date"] { flex: 1 1 130px; min-width: 0; padding: 8px 12px; font-size: 14px; }
+    .period-label { margin-left: 0; width: 100%; }
+
+    main { padding-top: 12px; }
+    .section-head { margin: 22px 0 10px; }
+    .section-head h2 { font-size: 19px; }
+    .grid, .kpi-row { gap: 10px; }
+    .card { padding: 14px 14px; }
+    .card h3 { margin-bottom: 10px; }
+    .stat-value { font-size: 26px; }
+    .proj-grid { grid-template-columns: 1fr; gap: 18px; }
+    .proj-col + .proj-col { padding-left: 0; border-left: none; padding-top: 18px; border-top: 1px solid var(--border); }
+
+    /* tabelas: rolam na horizontal dentro do card em vez de estourar a página */
+    .table-wrap { -webkit-overflow-scrolling: touch; }
+    tbody td { padding: 8px 8px; }
+    thead th { padding: 0 8px 8px; }
+
+    /* Top produtos: foto grande (192px) ocuparia a tela toda — encolhe e tira a coluna
+       Categoria pra caber produto + unidades + valor + estoque sem rolar de lado */
+    .produto-thumb { width: 50px; height: 50px; border-radius: 8px; }
+    .produto-cell { gap: 8px; }
+    .tamanhos-toggle { white-space: nowrap; }
+    #card-top-produtos .table-wrap > table > thead th:nth-child(2),
+    #card-top-produtos .table-wrap > table > tbody > tr:not(.tamanhos-row) > td:nth-child(2) { display: none; }
+    #card-top-produtos thead th { white-space: normal; line-height: 1.2; vertical-align: bottom; padding-inline: 3px; font-size: 9px; letter-spacing: 0; }
+    #card-top-produtos tbody td { padding-inline: 3px; font-size: 13px; }
+    #card-top-produtos .produto-thumb { width: 40px; height: 40px; }
+    #card-top-produtos .tamanhos-toggle { font-size: 12px; }
+    #card-top-produtos .produto-cell { gap: 7px; }
+    #card-top-produtos .produto-nome { overflow-wrap: anywhere; }
+    #card-top-produtos .badge { padding: 2px 7px; font-size: 11px; }
+    #card-top-produtos tbody tr:not(.tamanhos-row) td.wrap { min-width: 0; }
+    tr.tamanhos-row td { padding: 8px 4px; white-space: normal; }
+    table.tamanhos-mini th { padding: 4px 4px; font-size: 9.5px; letter-spacing: 0; white-space: normal; }
+    table.tamanhos-mini td { padding: 4px 4px; font-size: 12px; white-space: normal; }
+    table.tamanhos-mini td.num { white-space: nowrap; }
+    table.tamanhos-mini td:first-child { word-break: break-word; }
+    /* colunas de nome (texto longo) nas demais tabelas: largura mínima razoável e a tabela
+       rola na horizontal, em vez de esmagar o nome em 6 linhas de 1 palavra */
+    tbody td.wrap { min-width: 170px; }
+
+    .abc-controls { gap: 8px; }
+    .status-filter { gap: 6px; }
+    footer.foot { margin-top: 22px; }
   }
 
   /* ---------- Estoque Cia ---------- */
@@ -542,6 +719,7 @@
       <nav class="tabs" id="tabs" role="tablist">
         <button role="tab" aria-selected="true" data-tab="overview">Overview</button>
         <button role="tab" aria-selected="false" data-tab="vendas">Vendas</button>
+        <button role="tab" aria-selected="false" data-tab="detalhamento-vendas">Detalhamento vendas</button>
         <button role="tab" aria-selected="false" data-tab="estoque">Estoque Cia</button>
         <button role="tab" aria-selected="false" data-tab="logistica">Logística</button>
         <button role="tab" aria-selected="false" data-tab="marketing">Marketing</button>
@@ -594,7 +772,7 @@
       </div>
       <div class="kpi-row" id="kpiRow"></div>
 
-      <div class="grid" style="margin-top:14px">
+      <div class="grid" id="grid-overview" style="margin-top:14px">
         <div class="card col-5" id="card-receita-dispositivo"><h3>Receita por dispositivo</h3><div class="body"></div></div>
         <div class="card col-7" id="card-tracking-pedido"><h3>Status dos pedidos</h3><div class="body"></div></div>
         <div class="card col-12" id="card-ltv-categoria"><h3>LTV médio por categoria principal do cliente <button class="tag-btn" data-card="ltv-categoria" hidden>Ver tudo</button></h3><div class="body"></div></div>
@@ -606,12 +784,42 @@
         <h2>Vendas</h2>
         <span class="caption">Pedidos sincronizados da Vtex · período selecionado</span>
       </div>
-      <div class="grid">
+      <div class="status-filter" id="vendasStatusFilter" hidden>
+        <span class="caption">Status do pedido:</span>
+        <div class="status-chip-group" id="vendasStatusChips"></div>
+        <button type="button" class="link-btn" id="vendasStatusReset">Restaurar padrão</button>
+      </div>
+      <div class="grid" id="grid-vendas">
+        <div class="card col-12" id="card-projecao-dia"><h3>Projeção de fechamento · dia e mês</h3><div class="body"></div></div>
+
+        <div class="card col-12" id="card-venda-diaria"><h3>Vendas diárias</h3><div class="body"></div></div>
+
+        <div class="card col-12" id="card-top-produtos"><h3>Top produtos mais vendidos <button class="tag-btn" data-card="top-produtos" hidden>Ver tudo</button></h3><div class="body"></div></div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="panel-detalhamento-vendas" role="tabpanel" hidden>
+      <div class="section-head">
+        <h2>Detalhamento vendas</h2>
+        <span class="caption">Pedidos sincronizados da Vtex · período selecionado</span>
+      </div>
+      <div class="status-filter" id="detStatusFilter" hidden>
+        <span class="caption">Status do pedido:</span>
+        <div class="status-chip-group" id="detStatusChips"></div>
+        <button type="button" class="link-btn" id="detStatusReset">Restaurar padrão</button>
+      </div>
+      <div class="grid" id="grid-detalhamento-vendas">
         <div class="card col-4" id="card-receita-meta"><h3>Receita vs. meta</h3><div class="body"></div></div>
         <div class="card col-8" id="card-venda-categoria"><h3>Venda por categoria <button class="tag-btn" data-card="venda-categoria" hidden>Ver tudo</button></h3><div class="body"></div></div>
 
         <div class="card col-5" id="card-tipo-venda"><h3>Liquidação × Coleção</h3><div class="body"></div></div>
         <div class="card col-7" id="card-meios-pagamento"><h3>Meios de pagamento <button class="tag-btn" data-card="meios-pagamento" hidden>Ver tudo</button></h3><div class="body"></div></div>
+
+        <div class="card col-5" id="card-novos-recorrentes"><h3>Novos × Recorrentes</h3><div class="body"></div></div>
+        <div class="card col-7" id="card-cupons"><h3>Cupons e descontos</h3><div class="body"></div></div>
+
+        <div class="card col-6" id="card-sazonalidade-dia"><h3>Vendas por dia da semana</h3><div class="body"></div></div>
+        <div class="card col-6" id="card-sazonalidade-hora"><h3>Vendas por hora do dia</h3><div class="body"></div></div>
 
         <div class="card col-12" id="card-curva-abc">
           <h3>Curva ABC de produtos <button class="tag-btn" data-card="curva-abc" hidden>Ver tudo</button></h3>
@@ -642,7 +850,7 @@
         <h2>Logística</h2>
         <span class="caption">Entregas confirmadas pela transportadora · período selecionado</span>
       </div>
-      <div class="grid">
+      <div class="grid" id="grid-logistica">
         <div class="card col-4" id="card-sla-entregues"><h3>Pedidos entregues</h3><div class="body"></div></div>
         <div class="card col-4" id="card-sla-prazo"><h3>Entregas no prazo</h3><div class="body"></div></div>
         <div class="card col-4" id="card-sla-dias"><h3>Prazo médio de entrega</h3><div class="body"></div></div>
@@ -661,7 +869,7 @@
         <h2>Marketing</h2>
         <span class="caption">Google Analytics (GA4) e Vtex · período selecionado</span>
       </div>
-      <div class="grid">
+      <div class="grid" id="grid-marketing">
         <div class="card col-4" id="card-ticket-medio"><h3>Ticket médio</h3><div class="body"></div></div>
         <div class="card col-8" id="card-conversao-origem"><h3>Conversão por origem <button class="tag-btn" data-card="conversao-origem" hidden>Ver tudo</button></h3><div class="body"></div></div>
 
@@ -808,10 +1016,8 @@
           <div class="ec-scroll"><table id="ec-t-lojas"></table></div>
         </div>
         <div class="card" id="ec-card-loja">
-          <div class="ec-bar">
-            <h3>Plano da loja</h3>
-            <select id="ec-sel-loja" class="ec-input" aria-label="Loja"></select>
-          </div>
+          <h3>Plano da loja</h3>
+          <div class="ec-bar"><label for="ec-sel-loja">Loja <select id="ec-sel-loja" class="ec-input"></select></label></div>
           <div class="ec-kpis">
             <div class="ec-kpi"><span class="ec-kl">Receber do CD (grade)</span><b class="ec-kv ec-kl-v" data-k="rep_pecas">—</b><span class="ec-kn">peças</span></div>
             <div class="ec-kpi"><span class="ec-kl">Refs paradas no CD para receber</span><b class="ec-kv ec-kl-v" data-k="cd_refs_sugeridas">—</b></div>
@@ -893,7 +1099,7 @@
         </div>
         <div class="card">
           <h3>Subir pelo GitHub</h3>
-          <p class="ec-note">Também dá para mandar pelo GitHub: no repositório <code>dashboard-vendas-backend</code>, suba o arquivo na pasta <code>estoque/</code> (Add file → Upload files). A rotina "Enviar estoque Cia" manda a planilha para cá e ela aparece nesta lista com origem "github". Coloque a data no nome do arquivo (ex.: Estoque_Omni_2026-10-13.xlsx).</p>
+          <p class="ec-note">Também dá para mandar a planilha pelo GitHub: suba o arquivo na pasta <code>estoque/</code> do repositório de estoque (ou rode a rotina "Enviar estoque" manualmente). A rotina envia a planilha para cá e ela aparece nesta lista com origem "github".</p>
         </div>
       </div>
     </section>
@@ -903,7 +1109,7 @@
         <h2>Administração</h2>
         <span class="caption">Gerencie quem tem acesso ao painel</span>
       </div>
-      <div class="grid">
+      <div class="grid" id="grid-admin">
         <div class="card col-5">
           <h3>Novo acesso</h3>
           <div class="body">
@@ -950,6 +1156,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
               <button type="button" class="btn-primary" style="width:auto" id="syncWarehousesBtn">Sincronizar lojas</button>
               <button type="button" class="btn-primary" style="width:auto" id="backfillItemsBtn">Recalcular pedidos já sincronizados</button>
+              <button type="button" class="btn-primary" style="width:auto" id="backfillPrazosBtn">Recalcular entregas e clientes</button>
             </div>
             <p class="form-msg" id="syncWarehousesMsg" hidden></p>
           </div>
@@ -981,6 +1188,46 @@
             </p>
             <button type="button" class="btn-primary" style="width:auto" id="debugPricingBtn">Ver campos de preço</button>
             <pre id="debugPricingOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>Diagnóstico temporário: campos de canal/origem da Vtex</h3>
+          <div class="body">
+            <p class="caption" style="margin-bottom:14px">
+              Mostra os campos que a Vtex manda sobre a origem do pedido (App, Site, Vitrine/venda assistida etc.) nos últimos pedidos sincronizados, pra eu confirmar qual campo usar antes de montar o card "Canal de venda". É só clicar, copiar o texto que aparecer e mandar de volta — depois de resolver, esse card pode ser removido.
+            </p>
+            <button type="button" class="btn-primary" style="width:auto" id="debugChannelBtn">Ver campos de canal</button>
+            <pre id="debugChannelOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>Diagnóstico temporário: fotos e referência dos produtos mais vendidos</h3>
+          <div class="body">
+            <p class="caption" style="margin-bottom:14px">
+              Mostra os arquivos de foto que a Vtex retorna (pra descobrir por que algum produto aparece sem foto no card "Top produtos mais vendidos") e os campos do SKU (RefId, ProductRefId, nomes). Usa o período e status selecionados no topo do painel. Deixe "ID do produto" em branco pra ver os 15 mais vendidos, ou cole o ID de um produto específico (aparece no resultado geral, campo <code>productId</code>) pra investigar só ele — mostra todos os tamanhos dele e qual está sendo usado pra buscar a foto nesse filtro. É só clicar, copiar o texto que aparecer e mandar de volta — depois de resolver, esse card pode ser removido.
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
+              <label for="debugProductImageId" class="caption" style="margin:0">ID do produto (opcional):</label>
+              <input type="text" id="debugProductImageId" placeholder="ex.: 41745" style="width:140px">
+            </div>
+            <button type="button" class="btn-primary" style="width:auto" id="debugProductImageBtn">Ver fotos e referência dos produtos</button>
+            <pre id="debugProductImageOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>Diagnóstico temporário: estoque aparecendo zerado</h3>
+          <div class="body">
+            <p class="caption" style="margin-bottom:14px">
+              Pra investigar um produto que tem estoque de verdade mas aparece com "0" na coluna Estoque do card "Top produtos mais vendidos". Busca ao vivo na Vtex (sem depender do cache) pra cada tamanho do produto e mostra o que está cacheado, a resposta crua de estoque da Vtex e se o SKU está marcado ativo no catálogo. Preencha o nome (como aparece no painel) ou o ID do produto. É só clicar, copiar o texto que aparecer e mandar de volta — depois de resolver, esse card pode ser removido.
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
+              <label for="debugStockName" class="caption" style="margin:0">Nome do produto:</label>
+              <input type="text" id="debugStockName" placeholder="ex.: Saia Longa Marias" style="width:220px">
+              <label for="debugStockId" class="caption" style="margin:0">ou ID do produto:</label>
+              <input type="text" id="debugStockId" placeholder="ex.: 41745" style="width:120px">
+            </div>
+            <button type="button" class="btn-primary" style="width:auto" id="debugStockBtn">Ver estoque ao vivo</button>
+            <pre id="debugStockOutput" style="white-space:pre-wrap; word-break:break-word; margin-top:12px; padding:12px; background:var(--surface-2); border-radius:8px; font-size:12px; max-height:400px; overflow:auto;" hidden></pre>
           </div>
         </div>
       </div>
@@ -1016,6 +1263,17 @@
     var label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
     return label.charAt(0).toUpperCase() + label.slice(1);
   };
+
+  // Placeholder pra quando ainda não temos (ou não achamos) a foto do produto na Vtex —
+  // evita o "ícone de imagem quebrada" do navegador enquanto a foto ainda não foi cacheada
+  // (1ª vez que esse produto aparece no ranking) ou pra produtos sem foto cadastrada.
+  var PRODUTO_PLACEHOLDER_IMG = "data:image/svg+xml;utf8," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
+    '<rect width="40" height="40" rx="8" fill="#e5e5ea"/>' +
+    '<circle cx="15" cy="15" r="3" fill="#b0b0b8"/>' +
+    '<path d="M8 30l8-10 6 7 4-5 6 8z" fill="#b0b0b8"/>' +
+    '</svg>'
+  );
 
   var STATUS_LABELS = {
     "invoiced": "Faturado", "canceled": "Cancelado", "cancelled": "Cancelado", "handling": "Em separação",
@@ -1183,6 +1441,24 @@
     var vars = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5", "--series-6"];
     return getComputedStyle(document.documentElement).getPropertyValue(vars[i % vars.length]).trim();
   }
+  // Etiqueta de estoque reutilizada nos cards "Top produtos mais vendidos" (linha agrupada e
+  // detalhamento por tamanho) e "Ranking de produtos × estoque". Quando o SKU está marcado
+  // como estoque ilimitado na Vtex (hasUnlimitedQuantity), o número de unidades não tem
+  // significado — a Vtex mantém o item sempre disponível pra venda independente da
+  // quantidade — então mostramos "Ilimitado" em vez de um número que poderia até aparecer
+  // como "0" sem realmente significar "sem estoque".
+  function estoqueBadge(estoqueDisponivel, estoqueIlimitado) {
+    var span = document.createElement("span");
+    if (estoqueIlimitado) {
+      span.className = "badge stock-unlimited";
+      span.textContent = "Ilimitado";
+      return span;
+    }
+    var baixo = estoqueDisponivel <= 5;
+    span.className = "badge " + (baixo ? "stock-low" : "stock-ok");
+    span.textContent = fmtInt.format(estoqueDisponivel);
+    return span;
+  }
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
     if (attrs) for (var k in attrs) {
@@ -1247,6 +1523,109 @@
     table.appendChild(thead); table.appendChild(tbody); wrap.appendChild(table); container.appendChild(wrap);
   }
 
+  // Mini tabela usada dentro da linha expandida de "Top produtos mais vendidos", com a
+  // venda de cada tamanho/variação (SKU) daquele produto.
+  function renderTamanhosDetalhe(container, variacoes) {
+    container.innerHTML = "";
+    if (!variacoes || !variacoes.length) {
+      container.appendChild(el("p", { class: "caption" }, [document.createTextNode("Sem detalhamento por tamanho nesse período.")]));
+      return;
+    }
+    var mini = el("table", { class: "tamanhos-mini" });
+    var mhead = el("thead", {}, [el("tr", {}, [
+      el("th", {}, [document.createTextNode("Variação")]),
+      el("th", { class: "num" }, [document.createTextNode("Unidades")]),
+      el("th", { class: "num" }, [document.createTextNode("Valor total")])
+    ])]);
+    var mbody = el("tbody");
+    variacoes.forEach(function (v) {
+      mbody.appendChild(el("tr", {}, [
+        el("td", {}, [document.createTextNode(v.nome || v.sku || "—")]),
+        el("td", { class: "num" }, [document.createTextNode(fmtInt.format(v.unidadesVendidas))]),
+        el("td", { class: "num" }, [document.createTextNode(fmtBRL.format(v.receita))])
+      ]));
+    });
+    mini.appendChild(mhead); mini.appendChild(mbody);
+    container.appendChild(mini);
+  }
+
+  // Tabela do card "Top produtos mais vendidos": foto + nome (já sem tamanho/cor repetidos,
+  // ver nomeBaseComum no backend) + categoria + unidades + valor. Quando o produto tem mais
+  // de uma variação vendida no período (r.variacoes > 1), mostra um link "N tamanhos" que
+  // expande uma linha abaixo com o detalhamento por SKU (busca sob demanda, cacheada por
+  // produto enquanto o card não é recarregado).
+  function renderTopProdutos(container, rows) {
+    container.innerHTML = "";
+    if (!rows || !rows.length) return showEmpty(container);
+    var wrap = el("div", { class: "table-wrap" });
+    var table = el("table");
+    var thead = el("thead", {}, [el("tr", {}, [
+      el("th", {}, [document.createTextNode("Produto")]),
+      el("th", {}, [document.createTextNode("Categoria")]),
+      el("th", { class: "num" }, [document.createTextNode("Unidades vendidas")]),
+      el("th", { class: "num" }, [document.createTextNode("Valor total")])
+    ])]);
+    var tbody = el("tbody");
+    var detalheCache = {};
+
+    rows.forEach(function (r) {
+      var tr = el("tr");
+      var img = document.createElement("img");
+      img.className = "produto-thumb";
+      img.loading = "lazy";
+      img.alt = r.produto || "";
+      img.src = r.imagemUrl || PRODUTO_PLACEHOLDER_IMG;
+      img.onerror = function () { this.onerror = null; this.src = PRODUTO_PLACEHOLDER_IMG; };
+
+      var info = el("div", { class: "produto-info" }, [
+        el("span", { class: "produto-nome" }, [document.createTextNode(r.produto || "—")])
+      ]);
+
+      var temVariacoes = r.variacoes > 1;
+      var toggle = null;
+      if (temVariacoes) {
+        toggle = el("button", { type: "button", class: "tamanhos-toggle" }, [document.createTextNode("▸ " + r.variacoes + " tamanhos")]);
+        info.appendChild(toggle);
+      }
+
+      var produtoCell = el("td", { class: "wrap" }, [el("div", { class: "produto-cell" }, [img, info])]);
+      tr.appendChild(produtoCell);
+      tr.appendChild(el("td", {}, [document.createTextNode(r.categoria || "—")]));
+      tr.appendChild(el("td", { class: "num" }, [document.createTextNode(fmtInt.format(r.unidadesVendidas))]));
+      tr.appendChild(el("td", { class: "num" }, [document.createTextNode(fmtBRL.format(r.receita))]));
+      tbody.appendChild(tr);
+
+      if (temVariacoes) {
+        var detalheCell = el("td", { colspan: "4" });
+        var detalheRow = el("tr", { class: "tamanhos-row" }, [detalheCell]);
+        detalheRow.hidden = true;
+        tbody.appendChild(detalheRow);
+
+        var aberto = false;
+        toggle.addEventListener("click", function () {
+          aberto = !aberto;
+          toggle.textContent = (aberto ? "▾ " : "▸ ") + r.variacoes + " tamanhos";
+          detalheRow.hidden = !aberto;
+          if (!aberto) return;
+          if (detalheCache[r.produtoId]) { renderTamanhosDetalhe(detalheCell, detalheCache[r.produtoId]); return; }
+          detalheCell.innerHTML = "";
+          detalheCell.appendChild(el("p", { class: "caption" }, [document.createTextNode("Carregando…")]));
+          get("/api/vendas/produtos-mais-vendidos/" + encodeURIComponent(r.produtoId) + "/tamanhos", Object.assign({}, periodParams(), statusParams()))
+            .then(function (variacoes) {
+              detalheCache[r.produtoId] = variacoes;
+              renderTamanhosDetalhe(detalheCell, variacoes);
+            })
+            .catch(function () {
+              detalheCell.innerHTML = "";
+              detalheCell.appendChild(el("p", { class: "empty-state" }, [document.createTextNode("Não foi possível carregar os tamanhos agora.")]));
+            });
+        });
+      }
+    });
+
+    table.appendChild(thead); table.appendChild(tbody); wrap.appendChild(table); container.appendChild(wrap);
+  }
+
   function renderDonut(container, rows, opts) {
     container.innerHTML = "";
     if (!rows || !rows.length) return showEmpty(container);
@@ -1283,6 +1662,273 @@
       ]));
     });
     container.appendChild(el("div", { class: "donut-wrap" }, [svg, legend]));
+  }
+
+  // Arredonda o topo do eixo Y pra um número "redondo" (0 / 1.000 / 2.000 ...), como pede
+  // o guia de dataviz — nunca o valor máximo cru, que fica com ticks tortos.
+  function niceTicks(maxValue, tickCount) {
+    if (!(maxValue > 0)) return [0, 1];
+    var rawStep = maxValue / (tickCount - 1);
+    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    var norm = rawStep / mag;
+    var niceNorm = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+    var step = niceNorm * mag;
+    var niceMax = Math.ceil(maxValue / step) * step;
+    var ticks = [];
+    for (var v = 0; v <= niceMax + step / 1000; v += step) ticks.push(Math.round(v * 100) / 100);
+    return ticks;
+  }
+
+  /**
+   * Gráfico de linha com crosshair + tooltip (obrigatório por padrão pro tipo "linha",
+   * conforme o guia de dataviz). `seriesArr`: [{ name, color, values: number[], dates: string[] }]
+   * — `values`/`dates` alinhados por ÍNDICE (dia 0, dia 1, ...), não por data de calendário:
+   * é assim que o período atual e o período anterior (mesmo tamanho, datas diferentes) ficam
+   * sobrepostos corretamente no eixo X, um por cima do outro dia a dia.
+   */
+  function renderLineChart(container, seriesArr, opts) {
+    opts = opts || {};
+    container.innerHTML = "";
+    var format = opts.format || function (v) { return fmtInt.format(v); };
+    seriesArr = (seriesArr || []).filter(function (s) { return s && s.values && s.values.length; });
+    var n = seriesArr.reduce(function (m, s) { return Math.max(m, s.values.length); }, 0);
+    if (!seriesArr.length || !n) return showEmpty(container);
+
+    var showLegend = seriesArr.length >= 2;
+    // Em tela estreita (celular) o viewBox fixo de 960px encolhia o gráfico inteiro, deixando
+    // rótulos de eixo e do valor final minúsculos. Aí usamos a largura real do container como
+    // largura do viewBox (1 unidade do SVG ~ 1px de tela, texto fica no tamanho nominal) e
+    // margens menores; em telas largas continua exatamente como antes (960x300).
+    var containerW = container.clientWidth || 0;
+    var compact = containerW > 0 && containerW < 560;
+    var W = compact ? Math.max(containerW, 260) : 960;
+    var H = compact ? 240 : 300;
+    // A margem direita precisa comportar o rótulo do valor final (ex.: "R$ 14.706") — com valores
+    // de 5 dígitos ele passava da borda do SVG e ficava cortado, principalmente no celular.
+    var endLabelText = format(seriesArr[0].values[seriesArr[0].values.length - 1]);
+    var endLabelMargin = Math.ceil(endLabelText.length * 7.4) + 18;
+    var marginTop = 16, marginRight = Math.max(compact ? 52 : 74, endLabelMargin), marginBottom = 26, marginLeft = compact ? 50 : 64;
+    var plotW = W - marginLeft - marginRight, plotH = H - marginTop - marginBottom;
+
+    var maxVal = 0;
+    seriesArr.forEach(function (s) { s.values.forEach(function (v) { if (v > maxVal) maxVal = v; }); });
+    var ticks = niceTicks(maxVal, 5);
+    var niceMax = ticks[ticks.length - 1] || 1;
+
+    function xAt(i) { return n <= 1 ? marginLeft + plotW / 2 : marginLeft + (i / (n - 1)) * plotW; }
+    function yAt(v) { return marginTop + plotH - (v / niceMax) * plotH; }
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+    var surfaceColor = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim() || "#fff";
+
+    // Gridlines (hairline, recessivas) + rótulos do eixo Y
+    ticks.forEach(function (t) {
+      var y = yAt(t);
+      var line = document.createElementNS(svgNS, "line");
+      line.setAttribute("class", "grid-line");
+      line.setAttribute("x1", marginLeft); line.setAttribute("x2", W - marginRight);
+      line.setAttribute("y1", y); line.setAttribute("y2", y);
+      svg.appendChild(line);
+      var label = document.createElementNS(svgNS, "text");
+      label.setAttribute("class", "axis-label");
+      label.setAttribute("x", marginLeft - 10); label.setAttribute("y", y + 3.5);
+      label.setAttribute("text-anchor", "end");
+      label.textContent = format(t);
+      svg.appendChild(label);
+    });
+
+    // Rótulos do eixo X — no máximo 6, nunca um por dia (viraria ilegível com 90 dias)
+    var primaryDates = (seriesArr[0] && seriesArr[0].dates) || [];
+    var xTickCount = Math.min(compact ? 4 : 6, n);
+    var xTickIdx = [];
+    for (var k = 0; k < xTickCount; k++) {
+      xTickIdx.push(xTickCount <= 1 ? 0 : Math.round((k / (xTickCount - 1)) * (n - 1)));
+    }
+    var seenIdx = {};
+    xTickIdx.forEach(function (i) {
+      if (seenIdx[i]) return;
+      seenIdx[i] = true;
+      var label = document.createElementNS(svgNS, "text");
+      label.setAttribute("class", "axis-label");
+      label.setAttribute("x", xAt(i));
+      label.setAttribute("y", H - marginBottom + 18);
+      label.setAttribute("text-anchor", i === 0 ? "start" : (i === n - 1 ? "end" : "middle"));
+      label.textContent = primaryDates[i] || ("Dia " + (i + 1));
+      svg.appendChild(label);
+    });
+
+    // Linhas (2px, junção/ponta arredondada) + marcador final (>=8px, com anel na cor da
+    // superfície) — o rótulo direto de valor fica só na série "atual" (índice 0): com as
+    // duas linhas convergindo perto do fim, empilhar os dois valores vira ruído (ver
+    // marks-and-anatomy.md) — a legenda + tooltip cobrem a série de comparação.
+    seriesArr.forEach(function (s, si) {
+      var color = s.color || seriesColor(si);
+      var lastI = s.values.length - 1;
+      var d = s.values.map(function (v, i) { return (i === 0 ? "M " : "L ") + xAt(i) + "," + yAt(v); }).join(" ");
+      var path = document.createElementNS(svgNS, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", color);
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("stroke-linecap", "round");
+      svg.appendChild(path);
+
+      var ring = document.createElementNS(svgNS, "circle");
+      ring.setAttribute("cx", xAt(lastI)); ring.setAttribute("cy", yAt(s.values[lastI])); ring.setAttribute("r", 6);
+      ring.setAttribute("fill", surfaceColor);
+      svg.appendChild(ring);
+      var dot = document.createElementNS(svgNS, "circle");
+      dot.setAttribute("cx", xAt(lastI)); dot.setAttribute("cy", yAt(s.values[lastI])); dot.setAttribute("r", 4.5);
+      dot.setAttribute("fill", color);
+      svg.appendChild(dot);
+
+      if (si === 0) {
+        var endLabel = document.createElementNS(svgNS, "text");
+        endLabel.setAttribute("class", "end-label");
+        endLabel.setAttribute("x", xAt(lastI) + 10);
+        endLabel.setAttribute("y", yAt(s.values[lastI]) + 4);
+        endLabel.textContent = format(s.values[lastI]);
+        svg.appendChild(endLabel);
+      }
+    });
+
+    // Rótulos de valor SEMPRE visíveis (não dependem de hover — no celular nem existe hover).
+    // Só na série "atual" (índice 0). Com muitos pontos (ex.: 90 dias) não cabe um rótulo por
+    // ponto, então escolhemos gananciosamente do maior valor pro menor e pulamos qualquer
+    // rótulo que invadiria o espaço horizontal de um já posto (assim nunca ficam empilhados/sobrepostos); com poucos pontos, todos os valores > 0 aparecem.
+    // O último ponto já tem o rótulo grande da ponta, então entra só como área reservada.
+    (function () {
+      var s0 = seriesArr[0];
+      var lastI0 = s0.values.length - 1;
+      var color0 = s0.color || seriesColor(0);
+      // Celular: sem o prefixo "R$ " (o eixo Y já diz a moeda) pra caber mais rótulos
+      var fmtPoint = opts.pointFormat || (compact ? function (v) { return format(v).replace(/^R\$\s?/, ""); } : format);
+      var placed = [];
+      var endText = format(s0.values[lastI0]);
+      placed.push({ x1: xAt(lastI0) - 24, x2: xAt(lastI0) + 14 + endText.length * 7.5 });
+      var order = [];
+      s0.values.forEach(function (v, i) { if (i !== lastI0 && v > 0) order.push(i); });
+      order.sort(function (a, b) { return s0.values[b] - s0.values[a]; });
+      order.forEach(function (i) {
+        var v = s0.values[i];
+        var text = fmtPoint(v);
+        var w = text.length * 6.6 + 6;
+        var cx = Math.min(Math.max(xAt(i), marginLeft + w / 2), W - marginRight - w / 2 + 6);
+        var py = yAt(v);
+        var above = py - 10 >= marginTop + 4;
+        var ty = above ? py - 9 : py + 17;
+        var box = { x1: cx - w / 2 - 3, x2: cx + w / 2 + 3 };
+        for (var q = 0; q < placed.length; q++) {
+          var o = placed[q];
+          if (box.x1 < o.x2 && box.x2 > o.x1) return;
+        }
+        placed.push(box);
+        var pt = document.createElementNS(svgNS, "circle");
+        pt.setAttribute("cx", xAt(i)); pt.setAttribute("cy", py); pt.setAttribute("r", 3);
+        pt.setAttribute("fill", color0); pt.setAttribute("stroke", surfaceColor); pt.setAttribute("stroke-width", 1.5);
+        svg.appendChild(pt);
+        var tl = document.createElementNS(svgNS, "text");
+        tl.setAttribute("class", "point-label");
+        tl.setAttribute("x", cx); tl.setAttribute("y", ty);
+        tl.setAttribute("text-anchor", "middle");
+        tl.textContent = text;
+        svg.appendChild(tl);
+      });
+    })();
+
+    // Camada de interação: crosshair vertical + um ponto de destaque por série, sempre
+    // visível ao hover/foco — nunca a única forma de ler um valor (rótulo final + legenda
+    // já cobrem o essencial sem precisar passar o mouse).
+    var crosshair = document.createElementNS(svgNS, "line");
+    crosshair.setAttribute("class", "crosshair-line");
+    crosshair.setAttribute("y1", marginTop); crosshair.setAttribute("y2", H - marginBottom);
+    svg.appendChild(crosshair);
+    var hoverDots = seriesArr.map(function (s, si) {
+      var c = document.createElementNS(svgNS, "circle");
+      c.setAttribute("r", 4.5);
+      c.setAttribute("fill", s.color || seriesColor(si));
+      c.setAttribute("stroke", surfaceColor);
+      c.setAttribute("stroke-width", 2);
+      c.style.opacity = 0;
+      svg.appendChild(c);
+      return c;
+    });
+    var hoverRect = document.createElementNS(svgNS, "rect");
+    hoverRect.setAttribute("class", "hover-layer");
+    hoverRect.setAttribute("x", marginLeft); hoverRect.setAttribute("y", marginTop);
+    hoverRect.setAttribute("width", Math.max(plotW, 1)); hoverRect.setAttribute("height", Math.max(plotH, 1));
+    hoverRect.setAttribute("tabindex", "0");
+    svg.appendChild(hoverRect);
+
+    var wrap = el("div", { class: "line-chart-wrap line-chart" }, [svg]);
+    var tooltip = el("div", { class: "chart-tooltip" });
+    wrap.appendChild(tooltip);
+    container.appendChild(wrap);
+
+    var focusIdx = 0;
+    function showAt(i) {
+      i = Math.max(0, Math.min(n - 1, i));
+      focusIdx = i;
+      crosshair.setAttribute("x1", xAt(i)); crosshair.setAttribute("x2", xAt(i));
+      crosshair.style.opacity = 1;
+      tooltip.innerHTML = "";
+      tooltip.appendChild(el("div", { class: "date" }, [document.createTextNode(primaryDates[i] || ("Dia " + (i + 1)))]));
+      seriesArr.forEach(function (s, si) {
+        var v = s.values[i];
+        var color = s.color || seriesColor(si);
+        hoverDots[si].style.opacity = v == null ? 0 : 1;
+        if (v != null) { hoverDots[si].setAttribute("cx", xAt(i)); hoverDots[si].setAttribute("cy", yAt(v)); }
+        tooltip.appendChild(el("div", { class: "row" }, [
+          el("span", { class: "linekey", style: "background:" + color }),
+          el("span", { class: "name" }, [document.createTextNode(s.name)]),
+          el("span", { class: "val" }, [document.createTextNode(v == null ? "—" : format(v))])
+        ]));
+      });
+      var px = (xAt(i) / W) * wrap.clientWidth;
+      var ttW = tooltip.offsetWidth || 170;
+      var left = Math.min(Math.max(px + 14, 0), Math.max(wrap.clientWidth - ttW - 4, 0));
+      tooltip.style.left = left + "px";
+      tooltip.style.top = "4px";
+      tooltip.style.opacity = 1;
+    }
+    function hide() {
+      crosshair.style.opacity = 0;
+      hoverDots.forEach(function (d) { d.style.opacity = 0; });
+      tooltip.style.opacity = 0;
+    }
+    function indexFromClientX(clientX) {
+      var rect = svg.getBoundingClientRect();
+      var relX = rect.width ? ((clientX - rect.left) / rect.width) * W : 0;
+      var frac = plotW ? (relX - marginLeft) / plotW : 0;
+      return Math.round(frac * (n - 1));
+    }
+    hoverRect.addEventListener("pointermove", function (e) { showAt(indexFromClientX(e.clientX)); });
+    hoverRect.addEventListener("pointerdown", function (e) { showAt(indexFromClientX(e.clientX)); });
+    hoverRect.addEventListener("pointerleave", hide);
+    hoverRect.addEventListener("focus", function () { showAt(focusIdx); });
+    hoverRect.addEventListener("blur", hide);
+    hoverRect.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight") { showAt(focusIdx + 1); e.preventDefault(); }
+      else if (e.key === "ArrowLeft") { showAt(focusIdx - 1); e.preventDefault(); }
+    });
+
+    if (showLegend) {
+      var legend = el("div", { class: "legend" });
+      seriesArr.forEach(function (s, si) {
+        var total = s.values.reduce(function (a, b) { return a + (b || 0); }, 0);
+        legend.appendChild(el("div", { class: "row" }, [
+          el("span", { class: "linekey", style: "background:" + (s.color || seriesColor(si)) }),
+          el("span", { class: "name" }, [document.createTextNode(s.name)]),
+          el("span", { class: "num" }, [document.createTextNode(format(total))])
+        ]));
+      });
+      wrap.appendChild(legend);
+    }
   }
 
   function renderStat(container, value, sub) {
@@ -1443,6 +2089,78 @@
   var expFreteVendas = expandableCard("frete-regiao-vendas", 10);
   var expReceitaRegiao = expandableCard("receita-regiao", 12);
   var expRanking = expandableCard("ranking-estoque", 15);
+  var expTopProdutos = expandableCard("top-produtos", 15);
+
+  // Filtro de status: os status possíveis não são uma lista fixa (dependem do que a Vtex
+  // manda), por isso são descobertos a partir de /api/overview/tracking-pedido — chamado SEM
+  // filtro de data, pra pegar o universo histórico completo e os chips não aparecerem/sumirem
+  // conforme o período selecionado muda. Padrão = tudo marcado exceto cancelado, pra manter os
+  // números que o painel já mostrava antes desse filtro existir. O mesmo filtro vale tanto
+  // pra aba Vendas (projeção, vendas diárias, top produtos) quanto pra Detalhamento vendas
+  // (que depende dele na maioria dos cards) — por isso aparece nas duas abas, com os dois
+  // conjuntos de chips sempre sincronizados entre si.
+  var VENDAS_STATUS = { all: [], active: null }; // active: array de status marcados; null = filtro ainda não carregado (usa o padrão do backend)
+  function statusParams() {
+    return VENDAS_STATUS.active ? { status: VENDAS_STATUS.active.join(",") } : {};
+  }
+
+  var STATUS_CHIPS_IDS = ["vendasStatusChips", "detStatusChips"];
+  var STATUS_FILTER_WRAPPER_IDS = ["vendasStatusFilter", "detStatusFilter"];
+  var STATUS_RESET_BTN_IDS = ["vendasStatusReset", "detStatusReset"];
+
+  function renderStatusChips() {
+    STATUS_CHIPS_IDS.forEach(function (id) {
+      var chips = document.getElementById(id);
+      if (!chips) return;
+      chips.innerHTML = "";
+      VENDAS_STATUS.all.forEach(function (s) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "status-chip" + (VENDAS_STATUS.active.indexOf(s) > -1 ? " active" : "");
+        btn.dataset.status = s;
+        btn.textContent = STATUS_LABELS[s] || s;
+        chips.appendChild(btn);
+      });
+    });
+  }
+
+  var statusFilterLoaded = false;
+  function ensureStatusFilter() {
+    if (statusFilterLoaded) return;
+    statusFilterLoaded = true;
+    get("/api/overview/tracking-pedido").then(function (rows) {
+      var statuses = (rows || []).map(function (r) { return r.status; }).filter(Boolean);
+      if (!statuses.length) return;
+      VENDAS_STATUS.all = statuses;
+      VENDAS_STATUS.active = statuses.filter(function (s) { return s !== "canceled" && s !== "cancelled"; });
+      renderStatusChips();
+      STATUS_FILTER_WRAPPER_IDS.forEach(function (id) { var wrap = document.getElementById(id); if (wrap) wrap.hidden = false; });
+    }).catch(function () {});
+  }
+
+  STATUS_CHIPS_IDS.forEach(function (id) {
+    var chips = document.getElementById(id);
+    if (!chips) return;
+    chips.addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-status]");
+      if (!btn) return;
+      btn.classList.toggle("active");
+      VENDAS_STATUS.active = Array.prototype.slice.call(chips.querySelectorAll(".status-chip.active")).map(function (b) { return b.dataset.status; });
+      if (VENDAS_STATUS.active.length === 0) { btn.classList.add("active"); VENDAS_STATUS.active = [btn.dataset.status]; }
+      renderStatusChips();
+      invalidateAndReload();
+    });
+  });
+
+  STATUS_RESET_BTN_IDS.forEach(function (id) {
+    var btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      VENDAS_STATUS.active = VENDAS_STATUS.all.filter(function (s) { return s !== "canceled" && s !== "cancelled"; });
+      renderStatusChips();
+      invalidateAndReload();
+    });
+  });
 
   var categoriasLoaded = false;
   function ensureCategoriasOptions() {
@@ -1463,7 +2181,7 @@
   function loadAbc() {
     var abcBody = cardBody("card-curva-abc");
     skeleton(abcBody, 8);
-    get("/api/vendas/curva-abc", Object.assign({}, periodParams(), {
+    get("/api/vendas/curva-abc", Object.assign({}, periodParams(), statusParams(), {
       categoria: abcState.categoria === "todas" ? undefined : abcState.categoria,
       metric: abcState.metric,
       classes: abcState.classes.join(",")
@@ -1494,12 +2212,124 @@
     loadAbc();
   });
 
+  var DIA_SEMANA_NOMES = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
+
+  // Projeção de fechamento do dia: não depende do período selecionado no topo do painel (a
+  // API sempre olha pra "hoje" pra trás numa janela fixa — ver PROJECAO_LOOKBACK_DIAS no
+  // backend), só do filtro de status. Por isso não usa periodParams() aqui.
+  var MES_NOMES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+  // Card com duas colunas: fechamento do DIA e fechamento do MÊS (cada uma decide sozinha o
+  // que mostrar conforme o próprio "estado" — o dia pode estar "cedo demais" e o mês já ter
+  // estimativa, ou vice-versa).
+  function projCol(label) {
+    var col = el("div", { class: "proj-col" });
+    col.appendChild(el("div", { class: "proj-label" }, [document.createTextNode(label)]));
+    return col;
+  }
+  // renderStat limpa o container que recebe; aqui precisamos manter o rótulo da coluna
+  function statIn(col, value, sub) { var h = el("div"); col.appendChild(h); renderStat(h, value, sub); }
+  function loadProjecao() {
+    var body = cardBody("card-projecao-dia");
+    skeleton(body, 3);
+    get("/api/vendas/projecao-fechamento-dia", statusParams()).then(function (d) {
+      var dia = DIA_SEMANA_NOMES[d.diaSemana] || "hoje";
+      var horaLabel = fmtInt.format(d.horaAtual) + "h";
+      body.innerHTML = "";
+      var grid = el("div", { class: "proj-grid" });
+
+      // ----- Dia -----
+      var colDia = projCol("Hoje · " + dia);
+      if (d.estado === "dados_insuficientes") {
+        statIn(colDia, fmtBRL.format(d.receitaHoje), "Vendido até agora · ainda não há histórico suficiente de " + dia + "s pra projetar o dia.");
+      } else if (d.estado === "cedo_demais") {
+        statIn(colDia, fmtBRL.format(d.receitaHoje), "Vendido até as " + horaLabel + " · ainda é cedo pra projetar o fechamento com confiança.");
+      } else {
+        statIn(colDia, fmtBRL.format(d.projecaoFechamento), "Projeção de fechamento de hoje");
+        colDia.appendChild(el("p", { class: "caption" }, [
+          document.createTextNode(
+            "Vendido até as " + horaLabel + ": " + fmtBRL.format(d.receitaHoje) +
+            " · historicamente " + fmtPct(d.percentualDecorrido, 0) + " da receita de um(a) " + dia + " já acontece até essa hora" +
+            " · média histórica do dia: " + fmtBRL.format(d.mediaHistoricaDiaSemana) + " (" + fmtInt.format(d.diasAmostra) + (d.diasAmostra === 1 ? " amostra" : " amostras") + ")"
+          )
+        ]));
+      }
+      grid.appendChild(colDia);
+
+      // ----- Mês -----
+      var m = d.mensal;
+      if (m) {
+        var mesNome = MES_NOMES[Number(String(m.mes).slice(5, 7)) - 1] || "mês";
+        var colMes = projCol("Mês · " + mesNome);
+        var andamento = "dia " + fmtInt.format(m.diaDoMes) + " de " + fmtInt.format(m.diasNoMes);
+        if (m.estado === "dados_insuficientes" || m.projecaoMes == null) {
+          statIn(colMes, fmtBRL.format(m.receitaMes), "Vendido no mês até agora (" + andamento + ") · ainda não há histórico suficiente pra projetar o fechamento.");
+        } else {
+          statIn(colMes, fmtBRL.format(m.projecaoMes), "Projeção de fechamento de " + mesNome);
+          renderProgress(colMes, m.projecaoMes > 0 ? (m.receitaMes / m.projecaoMes) * 100 : 0,
+            fmtBRL.format(m.receitaMes) + " vendidos no mês (" + andamento + ") · " + fmtPct(m.projecaoMes > 0 ? (m.receitaMes / m.projecaoMes) * 100 : 0, 0) + " da projeção");
+          colMes.appendChild(el("p", { class: "caption" }, [document.createTextNode(
+            m.estado === "ok"
+              ? "Estimativa = vendido no mês + o que falta de hoje + a média histórica de cada dia que ainda falta (por dia da semana, últimas 12 semanas)."
+              : "Estimativa pelo ritmo do próprio mês (média diária até ontem) — ainda não há histórico suficiente pra usar o padrão por dia da semana."
+          )]));
+        }
+        grid.appendChild(colMes);
+      }
+      body.appendChild(grid);
+    }).catch(function () { showError(body); });
+  }
+
+  // Aba "Vendas": só o essencial do dia a dia (projeção, evolução diária e top produtos).
+  // Tudo o mais que já existia aqui foi pra "Detalhamento vendas" (loadDetalhamentoVendas
+  // logo abaixo) — pedido explícito do usuário pra deixar essa aba mais enxuta.
   function loadVendas() {
+    ensureStatusFilter();
+    loadProjecao();
+
+    var diariaBody = cardBody("card-venda-diaria");
+    skeleton(diariaBody, 4);
+    Promise.all([
+      get("/api/vendas/venda-diaria", Object.assign({}, periodParams(), statusParams())),
+      PERIOD.compare ? get("/api/vendas/venda-diaria", Object.assign({}, prevPeriodParams(), statusParams())) : Promise.resolve(null)
+    ]).then(function (res) {
+      var atual = res[0] || [];
+      var anterior = res[1];
+      var fmtDiaMes = function (iso) { var p = iso.split("-"); return p[2] + "/" + p[1]; };
+      var series = [{
+        name: "Período atual",
+        color: seriesColor(0),
+        values: atual.map(function (r) { return r.receita; }),
+        dates: atual.map(function (r) { return fmtDiaMes(r.data); })
+      }];
+      if (anterior && anterior.length) {
+        series.push({
+          name: "Período anterior",
+          color: seriesColor(1),
+          values: anterior.map(function (r) { return r.receita; }),
+          dates: anterior.map(function (r) { return fmtDiaMes(r.data); })
+        });
+      }
+      renderLineChart(diariaBody, series, { format: function (v) { return fmtBRL.format(v); } });
+    }).catch(function () { showError(diariaBody); });
+
+    var topProdutosBody = cardBody("card-top-produtos");
+    skeleton(topProdutosBody, 8);
+    get("/api/vendas/produtos-mais-vendidos", Object.assign({}, periodParams(), statusParams(), { limit: 60 })).then(function (rows) {
+      expTopProdutos(rows, function (body, rs) {
+        renderTopProdutos(body, rs);
+      });
+    }).catch(function () { showError(topProdutosBody); });
+  }
+
+  // Aba "Detalhamento vendas": todo o resto que antes vivia em "Vendas".
+  function loadDetalhamentoVendas() {
     ensureCategoriasOptions();
+    ensureStatusFilter();
 
     var metaBody = cardBody("card-receita-meta");
     skeleton(metaBody, 2);
-    get("/api/vendas/receita-vs-meta", periodParams()).then(function (d) {
+    get("/api/vendas/receita-vs-meta", Object.assign({}, periodParams(), statusParams())).then(function (d) {
       var subtitulo = d.meta
         ? ("Meta de " + fmtMes(d.mes) + ": <b>" + fmtBRL.format(d.meta) + "</b>")
         : ("Sem meta cadastrada para " + fmtMes(d.mes));
@@ -1509,27 +2339,88 @@
 
     var catBody = cardBody("card-venda-categoria");
     skeleton(catBody, 6);
-    get("/api/vendas/por-categoria", periodParams()).then(function (rows) {
+    get("/api/vendas/por-categoria", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       expCategoria(rows, function (body, rs) { renderBarList(body, rs, { label: function (r) { return r.categoria; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } }); });
     }).catch(function () { showError(catBody); });
 
     var tipoBody = cardBody("card-tipo-venda");
     skeleton(tipoBody, 2);
-    get("/api/vendas/por-tipo", periodParams()).then(function (rows) {
+    get("/api/vendas/por-tipo", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       renderDonut(tipoBody, rows, { value: function (r) { return r.receita; }, label: function (r) { return r.tipo; }, format: function (v) { return fmtBRL.format(v); } });
     }).catch(function () { showError(tipoBody); });
+
+    var novosBody = cardBody("card-novos-recorrentes");
+    skeleton(novosBody, 2);
+    get("/api/vendas/novos-recorrentes", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
+      renderDonut(novosBody, rows, { value: function (r) { return r.receita; }, label: function (r) { return r.tipo; }, format: function (v) { return fmtBRL.format(v); } });
+      var novo = rows.find(function (r) { return r.tipo === "Novo"; });
+      var recorrente = rows.find(function (r) { return r.tipo === "Recorrente"; });
+      var clientesNovo = novo ? novo.clientes : 0;
+      var clientesRecorrente = recorrente ? recorrente.clientes : 0;
+      var totalClientes = clientesNovo + clientesRecorrente;
+      if (totalClientes > 0) {
+        novosBody.appendChild(el("p", { class: "caption", style: "margin-top:12px" }, [
+          document.createTextNode(fmtPct((clientesRecorrente / totalClientes) * 100, 0) + " dos clientes do período já eram recorrentes.")
+        ]));
+      }
+    }).catch(function () { showError(novosBody); });
+
+    var cupomBody = cardBody("card-cupons");
+    skeleton(cupomBody, 6);
+    Promise.all([get("/api/vendas/cupons", Object.assign({}, periodParams(), statusParams())), get("/api/vendas/comparativo-cupom", Object.assign({}, periodParams(), statusParams()))])
+      .then(function (res) {
+        var cupons = res[0] || [];
+        var comparativo = res[1] || [];
+        renderTable(cupomBody, [
+          { label: "Cupom", value: function (r) { return r.cupom; } },
+          { label: "Pedidos", num: true, value: function (r) { return fmtInt.format(r.pedidos); } },
+          { label: "Receita", num: true, value: function (r) { return fmtBRL.format(r.receita); } },
+          { label: "Desconto", num: true, value: function (r) { return fmtBRL.format(r.desconto); } },
+          { label: "Ticket médio", num: true, value: function (r) { return fmtBRLCents.format(r.ticketMedio); } }
+        ], cupons);
+        var comCupom = comparativo.find(function (r) { return r.grupo === "Com cupom"; });
+        var semCupom = comparativo.find(function (r) { return r.grupo === "Sem cupom"; });
+        if (comCupom && semCupom) {
+          var totalPedidos = comCupom.pedidos + semCupom.pedidos;
+          var pctComCupom = totalPedidos ? (comCupom.pedidos / totalPedidos) * 100 : 0;
+          cupomBody.appendChild(el("p", { class: "caption", style: "margin-top:12px" }, [
+            document.createTextNode(
+              fmtPct(pctComCupom, 0) + " dos pedidos usaram cupom · ticket médio com cupom " + fmtBRLCents.format(comCupom.ticketMedio) +
+              " vs. sem cupom " + fmtBRLCents.format(semCupom.ticketMedio)
+            )
+          ]));
+        }
+      }).catch(function () { showError(cupomBody); });
+
+    var DIA_SEMANA_LABELS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+    var DIA_SEMANA_ORDEM = [1, 2, 3, 4, 5, 6, 0]; // segunda -> domingo, como na planilha de análise
+
+    var diaBody = cardBody("card-sazonalidade-dia");
+    var horaBody = cardBody("card-sazonalidade-hora");
+    skeleton(diaBody, 7);
+    skeleton(horaBody, 8);
+    get("/api/vendas/sazonalidade", Object.assign({}, periodParams(), statusParams())).then(function (d) {
+      var porDia = DIA_SEMANA_ORDEM.map(function (dow) {
+        var found = (d.porDiaSemana || []).find(function (r) { return r.diaSemana === dow; });
+        return { label: DIA_SEMANA_LABELS[dow], receita: found ? found.receita : 0 };
+      });
+      renderBarList(diaBody, porDia, { label: function (r) { return r.label; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } });
+
+      var porHora = (d.porHora || []).map(function (r) { return { label: r.hora + "h", receita: r.receita }; });
+      renderBarList(horaBody, porHora, { label: function (r) { return r.label; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } });
+    }).catch(function () { showError(diaBody); showError(horaBody); });
 
     loadAbc();
 
     var pagBody = cardBody("card-meios-pagamento");
     skeleton(pagBody, 6);
-    get("/api/vendas/meios-pagamento", periodParams()).then(function (rows) {
+    get("/api/vendas/meios-pagamento", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       expPagamento(rows, function (body, rs) { renderBarList(body, rs, { label: function (r) { return r.metodo; }, value: function (r) { return r.receita; }, format: function (v) { return fmtBRL.format(v); } }); });
     }).catch(function () { showError(pagBody); });
 
     var freteBody = cardBody("card-frete-regiao-vendas");
     skeleton(freteBody, 6);
-    get("/api/vendas/eficiencia-frete-regiao", periodParams()).then(function (rows) {
+    get("/api/vendas/eficiencia-frete-regiao", Object.assign({}, periodParams(), statusParams())).then(function (rows) {
       var sorted = rows.slice().sort(function (a, b) { return b.pedidos - a.pedidos; });
       expFreteVendas(sorted, function (body, rs) {
         renderTable(body, [
@@ -1543,7 +2434,7 @@
 
     var regiaoBody = cardBody("card-receita-regiao");
     skeleton(regiaoBody, 6);
-    Promise.all([get("/api/vendas/receita-por-regiao", periodParams()), PERIOD.compare ? get("/api/vendas/receita-por-regiao", prevPeriodParams()) : Promise.resolve(null)])
+    Promise.all([get("/api/vendas/receita-por-regiao", Object.assign({}, periodParams(), statusParams())), PERIOD.compare ? get("/api/vendas/receita-por-regiao", Object.assign({}, prevPeriodParams(), statusParams())) : Promise.resolve(null)])
       .then(function (res) {
         expReceitaRegiao(res[0], function (body, rs) {
           renderTable(body, withDeltaColumn([
@@ -1557,14 +2448,14 @@
 
     var rankBody = cardBody("card-ranking-estoque");
     skeleton(rankBody, 8);
-    get("/api/vendas/ranking-produtos-estoque", Object.assign({}, periodParams(), { limit: 500 })).then(function (rows) {
+    get("/api/vendas/ranking-produtos-estoque", Object.assign({}, periodParams(), statusParams(), { limit: 500 })).then(function (rows) {
       expRanking(rows, function (body, rs) {
         renderTable(body, [
           { label: "Produto", wrap: true, value: function (r) { return r.produto; } },
           { label: "Vendidas", num: true, value: function (r) { return fmtInt.format(r.unidadesVendidas); } },
-          { label: "Estoque", render: function (r) { var span = document.createElement("span"); var low = r.estoqueDisponivel <= 5; span.className = "badge " + (low ? "stock-low" : "stock-ok"); span.textContent = fmtInt.format(r.estoqueDisponivel); return span; } },
+          { label: "Estoque", render: function (r) { return estoqueBadge(r.estoqueDisponivel, r.estoqueIlimitado); } },
           { label: "Sugestão de reposição", num: true, render: function (r) {
-              if (!r.sugestaoReposicao) return document.createTextNode("—");
+              if (r.estoqueIlimitado || !r.sugestaoReposicao) return document.createTextNode("—");
               var span = document.createElement("span");
               span.className = "badge stock-low";
               span.textContent = "+" + fmtInt.format(r.sugestaoReposicao);
@@ -1708,7 +2599,7 @@
         var d = res[0], prev = res[1];
         renderStat(entreguesBody, fmtInt.format(d.entregues), "pedidos com entrega confirmada");
         if (prev) appendDelta(entreguesBody, pctDelta(d.entregues, prev.entregues));
-        renderStat(prazoBody, fmtPct(d.noPrazoPct, 0), "dentro do prazo prometido");
+        renderStat(prazoBody, fmtPct(d.noPrazoPct, 0), "dentro do prazo prometido · " + fmtInt.format(d.avaliadas || 0) + " entregas avaliadas");
         if (d.noPrazoPct != null) renderProgress(prazoBody, d.noPrazoPct);
         if (prev) appendDelta(prazoBody, pctDelta(d.noPrazoPct, prev.noPrazoPct));
         renderStat(diasBody, fmtDays(d.prazoMedioReal), "prometido: " + fmtDays(d.prazoMedioPrometido));
@@ -1724,6 +2615,7 @@
         { label: "Pedidos", num: true, value: function (r) { return fmtInt.format(r.pedidos); } },
         { label: "Prazo real", num: true, value: function (r) { return fmtDays(r.prazoMedioReal); } },
         { label: "Prazo prometido", num: true, value: function (r) { return fmtDays(r.prazoMedioPrometido); } },
+        { label: "No prazo", num: true, value: function (r) { return fmtPct(r.noPrazoPct, 0); } },
         { label: "Frete médio", num: true, value: function (r) { return fmtBRLCents.format(r.custoMedioFrete); } }
       ], sorted);
     }).catch(function () { showError(fullBody); });
@@ -2118,6 +3010,9 @@
     }, "warehouses");
   });
 
+  document.getElementById("backfillPrazosBtn").addEventListener("click", function () {
+    runAdminAction("backfillPrazosBtn", "syncWarehousesMsg", "/api/sync/backfill-order-fields", "Iniciando…", "Entregas e clientes recalculados com sucesso.", "backfill-order-fields");
+  });
   document.getElementById("backfillItemsBtn").addEventListener("click", function () {
     runAdminAction("backfillItemsBtn", "syncWarehousesMsg", "/api/sync/backfill-categories", "Iniciando…", "Pedidos recalculados com sucesso.", "backfill-categories");
   });
@@ -2132,6 +3027,59 @@
     var original = btn.textContent;
     btn.disabled = true; btn.textContent = "Buscando…";
     get("/api/debug/sample-item-pricing").then(function (res) {
+      out.hidden = false;
+      out.textContent = JSON.stringify(res, null, 2);
+    }).catch(function (err) {
+      out.hidden = false;
+      out.textContent = "Falha: " + err.message;
+    }).finally(function () { btn.disabled = false; btn.textContent = original; });
+  });
+
+  document.getElementById("debugChannelBtn").addEventListener("click", function () {
+    var btn = document.getElementById("debugChannelBtn");
+    var out = document.getElementById("debugChannelOutput");
+    var original = btn.textContent;
+    btn.disabled = true; btn.textContent = "Buscando…";
+    get("/api/debug/sample-order-channel").then(function (res) {
+      out.hidden = false;
+      out.textContent = JSON.stringify(res, null, 2);
+    }).catch(function (err) {
+      out.hidden = false;
+      out.textContent = "Falha: " + err.message;
+    }).finally(function () { btn.disabled = false; btn.textContent = original; });
+  });
+
+  document.getElementById("debugProductImageBtn").addEventListener("click", function () {
+    var btn = document.getElementById("debugProductImageBtn");
+    var out = document.getElementById("debugProductImageOutput");
+    var productId = (document.getElementById("debugProductImageId").value || "").trim();
+    var original = btn.textContent;
+    btn.disabled = true; btn.textContent = "Buscando…";
+    // Usa o mesmo período/status selecionados no topo do painel, pra investigar exatamente
+    // o que o card "Top produtos mais vendidos" está mostrando agora (o SKU representativo
+    // de cada produto depende do filtro ativo).
+    get("/api/debug/sample-product-image", Object.assign({}, periodParams(), statusParams(), productId ? { productId: productId } : {})).then(function (res) {
+      out.hidden = false;
+      out.textContent = JSON.stringify(res, null, 2);
+    }).catch(function (err) {
+      out.hidden = false;
+      out.textContent = "Falha: " + err.message;
+    }).finally(function () { btn.disabled = false; btn.textContent = original; });
+  });
+
+  document.getElementById("debugStockBtn").addEventListener("click", function () {
+    var btn = document.getElementById("debugStockBtn");
+    var out = document.getElementById("debugStockOutput");
+    var productName = (document.getElementById("debugStockName").value || "").trim();
+    var productId = (document.getElementById("debugStockId").value || "").trim();
+    var original = btn.textContent;
+    if (!productName && !productId) {
+      out.hidden = false;
+      out.textContent = "Preencha o nome ou o ID do produto.";
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Buscando…";
+    get("/api/debug/sample-product-stock", Object.assign({}, productId ? { productId: productId } : { productName: productName })).then(function (res) {
       out.hidden = false;
       out.textContent = JSON.stringify(res, null, 2);
     }).catch(function (err) {
@@ -2795,7 +3743,7 @@
   function loadEstoque() { EstoqueCia.abrir(); }
 
   // ==================== Tabs ====================
-  var LOADERS = { overview: loadOverview, vendas: loadVendas, estoque: loadEstoque, logistica: loadLogistica, marketing: loadMarketing, insights: loadInsights, admin: loadAdmin };
+  var LOADERS = { overview: loadOverview, vendas: loadVendas, "detalhamento-vendas": loadDetalhamentoVendas, estoque: loadEstoque, logistica: loadLogistica, marketing: loadMarketing, insights: loadInsights, admin: loadAdmin };
   var loaded = {};
 
   function activateTab(name) {
@@ -2827,6 +3775,171 @@
     setTimeout(function () { btn.classList.remove("spinning"); }, 700);
   }
   document.getElementById("refreshBtn").addEventListener("click", refreshAll);
+
+  // ==================== Cards recolhíveis (todas as abas) ====================
+  // Genérico de propósito: funciona pra qualquer card, estático (já no HTML) ou criado
+  // dinamicamente em JS (KPIs da Visão Geral, cards de Insights) — não depende de nenhuma
+  // classe específica dentro do card, só esconde tudo que não é o <h3> quando colapsado.
+  // Roda de novo a cada mutação no <main> (via MutationObserver abaixo) pra pegar cards
+  // criados depois do carregamento inicial, sem precisar chamar isso manualmente em cada
+  // função loadX().
+  var COLLAPSE_STORAGE_KEY = "zz_collapsed_cards";
+  var collapsedCards = {};
+  try { collapsedCards = JSON.parse(safeLocalGet(COLLAPSE_STORAGE_KEY) || "{}"); } catch (e) { collapsedCards = {}; }
+  function persistCollapsedCards() { safeLocalSet(COLLAPSE_STORAGE_KEY, JSON.stringify(collapsedCards)); }
+
+  function setupCollapsibleCards() {
+    document.querySelectorAll(".card").forEach(function (card) {
+      var h3 = card.querySelector("h3");
+      if (!h3 || h3.dataset.collapseReady) return;
+      h3.dataset.collapseReady = "1";
+
+      // Move os elementos que já existiam dentro do h3 (ex.: botão "Ver tudo") pra um
+      // wrapper junto com o novo botão de recolher, mantendo o h3 com só 2 itens flex
+      // (título + ações) — sem isso, "justify-content:space-between" no h3 espalharia
+      // "Ver tudo" e o botão de recolher em posições erradas quando os dois existem.
+      var actions = el("span", { class: "h3-actions" });
+      Array.prototype.slice.call(h3.children).forEach(function (child) { actions.appendChild(child); });
+      var toggle = el("button", { type: "button", class: "collapse-toggle", "aria-label": "Recolher ou expandir" });
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+      actions.appendChild(toggle);
+      h3.appendChild(actions);
+
+      if (card.id && collapsedCards[card.id]) card.classList.add("collapsed");
+
+      h3.addEventListener("click", function (e) {
+        if (e.target.closest(".tag-btn") || e.target.closest(".drag-handle")) return; // não recolhe ao clicar em "Ver tudo" ou no puxador de arrastar
+        card.classList.toggle("collapsed");
+        if (card.id) {
+          if (card.classList.contains("collapsed")) collapsedCards[card.id] = true;
+          else delete collapsedCards[card.id];
+          persistCollapsedCards();
+        }
+      });
+    });
+  }
+
+  // ==================== Arrastar pra reorganizar os módulos (todas as abas) ====================
+  // Cada container de cards com id estável (os .grid de cada aba, o kpiRow da Visão Geral e o
+  // insightGrid de Insights) vira uma "zona" de arrastar-e-soltar independente — só reordena
+  // dentro do mesmo container, nunca entre abas diferentes. O puxador (⠿) fica dentro do
+  // .h3-actions já criado por setupCollapsibleCards (por isso essa função tem que rodar
+  // primeiro — ver enhanceCards abaixo). A identidade de cada card pra salvar a ordem é o
+  // `id` quando existe; sem id (caso dos KPIs e Insights, recriados do zero a cada
+  // atualização) usamos o texto do título, que é sempre o mesmo pro mesmo cartão.
+  var GRID_ORDER_KEY = "zz_grid_order";
+  var gridOrder = {};
+  try { gridOrder = JSON.parse(safeLocalGet(GRID_ORDER_KEY) || "{}"); } catch (e) { gridOrder = {}; }
+  function persistGridOrder() { safeLocalSet(GRID_ORDER_KEY, JSON.stringify(gridOrder)); }
+
+  function cardKey(card) {
+    if (card.id) return "id:" + card.id;
+    var h3 = card.querySelector("h3");
+    var titulo = h3 ? h3.firstChild && h3.firstChild.textContent : "";
+    return "titulo:" + (titulo || "").trim();
+  }
+
+  function cardsOf(container) {
+    return Array.prototype.slice.call(container.children).filter(function (c) { return c.classList && c.classList.contains("card"); });
+  }
+
+  // Reaplica a ordem salva sem mexer em nada se já estiver certa — importante porque isso
+  // roda de novo a cada atualização dos KPIs/Insights (que recriam os cards do zero, sempre
+  // na mesma ordem "de fábrica"), então sem essa checagem a gente ficaria reordenando o DOM
+  // (com um pequeno flicker) toda vez que o período do painel mudasse.
+  function applySavedOrder(container) {
+    var salvo = gridOrder[container.id];
+    if (!salvo || !salvo.length) return;
+    var cards = cardsOf(container);
+    var atual = cards.map(cardKey);
+    var alvo = salvo.filter(function (k) { return atual.indexOf(k) !== -1; });
+    atual.forEach(function (k) { if (alvo.indexOf(k) === -1) alvo.push(k); }); // cards novos vão pro fim
+    var mudou = alvo.length !== atual.length || alvo.some(function (k, i) { return k !== atual[i]; });
+    if (!mudou) return;
+    var porChave = {};
+    cards.forEach(function (c) { porChave[cardKey(c)] = c; });
+    alvo.forEach(function (k) { if (porChave[k]) container.appendChild(porChave[k]); });
+  }
+
+  function saveOrder(container) {
+    gridOrder[container.id] = cardsOf(container).map(cardKey);
+    persistGridOrder();
+  }
+
+  var dragState = null;
+
+  function clearDragOverMarks() {
+    document.querySelectorAll(".card.drag-over-before, .card.drag-over-after").forEach(function (c) {
+      c.classList.remove("drag-over-before", "drag-over-after");
+    });
+  }
+
+  function setupDragHandles() {
+    document.querySelectorAll(".grid, .kpi-row, .insight-grid").forEach(function (container) {
+      if (!container.id) return; // só reordena containers com id estável
+
+      if (!container.dataset.dragZoneReady) {
+        container.dataset.dragZoneReady = "1";
+        container.addEventListener("dragover", function (e) {
+          if (!dragState || dragState.container !== container) return;
+          e.preventDefault();
+          var alvo = e.target.closest(".card");
+          clearDragOverMarks();
+          if (!alvo || alvo === dragState.card) return;
+          var rect = alvo.getBoundingClientRect();
+          alvo.classList.add((e.clientY - rect.top) < rect.height / 2 ? "drag-over-before" : "drag-over-after");
+        });
+        container.addEventListener("drop", function (e) {
+          if (!dragState || dragState.container !== container) return;
+          e.preventDefault();
+          var alvo = e.target.closest(".card");
+          clearDragOverMarks();
+          if (alvo && alvo !== dragState.card) {
+            var rect = alvo.getBoundingClientRect();
+            var antes = (e.clientY - rect.top) < rect.height / 2;
+            container.insertBefore(dragState.card, antes ? alvo : alvo.nextSibling);
+          }
+          saveOrder(container);
+        });
+      }
+
+      cardsOf(container).forEach(function (card) {
+        if (card.dataset.dragHandleReady) return;
+        var h3 = card.querySelector("h3");
+        var actions = h3 && h3.querySelector(".h3-actions");
+        if (!actions) return; // espera setupCollapsibleCards criar o .h3-actions primeiro
+        card.dataset.dragHandleReady = "1";
+
+        var handle = el("span", { class: "drag-handle", title: "Arraste pra reorganizar", draggable: "true", "aria-label": "Arrastar pra reorganizar" }, [document.createTextNode("⠿")]);
+        actions.insertBefore(handle, actions.firstChild);
+
+        handle.addEventListener("dragstart", function (e) {
+          dragState = { card: card, container: container };
+          card.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+          try { e.dataTransfer.setDragImage(card, 20, 20); } catch (err) {}
+          try { e.dataTransfer.setData("text/plain", cardKey(card)); } catch (err) {}
+        });
+        handle.addEventListener("dragend", function () {
+          card.classList.remove("dragging");
+          clearDragOverMarks();
+          dragState = null;
+        });
+      });
+
+      applySavedOrder(container);
+    });
+  }
+
+  function enhanceCards() {
+    setupCollapsibleCards();
+    setupDragHandles();
+  }
+  enhanceCards();
+  var mainEl = document.querySelector("main");
+  if (mainEl && window.MutationObserver) {
+    new MutationObserver(enhanceCards).observe(mainEl, { childList: true, subtree: true });
+  }
 
   function boot() {
     applyPreset("90");
