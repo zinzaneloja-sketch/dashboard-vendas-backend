@@ -166,6 +166,44 @@ CREATE TABLE IF NOT EXISTS revenue_goals (
   goal_value          NUMERIC(14,2) NOT NULL
 );
 
+-- ---- Estoque Cia (planilha de estoque da companhia, todas as lojas + CD) ----
+-- Cada upload da planilha "Estoque Omni" é uma carga. Os números do menu Estoque Cia são
+-- calculados uma vez na carga (src/estoqueCia/processar.js) e guardados prontos em
+-- estoque_cia_datasets (um JSONB por dataset). Ver src/estoqueCia/servico.js.
+CREATE TABLE IF NOT EXISTS estoque_cia_cargas (
+  id                  BIGSERIAL PRIMARY KEY,
+  data_ref            DATE NOT NULL,
+  arquivo             TEXT,
+  origem              TEXT,          -- 'painel' ou 'github'
+  enviado_por         TEXT,
+  linhas              INTEGER,
+  pecas               INTEGER,
+  refs                INTEGER,
+  locais              INTEGER,
+  avisos              JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_estoque_cia_cargas_data ON estoque_cia_cargas (data_ref DESC);
+
+CREATE TABLE IF NOT EXISTS estoque_cia_datasets (
+  carga_id            BIGINT NOT NULL REFERENCES estoque_cia_cargas(id) ON DELETE CASCADE,
+  nome                TEXT NOT NULL,
+  payload             JSONB NOT NULL,
+  PRIMARY KEY (carga_id, nome)
+);
+
+-- Histórico enxuto (dia × loja × categoria), mantido mesmo depois que os datasets
+-- detalhados das cargas antigas são apagados.
+CREATE TABLE IF NOT EXISTS estoque_cia_historico (
+  data_ref            DATE NOT NULL,
+  filial              TEXT NOT NULL,
+  grupo               TEXT NOT NULL,
+  pecas               INTEGER NOT NULL,
+  refs                INTEGER NOT NULL,
+  valor               NUMERIC(14,2) NOT NULL DEFAULT 0,
+  PRIMARY KEY (data_ref, filial, grupo)
+);
+
 -- Usuários com acesso ao painel (login por email/senha).
 CREATE TABLE IF NOT EXISTS users (
   id                  BIGSERIAL PRIMARY KEY,

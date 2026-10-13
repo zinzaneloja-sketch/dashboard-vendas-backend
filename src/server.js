@@ -21,8 +21,12 @@ const {
   deleteUser,
 } = require("./auth");
 
+const estoqueCia = require("./estoqueCia/servico");
+const compression = require("compression");
+
 const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
+app.use(compression()); // os datasets do Estoque Cia passam de 8 MB em JSON — gzip derruba pra ~1 MB
 app.use(express.json());
 
 function parseDateRange(req) {
@@ -442,6 +446,64 @@ app.get("/api/overview/taxa-conversao", requireAuth, handle((req) => overview.ta
 app.get("/api/overview/tracking-pedido", requireAuth, handle((req) => overview.trackingDePedido(parseDateRange(req))));
 app.get("/api/overview/itens-por-pedido", requireAuth, handle((req) => overview.itensPorPedido(parseDateRange(req))));
 app.get("/api/overview/ltv-categoria", requireAuth, handle((req) => overview.ltvPorCategoria(parseDateRange(req))));
+
+// ---- Estoque Cia (planilha de estoque de todas as lojas + CD) ----
+// Upload da planilha "Estoque Omni" (.xlsx, corpo cru da requisição). Aceita dois jeitos:
+//  - admin logado no painel (Bearer token) — botão "Carregar planilha" no menu Estoque Cia;
+//  - rotina do GitHub (ver .github/workflows/estoque-cia.yml), mandando o cabeçalho
+//    X-Estoque-Key igual à variável ESTOQUE_UPLOAD_KEY configurada no Railway.
+// O processamento (ler ~70 mil linhas + calcular tudo) roda em segundo plano como o job
+// "estoque-cia"; acompanhe em /api/estoque-cia/status.
+function authUploadEstoque(req, res, next) {
+  const chave = req.headers["x-estoque-key"];
+  if (chave) {
+    if (process.env.ESTOQUE_UPLOAD_KEY && chave === process.env.ESTOQUE_UPLOAD_KEY) {
+      req.user = { email: "github", role: "admin", via: "github" };
+      return next();
+    }
+    return res.status(401).json({ error: "Chave de upload do estoque inválida." });
+  }
+  return requireAuth(req, res, () => requireAdmin(req, res, next));
+}
+app.post(
+  "/api/estoque-cia/upload",
+  authUploadEstoque,
+  express.raw({ type: () => true, limit: "80mb" }),
+  handle(async (req) => {
+    const buffer = req.body;
+    if (!Buffer.isBuffer(buffer) || buffer.length < 100) {
+      const err = new Error("Envie o arquivo .xlsx no corpo da requisição.");
+      err.status = 400;
+      throw err;
+    }
+    if (buffer.slice(0, 2).toString("latin1") !== "PK") {
+      const err = new Error("O arquivo não parece ser um .xlsx (salve a planilha como Pasta de Trabalho do Excel).");
+      err.status = 400;
+      throw err;
+    }
+    const arquivo = req.query.arquivo ? String(req.query.arquivo).slice(0, 200) : null;
+    const dataRef = req.query.data ? String(req.query.data) : null;
+    const origem = req.user.via === "github" ? "github" : "painel";
+    const enviadoPor = req.user.email;
+    return runJobInBackground("estoque-cia", () => estoqueCia.importarPlanilha({ buffer, arquivo, dataRef, origem, enviadoPor }));
+  })
+);
+app.get("/api/estoque-cia/status", authUploadEstoque, handle(async () => {
+  const jobs = await getAllJobStatuses();
+  return { job: jobs["estoque-cia"] || null };
+}));
+app.get("/api/estoque-cia/cargas", requireAuth, handle(() => estoqueCia.listarCargas()));
+app.get("/api/estoque-cia/historico", requireAuth, handle((req) => estoqueCia.historico({ filial: req.query.filial, grupo: req.query.grupo })));
+app.get("/api/estoque-cia/dataset/:nome", requireAuth, async (req, res) => {
+  try {
+    const cargaId = req.query.carga ? Number(req.query.carga) : null;
+    const d = await estoqueCia.lerDataset(req.params.nome, Number.isFinite(cargaId) ? cargaId : null);
+    if (!d) return res.status(404).json({ error: "Nenhuma planilha de estoque carregada ainda." });
+    res.type("application/json").send(`{"cargaId":${Number(d.id)},"dataRef":${JSON.stringify(d.data_ref)},"rows":${d.payload}}`);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
 
 // ---- Sync manual (útil para forçar atualização ou popular pela primeira vez) ----
 // Aceita GET também (além de POST) para poder disparar direto pelo navegador.
