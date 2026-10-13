@@ -1,0 +1,71 @@
+# Envia a planilha de estoque do dia para o painel (menu Estoque Cia).
+#
+# Como usar: suba o arquivo .xlsx na pasta estoque/ (pelo site do GitHub: Add file → Upload
+# files) na branch main. Esta rotina manda a planilha para o backend, espera o processamento
+# e depois apaga as planilhas antigas da pasta, deixando só a do dia (o painel guarda os
+# dados; o arquivo não precisa ficar acumulando no repositório).
+# Dá pra rodar à mão também: Actions → "Enviar estoque Cia" → Run workflow.
+#
+# Precisa do secret ESTOQUE_UPLOAD_KEY (Settings → Secrets and variables → Actions), com o
+# mesmo valor da variável ESTOQUE_UPLOAD_KEY do serviço no Railway.
+name: Enviar estoque Cia
+
+on:
+  push:
+    branches: [main]
+    paths: ["estoque/**.xlsx", "estoque/**.XLSX"]
+  workflow_dispatch:
+    inputs:
+      arquivo:
+        description: "Caminho da planilha (vazio = a mais recente da pasta estoque/)"
+        required: false
+      data:
+        description: "Data do estoque AAAA-MM-DD (vazio = data do nome do arquivo ou hoje)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: estoque-cia
+  cancel-in-progress: false
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Escolher a planilha
+        id: arq
+        run: |
+          F="${{ inputs.arquivo }}"
+          if [ -z "$F" ] && [ "${{ github.event_name }}" = "push" ]; then
+            F="$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- 'estoque/' | grep -i '\.xlsx$' | tail -1 || true)"
+          fi
+          if [ -z "$F" ]; then
+            F="$(ls -t estoque/*.xlsx estoque/*.XLSX 2>/dev/null | head -1 || true)"
+          fi
+          if [ -z "$F" ] || [ ! -f "$F" ]; then echo "Nenhuma planilha .xlsx encontrada em estoque/"; exit 1; fi
+          echo "Planilha: $F"
+          echo "arquivo=$F" >> "$GITHUB_OUTPUT"
+
+      - name: Enviar para o painel
+        env:
+          ESTOQUE_UPLOAD_KEY: ${{ secrets.ESTOQUE_UPLOAD_KEY }}
+          ESTOQUE_API_URL: ${{ vars.ESTOQUE_API_URL }}
+          ESTOQUE_DATA: ${{ inputs.data }}
+        run: ./scripts/enviar-estoque.sh "${{ steps.arq.outputs.arquivo }}"
+
+      - name: Limpar planilhas antigas
+        run: |
+          KEEP="${{ steps.arq.outputs.arquivo }}"
+          OLD="$(ls estoque/*.xlsx estoque/*.XLSX 2>/dev/null | grep -vxF "$KEEP" || true)"
+          if [ -z "$OLD" ]; then echo "Nada para limpar."; exit 0; fi
+          echo "$OLD" | xargs git rm -q --
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove planilhas de estoque antigas [skip ci]"
+          git push

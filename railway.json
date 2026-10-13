@@ -1,0 +1,6 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "watchPatterns": ["src/**", "package.json", "package-lock.json", "railway.json"]
+  }
+}
