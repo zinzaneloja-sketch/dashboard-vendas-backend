@@ -19,14 +19,14 @@ const {
   createUser,
   listUsers,
   deleteUser,
+  updateUserAccess,
+  loadAccess,
+  requireModule,
 } = require("./auth");
-
-const estoqueCia = require("./estoqueCia/servico");
-const compression = require("compression");
+const cd = require("./cd/cd");
 
 const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
-app.use(compression()); // os datasets do Estoque Cia passam de 8 MB em JSON — gzip derruba pra ~1 MB
 app.use(express.json());
 
 function parseDateRange(req) {
@@ -62,7 +62,7 @@ function handle(fn) {
       const details = err.response?.data || err.message;
       const status = err.status || 500;
       if (status >= 500) console.error("[api]", JSON.stringify(details));
-      res.status(status).json({ error: err.message, details });
+      res.status(status).json({ error: err.message, details, ...(err.extra || {}) });
     }
   };
 }
@@ -348,15 +348,20 @@ app.post("/api/auth/login", handle(async (req) => {
     throw err;
   }
   const token = signToken(user);
-  return { token, user: { id: user.id, email: user.email, role: user.role } };
+  return { token, user: await loadAccess(user.id) };
 }));
 
-app.get("/api/auth/me", requireAuth, handle(async (req) => ({ user: req.user })));
+// Perfil sempre lido do banco: se o admin trocar o acesso de alguém, vale na próxima abertura de tela.
+app.get("/api/auth/me", requireAuth, handle(async (req) => {
+  const user = await loadAccess(req.user.sub);
+  if (!user) { const err = new Error("Usuário não encontrado."); err.status = 401; throw err; }
+  return { user };
+}));
 
 app.get("/api/auth/users", requireAuth, requireAdmin, handle(async () => ({ users: await listUsers() })));
 
 app.post("/api/auth/users", requireAuth, requireAdmin, handle(async (req) => {
-  const { email, password, role } = req.body || {};
+  const { email, password, role, nome, modules, cd_perfis } = req.body || {};
   if (!email || !password) {
     const err = new Error("Informe email e senha.");
     err.status = 400;
@@ -368,7 +373,19 @@ app.post("/api/auth/users", requireAuth, requireAdmin, handle(async (req) => {
     err.status = 409;
     throw err;
   }
-  const user = await createUser({ email, password, role });
+  const user = await createUser({ email, password, role, nome, modules, cd_perfis });
+  return { user };
+}));
+
+app.put("/api/auth/users/:id/acesso", requireAuth, requireAdmin, handle(async (req) => {
+  const { role, nome, modules, cd_perfis } = req.body || {};
+  if (String(req.user.sub) === String(req.params.id) && role !== "admin") {
+    const err = new Error("Você não pode tirar o próprio acesso de administrador.");
+    err.status = 400;
+    throw err;
+  }
+  const user = await updateUserAccess(req.params.id, { role, nome, modules, cd_perfis });
+  if (!user) { const err = new Error("Usuário não encontrado."); err.status = 404; throw err; }
   return { user };
 }));
 
@@ -383,6 +400,9 @@ app.delete("/api/auth/users/:id", requireAuth, requireAdmin, handle(async (req) 
 }));
 
 // ---- Vendas ----
+// Painel de vendas: só quem tem o módulo "vendas" (usuários antigos já nascem com ele).
+app.use(["/api/vendas", "/api/logistica", "/api/marketing", "/api/overview"], requireAuth, requireModule("vendas"));
+
 app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo, statuses: parseStatusFilter(req) })));
 app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
   await vendas.setRevenueGoal({ month: new Date(req.body.month), goalValue: Number(req.body.goalValue) });
@@ -447,64 +467,6 @@ app.get("/api/overview/tracking-pedido", requireAuth, handle((req) => overview.t
 app.get("/api/overview/itens-por-pedido", requireAuth, handle((req) => overview.itensPorPedido(parseDateRange(req))));
 app.get("/api/overview/ltv-categoria", requireAuth, handle((req) => overview.ltvPorCategoria(parseDateRange(req))));
 
-// ---- Estoque Cia (planilha de estoque de todas as lojas + CD) ----
-// Upload da planilha "Estoque Omni" (.xlsx, corpo cru da requisição). Aceita dois jeitos:
-//  - admin logado no painel (Bearer token) — botão "Carregar planilha" no menu Estoque Cia;
-//  - rotina do GitHub (ver .github/workflows/estoque-cia.yml), mandando o cabeçalho
-//    X-Estoque-Key igual à variável ESTOQUE_UPLOAD_KEY configurada no Railway.
-// O processamento (ler ~70 mil linhas + calcular tudo) roda em segundo plano como o job
-// "estoque-cia"; acompanhe em /api/estoque-cia/status.
-function authUploadEstoque(req, res, next) {
-  const chave = req.headers["x-estoque-key"];
-  if (chave) {
-    if (process.env.ESTOQUE_UPLOAD_KEY && chave === process.env.ESTOQUE_UPLOAD_KEY) {
-      req.user = { email: "github", role: "admin", via: "github" };
-      return next();
-    }
-    return res.status(401).json({ error: "Chave de upload do estoque inválida." });
-  }
-  return requireAuth(req, res, () => requireAdmin(req, res, next));
-}
-app.post(
-  "/api/estoque-cia/upload",
-  authUploadEstoque,
-  express.raw({ type: () => true, limit: "80mb" }),
-  handle(async (req) => {
-    const buffer = req.body;
-    if (!Buffer.isBuffer(buffer) || buffer.length < 100) {
-      const err = new Error("Envie o arquivo .xlsx no corpo da requisição.");
-      err.status = 400;
-      throw err;
-    }
-    if (buffer.slice(0, 2).toString("latin1") !== "PK") {
-      const err = new Error("O arquivo não parece ser um .xlsx (salve a planilha como Pasta de Trabalho do Excel).");
-      err.status = 400;
-      throw err;
-    }
-    const arquivo = req.query.arquivo ? String(req.query.arquivo).slice(0, 200) : null;
-    const dataRef = req.query.data ? String(req.query.data) : null;
-    const origem = req.user.via === "github" ? "github" : "painel";
-    const enviadoPor = req.user.email;
-    return runJobInBackground("estoque-cia", () => estoqueCia.importarPlanilha({ buffer, arquivo, dataRef, origem, enviadoPor }));
-  })
-);
-app.get("/api/estoque-cia/status", authUploadEstoque, handle(async () => {
-  const jobs = await getAllJobStatuses();
-  return { job: jobs["estoque-cia"] || null };
-}));
-app.get("/api/estoque-cia/cargas", requireAuth, handle(() => estoqueCia.listarCargas()));
-app.get("/api/estoque-cia/historico", requireAuth, handle((req) => estoqueCia.historico({ filial: req.query.filial, grupo: req.query.grupo })));
-app.get("/api/estoque-cia/dataset/:nome", requireAuth, async (req, res) => {
-  try {
-    const cargaId = req.query.carga ? Number(req.query.carga) : null;
-    const d = await estoqueCia.lerDataset(req.params.nome, Number.isFinite(cargaId) ? cargaId : null);
-    if (!d) return res.status(404).json({ error: "Nenhuma planilha de estoque carregada ainda." });
-    res.type("application/json").send(`{"cargaId":${Number(d.id)},"dataRef":${JSON.stringify(d.data_ref)},"rows":${d.payload}}`);
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
 // ---- Sync manual (útil para forçar atualização ou popular pela primeira vez) ----
 // Aceita GET também (além de POST) para poder disparar direto pelo navegador.
 // Restrito ao admin: dispara chamadas pesadas na Vtex e reescreve dados sincronizados.
@@ -554,6 +516,30 @@ app.get("/api/sync/backfill-order-fields", requireAuth, requireAdmin, handle(asy
 }));
 // Consultado pelo frontend depois de disparar um sync/backfill, pra saber quando o job
 // que ficou rodando em segundo plano terminou (e se deu certo ou não).
+// ---- Módulo Recebimento / CD ----
+const cdAuth = [requireAuth, requireModule("cd")];
+const nid = (req) => Number(req.params.id);
+app.get("/api/cd/config", cdAuth, handle(() => cd.configPublica()));
+app.put("/api/cd/config/etapas", cdAuth, requireAdmin, handle((req) => cd.salvarConfigEtapas((req.body || {}).etapas)));
+app.get("/api/cd/usuarios", cdAuth, handle(async () => {
+  const { rows } = await pool.query("SELECT email, nome FROM users WHERE role = 'admin' OR 'cd' = ANY(modules)");
+  const usuarios = {};
+  for (const r of rows) usuarios[r.email] = r.nome || r.email.split("@")[0];
+  return { usuarios };
+}));
+app.get("/api/cd/painel", cdAuth, handle((req) => cd.painel(req.access)));
+app.get("/api/cd/gargalos", cdAuth, handle((req) => cd.gargalos({ dias: req.query.dias })));
+app.get("/api/cd/notas", cdAuth, handle((req) => cd.listarNotas({ status: req.query.status, q: req.query.q, limit: req.query.limit })));
+app.post("/api/cd/notas", cdAuth, handle((req) => cd.criarNota(req.access, req.body || {})));
+app.get("/api/cd/notas/:id", cdAuth, handle((req) => cd.detalheNota(req.access, nid(req))));
+app.post("/api/cd/notas/:id/etapas/:n/iniciar", cdAuth, handle((req) => cd.iniciarEtapa(req.access, nid(req), Number(req.params.n))));
+app.put("/api/cd/notas/:id/etapas/:n/itens", cdAuth, handle((req) => cd.salvarItens(req.access, nid(req), Number(req.params.n), req.body || {})));
+app.post("/api/cd/notas/:id/etapas/:n/conferir", cdAuth, handle((req) => cd.conferirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).dados || {})));
+app.post("/api/cd/notas/:id/etapas/:n/concluir", cdAuth, handle((req) => cd.concluirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).dados || {})));
+app.post("/api/cd/notas/:id/etapas/:n/reabrir", cdAuth, handle((req) => cd.reabrirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).motivo)));
+app.post("/api/cd/notas/:id/cancelar", cdAuth, handle((req) => cd.cancelarNota(req.access, nid(req), (req.body || {}).motivo)));
+app.post("/api/cd/notas/:id/comentarios", cdAuth, handle((req) => cd.comentar(req.access, nid(req), (req.body || {}).texto, (req.body || {}).etapa)));
+
 app.get("/api/sync/status", requireAuth, requireAdmin, handle(async () => ({ jobs: await getAllJobStatuses() })));
 
 const PORT = process.env.PORT || 8080;
