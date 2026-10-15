@@ -166,44 +166,6 @@ CREATE TABLE IF NOT EXISTS revenue_goals (
   goal_value          NUMERIC(14,2) NOT NULL
 );
 
--- ---- Estoque Cia (planilha de estoque da companhia, todas as lojas + CD) ----
--- Cada upload da planilha "Estoque Omni" é uma carga. Os números do menu Estoque Cia são
--- calculados uma vez na carga (src/estoqueCia/processar.js) e guardados prontos em
--- estoque_cia_datasets (um JSONB por dataset). Ver src/estoqueCia/servico.js.
-CREATE TABLE IF NOT EXISTS estoque_cia_cargas (
-  id                  BIGSERIAL PRIMARY KEY,
-  data_ref            DATE NOT NULL,
-  arquivo             TEXT,
-  origem              TEXT,          -- 'painel' ou 'github'
-  enviado_por         TEXT,
-  linhas              INTEGER,
-  pecas               INTEGER,
-  refs                INTEGER,
-  locais              INTEGER,
-  avisos              JSONB,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_estoque_cia_cargas_data ON estoque_cia_cargas (data_ref DESC);
-
-CREATE TABLE IF NOT EXISTS estoque_cia_datasets (
-  carga_id            BIGINT NOT NULL REFERENCES estoque_cia_cargas(id) ON DELETE CASCADE,
-  nome                TEXT NOT NULL,
-  payload             JSONB NOT NULL,
-  PRIMARY KEY (carga_id, nome)
-);
-
--- Histórico enxuto (dia × loja × categoria), mantido mesmo depois que os datasets
--- detalhados das cargas antigas são apagados.
-CREATE TABLE IF NOT EXISTS estoque_cia_historico (
-  data_ref            DATE NOT NULL,
-  filial              TEXT NOT NULL,
-  grupo               TEXT NOT NULL,
-  pecas               INTEGER NOT NULL,
-  refs                INTEGER NOT NULL,
-  valor               NUMERIC(14,2) NOT NULL DEFAULT 0,
-  PRIMARY KEY (data_ref, filial, grupo)
-);
-
 -- Usuários com acesso ao painel (login por email/senha).
 CREATE TABLE IF NOT EXISTS users (
   id                  BIGSERIAL PRIMARY KEY,
@@ -211,6 +173,83 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash       TEXT NOT NULL,
   role                TEXT NOT NULL DEFAULT 'viewer', -- 'admin' ou 'viewer'
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Acesso por modulo e perfil operacional do CD (usuarios antigos continuam so no painel de vendas).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT '{vendas}';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS cd_perfis TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;
+
+-- ===== Modulo Recebimento / CD: da NF na doca ate o faturamento =====
+CREATE TABLE IF NOT EXISTS cd_notas (
+  id                  BIGSERIAL PRIMARY KEY,
+  numero_nf           TEXT NOT NULL,
+  serie               TEXT,
+  fornecedor          TEXT NOT NULL,
+  chave_nf            TEXT,
+  total_pecas_nf      INTEGER NOT NULL DEFAULT 0,
+  volumes_nf          INTEGER NOT NULL DEFAULT 0,
+  prioridade          TEXT NOT NULL DEFAULT 'normal',
+  status              TEXT NOT NULL DEFAULT 'aberta', -- aberta | concluida | cancelada
+  etapa_atual         INTEGER NOT NULL DEFAULT 2,
+  com_divergencia     BOOLEAN NOT NULL DEFAULT false,
+  observacao          TEXT,
+  criada_por          TEXT NOT NULL,
+  criada_em           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  concluida_em        TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cd_notas_chave_uniq ON cd_notas (chave_nf) WHERE chave_nf IS NOT NULL AND status <> 'cancelada';
+CREATE UNIQUE INDEX IF NOT EXISTS cd_notas_nf_uniq ON cd_notas (numero_nf, COALESCE(serie, ''), lower(fornecedor)) WHERE status <> 'cancelada';
+CREATE INDEX IF NOT EXISTS cd_notas_status_idx ON cd_notas (status, etapa_atual);
+
+CREATE TABLE IF NOT EXISTS cd_nota_itens (
+  id                  BIGSERIAL PRIMARY KEY,
+  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  modelo              TEXT NOT NULL,
+  cor                 TEXT NOT NULL,
+  qtd_nf              INTEGER,
+  qtd_contada         INTEGER,
+  qtd_ficha           INTEGER,
+  qtd_checkout        INTEGER,
+  amostra_separada    BOOLEAN NOT NULL DEFAULT false,
+  cor_definida        TEXT,
+  ref_zinzane         TEXT,
+  justificativa_confronto TEXT,
+  criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
+
+CREATE TABLE IF NOT EXISTS cd_nota_etapas (
+  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  etapa               INTEGER NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'pendente', -- pendente | em_andamento | concluida
+  liberada_em         TIMESTAMPTZ, -- quando a etapa anterior terminou (comeca a contar a fila)
+  iniciada_em         TIMESTAMPTZ,
+  iniciada_por        TEXT,
+  concluida_em        TIMESTAMPTZ,
+  concluida_por       TEXT,
+  dados               JSONB NOT NULL DEFAULT '{}'::jsonb,
+  divergencia         BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (nota_id, etapa)
+);
+
+-- Trilha de auditoria: nada e apagado, cada acao vira um evento.
+CREATE TABLE IF NOT EXISTS cd_eventos (
+  id                  BIGSERIAL PRIMARY KEY,
+  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  etapa               INTEGER,
+  tipo                TEXT NOT NULL,
+  usuario             TEXT NOT NULL,
+  detalhe             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_eventos_nota_idx ON cd_eventos (nota_id, criado_em);
+
+-- Metas de tempo por etapa (minutos), ajustaveis pelo admin.
+CREATE TABLE IF NOT EXISTS cd_etapa_config (
+  etapa               INTEGER PRIMARY KEY,
+  sla_exec_min        INTEGER NOT NULL,
+  sla_fila_min        INTEGER NOT NULL
 );
 `;
 
