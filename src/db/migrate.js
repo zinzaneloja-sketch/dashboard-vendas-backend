@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS cd_nota_itens (
   justificativa_confronto TEXT,
   criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS tamanho TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
 
 CREATE TABLE IF NOT EXISTS cd_nota_etapas (
@@ -251,7 +252,62 @@ CREATE TABLE IF NOT EXISTS cd_etapa_config (
   sla_exec_min        INTEGER NOT NULL,
   sla_fila_min        INTEGER NOT NULL
 );
+
+-- Marcas de migracoes unicas do modulo CD.
+CREATE TABLE IF NOT EXISTS cd_meta (
+  chave               TEXT PRIMARY KEY,
+  valor               TEXT,
+  criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
+
+// Migracao unica: o processo tinha 15 etapas (2 = abertura dos fardos, 3 = separacao). Como as duas
+// acontecem juntas, viraram uma so (etapa 2) e as seguintes foram renumeradas (4..15 -> 3..14).
+// Notas que ja existiam sao convertidas; roda uma vez so (marca em cd_meta) e dentro de uma transacao.
+async function migrarEtapas14() {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock(7001)");
+    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'etapas_14'");
+    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
+
+    const { rows: [{ n: temAntigas }] } = await c.query("SELECT count(*)::int AS n FROM cd_nota_etapas WHERE etapa = 15");
+    if (temAntigas > 0) {
+      // 1) etapa 2 absorve a 3 (status, datas e dados)
+      await c.query(`
+        UPDATE cd_nota_etapas t2 SET
+          status = CASE WHEN t3.status = 'concluida' THEN 'concluida' WHEN t2.status = 'pendente' THEN 'pendente' ELSE 'em_andamento' END,
+          iniciada_em = COALESCE(t2.iniciada_em, t3.iniciada_em),
+          iniciada_por = COALESCE(t2.iniciada_por, t3.iniciada_por),
+          concluida_em = CASE WHEN t3.status = 'concluida' THEN t3.concluida_em ELSE NULL END,
+          concluida_por = CASE WHEN t3.status = 'concluida' THEN t3.concluida_por ELSE NULL END,
+          dados = COALESCE(t2.dados, '{}'::jsonb) || COALESCE(t3.dados, '{}'::jsonb),
+          divergencia = t2.divergencia OR t3.divergencia
+        FROM cd_nota_etapas t3
+        WHERE t2.nota_id = t3.nota_id AND t2.etapa = 2 AND t3.etapa = 3`);
+      await c.query("DELETE FROM cd_nota_etapas WHERE etapa = 3");
+      // 2) renumera 4..15 -> 3..14 (passando por negativos para nao colidir na chave primaria)
+      await c.query("UPDATE cd_nota_etapas SET etapa = -(etapa - 1) WHERE etapa >= 4");
+      await c.query("UPDATE cd_nota_etapas SET etapa = -etapa WHERE etapa < 0");
+      // 3) etapa atual das notas e historico (eventos)
+      await c.query("UPDATE cd_notas SET etapa_atual = CASE WHEN etapa_atual <= 3 THEN 2 ELSE etapa_atual - 1 END");
+      await c.query("UPDATE cd_eventos SET etapa = CASE WHEN etapa = 3 THEN 2 WHEN etapa >= 4 THEN etapa - 1 ELSE etapa END WHERE etapa IS NOT NULL");
+      // 4) metas de tempo: as da abertura/separacao antigas deixam de valer (a etapa 2 nova tem meta propria)
+      await c.query("DELETE FROM cd_etapa_config WHERE etapa IN (2, 3)");
+      await c.query("UPDATE cd_etapa_config SET etapa = -(etapa - 1) WHERE etapa >= 4");
+      await c.query("UPDATE cd_etapa_config SET etapa = -etapa WHERE etapa < 0");
+      console.log("[migrate] Notas do CD convertidas para o processo de 14 etapas (" + temAntigas + " nota(s)).");
+    }
+    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('etapas_14', 'ok')");
+    await c.query("COMMIT");
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
 
 // Garante que o admin master exista. Se ADMIN_PASSWORD não vier configurada,
 // gera uma senha aleatória e a imprime UMA vez nos logs do deploy, para que
@@ -300,6 +356,7 @@ async function seedAdmin() {
 
 async function migrate() {
   await pool.query(SQL);
+  await migrarEtapas14();
   await seedAdmin();
   console.log("Migração concluída.");
   await pool.end();
