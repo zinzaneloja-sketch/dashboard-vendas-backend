@@ -37,9 +37,10 @@ const ETAPAS = [
     campos: [
       { k: "recontagem_metodo", label: "Recontagem feita por", tipo: "select", opcoes: [["manual", "Recontagem manual"], ["checkout", "Checkout"]], so_divergencia: true },
       { k: "recontagem_total", label: "Total recontado (peças)", tipo: "int", so_divergencia: true },
+      { k: "recontagem_por", label: "Quem recontou (nome)", tipo: "texto", so_divergencia: true },
     ],
-    itens: ["qtd_contada", "qtd_defeito", "qtd_conserto"], trava: "contagem_vs_nf",
-    ajuda: "Informe a quantidade contada de cada produto, cor e tamanho. A contagem inclui as peças com defeito e as que vão para conserto: informe quantas são de cada uma nos campos de cada linha. Conjuntos contam 2 peças. Havendo diferença com a NF, o sistema pede a recontagem." },
+    itens: ["qtd_contada", "contado_por", "qtd_defeito", "qtd_conserto"], trava: "contagem_vs_nf",
+    ajuda: "Informe a quantidade contada de cada produto, cor e tamanho e o nome de quem contou. A contagem inclui as peças com defeito e as que vão para conserto: informe quantas são de cada uma nos campos de cada linha. Conjuntos contam 2 peças. Havendo diferença com a NF, o sistema pede a recontagem." },
   { n: 4, chave: "ficha", nome: "Preenchimento da ficha", perfil: "doca", sla_exec_min: 30, sla_fila_min: 30,
     campos: [{ k: "ficha_numero", label: "Nº da ficha", tipo: "texto", obrigatorio: true }],
     itens: ["qtd_ficha"], trava: "ficha_vs_contagem",
@@ -96,20 +97,20 @@ const TRAVAS = {
 };
 
 const ITEM_CAMPOS = {
-  modelo: "texto", ref_fornecedor: "texto", cor: "texto", cor_codigo: "texto", tamanho: "texto", qtd_nf: "int", qtd_defeito: "int", qtd_conserto: "int", qtd_contada: "int", qtd_ficha: "int", qtd_checkout: "int",
+  modelo: "texto", ref_fornecedor: "texto", cor: "texto", cor_codigo: "texto", tamanho: "texto", qtd_nf: "int", qtd_defeito: "int", qtd_conserto: "int", qtd_contada: "int", contado_por: "texto", qtd_ficha: "int", qtd_checkout: "int",
   amostra_separada: "bool", cor_definida: "texto", ref_zinzane: "texto", justificativa_confronto: "texto",
 };
 
 // Grade de tamanhos da ficha de papel: cada coluna tem o tamanho de letra e o numerico equivalente.
-// Único e PP ficam na mesma coluna ("Único/PP" = 34), como na ficha.
+// Único e PP são colunas separadas. Linhas antigas que ficaram como "Único/PP" continuam abrindo (o valor é tolerado).
 const TAMANHOS_INFO = [
-  { t: "Único/PP", num: "34" }, { t: "P", num: "36" }, { t: "M", num: "38" }, { t: "G", num: "40" }, { t: "GG", num: "42" },
+  { t: "Único", num: "Único" }, { t: "PP", num: "34" }, { t: "P", num: "36" }, { t: "M", num: "38" }, { t: "G", num: "40" }, { t: "GG", num: "42" },
   { t: "XG", num: "44" }, { t: "XGG", num: "46" }, { t: "48", num: "48" }, { t: "50", num: "50" }, { t: "52", num: "52" },
 ];
 const TAMANHOS = TAMANHOS_INFO.map((x) => x.t);
 const semAcento = (v) => String(v || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 // Aceita também apelidos (único, pp, 34, xxg...) e devolve o nome padrão da coluna.
-const ALIAS_TAM = { unico: "Único/PP", "unico/pp": "Único/PP", pp: "Único/PP", "34": "Único/PP", "36": "P", "38": "M", "40": "G", "42": "GG", "44": "XG", xxg: "XGG", "46": "XGG" };
+const ALIAS_TAM = { u: "Único", "34": "PP", "36": "P", "38": "M", "40": "G", "42": "GG", "44": "XG", xxg: "XGG", "46": "XGG" };
 const tamanhoCanonico = (t) => {
   const k = semAcento(t);
   return TAMANHOS.find((x) => semAcento(x) === k) || ALIAS_TAM[k] || null;
