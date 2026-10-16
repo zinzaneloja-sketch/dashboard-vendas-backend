@@ -230,6 +230,23 @@ CREATE TABLE IF NOT EXISTS cd_nota_nf_itens (
   qtd                 INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS cd_nota_nf_itens_nota_idx ON cd_nota_nf_itens (nota_id);
+-- Conjunto: cada unidade da NF vale 2 pecas (fator = 2). valor_unit = preco unitario da NF.
+ALTER TABLE cd_nota_nf_itens ADD COLUMN IF NOT EXISTS fator INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE cd_nota_nf_itens ADD COLUMN IF NOT EXISTS valor_unit NUMERIC(14,4);
+ALTER TABLE cd_notas ADD COLUMN IF NOT EXISTS valor_nf NUMERIC(14,2);
+
+-- Cor pelo catalogo (codigo + nome), no lugar de texto livre. Defeito e conserto fazem parte da contagem.
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS cor_codigo TEXT;
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS qtd_defeito INTEGER;
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS qtd_conserto INTEGER;
+CREATE TABLE IF NOT EXISTS cd_cores (
+  codigo              TEXT PRIMARY KEY,
+  nome                TEXT NOT NULL,
+  nome_en             TEXT,
+  ativo               BOOLEAN NOT NULL DEFAULT true
+);
+-- Tamanhos: Unico e PP passaram a ser uma coluna so (como na ficha de papel).
+UPDATE cd_nota_itens SET tamanho = 'Único/PP' WHERE tamanho IN ('Único', 'PP');
 CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
 
 CREATE TABLE IF NOT EXISTS cd_nota_etapas (
@@ -276,6 +293,17 @@ CREATE TABLE IF NOT EXISTS cd_meta (
 // Migracao unica: o processo tinha 15 etapas (2 = abertura dos fardos, 3 = separacao). Como as duas
 // acontecem juntas, viraram uma so (etapa 2) e as seguintes foram renumeradas (4..15 -> 3..14).
 // Notas que ja existiam sao convertidas; roda uma vez so (marca em cd_meta) e dentro de uma transacao.
+// Carga unica do catalogo de cores (codigo + nome) a partir do arquivo cores.json, so quando a tabela esta vazia.
+async function semearCores() {
+  const { rows: [{ n }] } = await pool.query("SELECT count(*)::int AS n FROM cd_cores");
+  if (n > 0) return;
+  const cores = require("../cd/cores.json");
+  for (const c of cores) {
+    await pool.query("INSERT INTO cd_cores (codigo, nome, nome_en, ativo) VALUES ($1,$2,$3,$4) ON CONFLICT (codigo) DO NOTHING", [c.codigo, c.nome, c.nome_en || null, c.ativo !== false]);
+  }
+  console.log("[migrate] Catalogo de cores carregado: " + cores.length + " cores.");
+}
+
 async function migrarEtapas14() {
   const c = await pool.connect();
   try {
@@ -369,6 +397,7 @@ async function seedAdmin() {
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
+  await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
   await pool.end();
