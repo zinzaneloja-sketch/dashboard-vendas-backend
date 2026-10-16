@@ -245,8 +245,8 @@ CREATE TABLE IF NOT EXISTS cd_cores (
   nome_en             TEXT,
   ativo               BOOLEAN NOT NULL DEFAULT true
 );
--- Tamanhos: Unico e PP passaram a ser uma coluna so (como na ficha de papel).
-UPDATE cd_nota_itens SET tamanho = 'Único/PP' WHERE tamanho IN ('Único', 'PP');
+-- Quem contou cada linha (contagem manual)
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS contado_por TEXT;
 CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
 
 CREATE TABLE IF NOT EXISTS cd_nota_etapas (
