@@ -259,14 +259,15 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         const refForn = txt(raw.ref_fornecedor);
         const refZ = txt(raw.ref_zinzane) || null;
         const tamanho = tamanhoCanonico(raw.tamanho);
+        const qtd = inteiro(raw.qtd_nf, "Quantidade", { min: 1 });
         if (!modelo || !cor) throw erro(400, "Informe o produto e a cor.");
         if (!refForn) throw erro(400, "Informe a referência do fornecedor (código do produto na NF).");
         if (!tamanho) throw erro(400, `Informe o tamanho (${TAMANHOS.join(", ")}).`);
         const dup = [...porId.values()].some((i) => chaveRef(i.ref_fornecedor) === chaveRef(refForn) && chaveRef(i.modelo) === chaveRef(modelo) && chaveRef(i.cor) === chaveRef(cor) && chaveRef(i.tamanho) === chaveRef(tamanho));
         if (dup) throw erro(409, `${modelo} / ${refForn} / ${cor} / ${tamanho} já está na lista.`);
-        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, tamanho, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *", [notaId, modelo, refForn, cor, tamanho, refZ]);
+        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, tamanho, qtd_nf, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *", [notaId, modelo, refForn, cor, tamanho, qtd, refZ]);
         porId.set(String(r.rows[0].id), r.rows[0]);
-        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor, tamanho });
+        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor, tamanho, quantidade: qtd });
       }
     }
     if (mudancas.length) await evento(c, notaId, def.n, "itens_atualizados", acc.email, { mudancas });
@@ -294,6 +295,10 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
 
   if (def.itens) {
     if (!itens.length) erros.push("Cadastre pelo menos um produto, cor e tamanho.");
+    if (def.chave === "separacao") {
+      const semQtd = itens.filter((i) => !(Number(i.qtd_nf) > 0));
+      if (semQtd.length) erros.push(`Falta a quantidade em ${semQtd.length} linha(s): ${semQtd.slice(0, 4).map(rotulo).join(", ")}${semQtd.length > 4 ? "…" : ""}.`);
+    }
     for (const campo of def.itens) {
       if (["qtd_nf", "modelo", "ref_fornecedor", "cor", "tamanho", "justificativa_confronto"].includes(campo)) continue;
       if (campo === "ref_zinzane" && def.chave === "separacao") continue; // opcional na separação; o Estilo define na etapa própria
@@ -319,11 +324,16 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
   switch (def.trava) {
     case "fardos_vs_volumes":
       if (d.fardos_abertos !== undefined && d.fardos_abertos !== "") compara(def.trava, TRAVAS[def.trava], Number(e1.volumes_recebidos ?? nota.volumes_nf), Number(d.fardos_abertos));
-      // produtos que vieram na NF e ainda não têm nenhuma linha separada
-      for (const p of nfItens) {
-        if (!itens.some((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo))) {
-          divergencias.push({ tipo: "produto_sem_linha", descricao: `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""} está na NF e não foi separado`, esperado: p.qtd, obtido: 0, diferenca: -p.qtd });
+      // quantidades separadas (todas as cores e tamanhos) × quantidade de cada produto na NF
+      if (nfItens.length) {
+        for (const p of nfItens) {
+          const linhas = itens.filter((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo));
+          const separado = soma(linhas, "qtd_nf");
+          if (separado !== p.qtd) divergencias.push({ tipo: linhas.length ? "separacao_produto" : "produto_sem_linha", descricao: linhas.length ? `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""}: separado × NF` : `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""} está na NF e não foi separado`, esperado: p.qtd, obtido: separado, diferenca: separado - p.qtd });
         }
+      } else if (itens.length) {
+        const sep = soma(itens, "qtd_nf");
+        if (sep !== nota.total_pecas_nf) divergencias.push({ tipo: "separacao_total", descricao: "Total separado × total da NF", esperado: nota.total_pecas_nf, obtido: sep, diferenca: sep - nota.total_pecas_nf });
       }
       break;
     case "contagem_vs_nf":
