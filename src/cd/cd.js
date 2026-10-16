@@ -309,7 +309,7 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         if (!tamanho) throw erro(400, `Informe o tamanho (${TAMANHOS.join(", ")}).`);
         const dup = [...porId.values()].some((i) => chaveRef(i.ref_fornecedor) === chaveRef(refForn) && chaveRef(i.modelo) === chaveRef(modelo) && (i.cor_codigo ? i.cor_codigo === corRow.codigo : chaveRef(i.cor) === chaveRef(cor)) && chaveRef(i.tamanho) === chaveRef(tamanho));
         if (dup) throw erro(409, `${modelo} / ${refForn} / ${cor} / ${tamanho} já está na lista.`);
-        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, cor_codigo, tamanho, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *", [notaId, modelo, refForn, cor, corRow.codigo, tamanho, refZ]);
+        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, cor_codigo, tamanho, ref_zinzane, amostra_separada) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", [notaId, modelo, refForn, cor, corRow.codigo, tamanho, refZ, raw.amostra_separada === true || raw.amostra_separada === "true"]);
         porId.set(String(r.rows[0].id), r.rows[0]);
         mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor: `${corRow.codigo} ${cor}`, tamanho });
       }
@@ -401,21 +401,16 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
         }
       }
       break;
-    case "ficha_vs_contagem":
-      for (const i of itens) if (i.qtd_ficha !== null && i.qtd_contada !== null && i.qtd_ficha !== i.qtd_contada) {
-        divergencias.push({ tipo: "ficha_linha", descricao: `${rotulo(i)}: ficha × contagem`, esperado: i.qtd_contada, obtido: i.qtd_ficha, diferenca: i.qtd_ficha - i.qtd_contada });
-      }
-      break;
-    case "etiquetas_vs_ficha": {
+    case "etiquetas_vs_contagem": {
       const e2 = (etapasPorN[numeroDe("separacao")] || {}).dados || {};
       const pedidas = [e2.trocar_composicao && "etiqueta de composição", e2.trocar_marca && "etiqueta de marca", e2.trocar_codbarras && "código de barras"].filter(Boolean);
       if (pedidas.length && !(d.trocas_confirmadas === true || d.trocas_confirmadas === "true")) erros.push(`A separação pediu a troca de: ${pedidas.join(", ")}. Confirme que foi feita.`);
-      if (d.etiquetas_impressas !== undefined && d.etiquetas_impressas !== "") compara(def.trava, TRAVAS[def.trava], soma(itens, "qtd_ficha"), Number(d.etiquetas_impressas));
+      if (d.etiquetas_impressas !== undefined && d.etiquetas_impressas !== "") compara(def.trava, TRAVAS[def.trava], soma(itens, "qtd_contada"), Number(d.etiquetas_impressas));
       break;
     }
-    case "checkout_vs_ficha":
-      for (const i of itens) if (i.qtd_checkout !== null && i.qtd_ficha !== null && i.qtd_checkout !== i.qtd_ficha) {
-        divergencias.push({ tipo: "checkout_linha", item: i.id, descricao: `${rotulo(i)}: checkout × ficha`, esperado: i.qtd_ficha, obtido: i.qtd_checkout, diferenca: i.qtd_checkout - i.qtd_ficha, justificativa: i.justificativa_confronto || null });
+    case "checkout_vs_contagem":
+      for (const i of itens) if (i.qtd_checkout !== null && i.qtd_contada !== null && i.qtd_checkout !== i.qtd_contada) {
+        divergencias.push({ tipo: "checkout_linha", item: i.id, descricao: `${rotulo(i)}: checkout × contagem`, esperado: i.qtd_contada, obtido: i.qtd_checkout, diferenca: i.qtd_checkout - i.qtd_contada, justificativa: i.justificativa_confronto || null });
       }
       break;
     case "distribuicao_vs_checkout":
@@ -432,7 +427,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
   let exigeGestor = false;
   if (def.chave === "confronto") {
     const semJust = divergencias.filter((x) => !x.justificativa || x.justificativa.length < 5);
-    if (semJust.length) erros.push(`Justifique ${semJust.length} linha(s) com diferença entre checkout e ficha.`);
+    if (semJust.length) erros.push(`Justifique ${semJust.length} linha(s) com diferença entre checkout e contagem.`);
     if (divergencias.length) exigeGestor = true;
   } else if (divergencias.length && txt(d.justificativa).length < 5) {
     erros.push("Há divergência na conferência. Explique o motivo para concluir.");
@@ -487,7 +482,7 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     const av = avaliarEtapa(def, nota, st.itens, st.porN, limpo, st.nfItens);
     if (av.erros.length) throw erro(422, av.erros[0], { erros: av.erros, divergencias: av.divergencias });
     if (av.exigeGestor && !ehGestor(acc)) {
-      throw erro(403, "Há divergência entre checkout e ficha. Só o gestor pode encerrar esta etapa.", { divergencias: av.divergencias });
+      throw erro(403, "Há divergência entre checkout e contagem. Só o gestor pode encerrar esta etapa.", { divergencias: av.divergencias });
     }
 
     const diverge = av.divergencias.length > 0;
@@ -507,10 +502,10 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     await evento(c, notaId, def.n, "etapa_concluida", acc.email, {
       exec_min_uteis: minutosUteis(atual.iniciada_em, new Date()), dados: limpo, ...(diverge ? { divergencias: av.divergencias } : {}),
     });
-    const nFicha = numeroDe("ficha");
-    if (def.chave === "checkout" && st.porN[nFicha] && st.porN[nFicha].concluida_por === atual.iniciada_por) {
+    const nCont = numeroDe("contagem");
+    if (def.chave === "checkout" && st.porN[nCont] && st.porN[nCont].concluida_por === atual.iniciada_por) {
       await evento(c, notaId, def.n, "alerta_segregacao", acc.email, {
-        mensagem: `A mesma pessoa preencheu a ficha (etapa ${nFicha}) e fez o checkout (etapa ${def.n}).`, usuario: acc.email,
+        mensagem: `A mesma pessoa concluiu a contagem (etapa ${nCont}) e fez o checkout (etapa ${def.n}).`, usuario: acc.email,
       });
     }
     return { ok: true, nota_concluida: fim };
