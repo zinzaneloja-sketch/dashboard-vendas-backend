@@ -30,9 +30,9 @@ const ETAPAS = [
       { k: "trocar_codbarras", label: "Trocar código de barras", tipo: "bool" },
       { k: "avarias", label: "Avarias / observações", tipo: "texto" },
     ],
-    itens: ["modelo", "ref_fornecedor", "cor_codigo", "tamanho", "qtd_nf", "ref_zinzane"],
+    itens: ["modelo", "ref_fornecedor", "cor_codigo", "tamanho", "ref_zinzane"],
     trava: "fardos_vs_volumes",
-    ajuda: "Abra um fardo por vez: toque em \"+1 fardo aberto\" e cadastre o que saiu dele: cada produto da NF é desmembrado em cores e tamanhos, com a quantidade de cada um. Os produtos já vêm da NF. Repita até abrir todos. No fim, os fardos abertos precisam bater com os volumes recebidos." },
+    ajuda: "Abra um fardo por vez: toque em \"+1 fardo aberto\" e cadastre o que saiu dele: cada produto da NF é desmembrado em cores e tamanhos (só marque os que vieram, sem quantidade; as peças são contadas na próxima etapa). Os produtos já vêm da NF. Repita até abrir todos. No fim, os fardos abertos precisam bater com os volumes recebidos." },
   { n: 3, chave: "contagem", nome: "Contagem", perfil: "doca", sla_exec_min: 90, sla_fila_min: 60,
     campos: [
       { k: "recontagem_metodo", label: "Recontagem feita por", tipo: "select", opcoes: [["manual", "Recontagem manual"], ["checkout", "Checkout"]], so_divergencia: true },
