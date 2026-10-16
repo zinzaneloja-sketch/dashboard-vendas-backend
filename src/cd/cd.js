@@ -281,6 +281,7 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
           if (campo === "modelo" || campo === "cor" || campo === "tamanho") {
             if (!novo) throw erro(400, "Produto, cor e tamanho são obrigatórios.");
           }
+          if (campo === "tamanho" && novo === cur.tamanho) continue; // valor antigo (ex.: "Único/PP") é tolerado até alguém trocar
           if (campo === "tamanho") {
             const canon = tamanhoCanonico(novo);
             if (!canon) throw erro(400, `Tamanho inválido. Use: ${TAMANHOS.join(", ")}.`);
@@ -360,7 +361,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
       });
       if (faltando.length) {
         const rot = {
-          qtd_contada: "contagem", qtd_ficha: "quantidade da ficha", qtd_checkout: "quantidade do checkout",
+          qtd_contada: "contagem", qtd_ficha: "quantidade da ficha", qtd_checkout: "quantidade do checkout", contado_por: "o nome de quem contou",
           amostra_separada: "peça separada para o Estilo", cor_definida: "cor definida", ref_zinzane: "referência Zinzane",
         }[campo] || campo;
         erros.push(`Falta ${rot} em ${faltando.length} linha(s): ${faltando.slice(0, 4).map(rotulo).join(", ")}${faltando.length > 4 ? "…" : ""}.`);
@@ -404,6 +405,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
       // havendo diferença com a NF, a recontagem é obrigatória (manual ou pelo checkout)
       if (divergencias.length) {
         if (d.recontagem_metodo !== "manual" && d.recontagem_metodo !== "checkout") erros.push("Há diferença com a NF: faça a recontagem e informe se foi manual ou pelo checkout.");
+        if (d.recontagem_metodo === "manual" && !txt(d.recontagem_por)) erros.push("Informe o nome de quem fez a recontagem manual.");
         if (d.recontagem_total === undefined || d.recontagem_total === null || String(d.recontagem_total).trim() === "") erros.push("Informe o total recontado (peças).");
         else {
           const rc = Number(d.recontagem_total), cont = soma(itens, "qtd_contada");
