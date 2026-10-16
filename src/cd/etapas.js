@@ -25,14 +25,21 @@ const ETAPAS = [
   { n: 2, chave: "separacao", nome: "Abertura dos fardos e separação", perfil: "doca", sla_exec_min: 105, sla_fila_min: 60,
     campos: [
       { k: "fardos_abertos", label: "Fardos abertos", tipo: "int", obrigatorio: true },
+      { k: "trocar_composicao", label: "Trocar etiqueta de composição", tipo: "bool" },
+      { k: "trocar_marca", label: "Trocar etiqueta de marca", tipo: "bool" },
+      { k: "trocar_codbarras", label: "Trocar código de barras", tipo: "bool" },
       { k: "avarias", label: "Avarias / observações", tipo: "texto" },
     ],
-    itens: ["modelo", "ref_fornecedor", "cor", "tamanho", "qtd_nf", "ref_zinzane"],
+    itens: ["modelo", "ref_fornecedor", "cor_codigo", "tamanho", "qtd_nf", "ref_zinzane"],
     trava: "fardos_vs_volumes",
     ajuda: "Abra um fardo por vez: toque em \"+1 fardo aberto\" e cadastre o que saiu dele: cada produto da NF é desmembrado em cores e tamanhos, com a quantidade de cada um. Os produtos já vêm da NF. Repita até abrir todos. No fim, os fardos abertos precisam bater com os volumes recebidos." },
   { n: 3, chave: "contagem", nome: "Contagem", perfil: "doca", sla_exec_min: 90, sla_fila_min: 60,
-    itens: ["qtd_contada"], trava: "contagem_vs_nf",
-    ajuda: "Informe a quantidade contada de cada modelo, cor e tamanho. O total é comparado com a NF." },
+    campos: [
+      { k: "recontagem_metodo", label: "Recontagem feita por", tipo: "select", opcoes: [["manual", "Recontagem manual"], ["checkout", "Checkout"]], so_divergencia: true },
+      { k: "recontagem_total", label: "Total recontado (peças)", tipo: "int", so_divergencia: true },
+    ],
+    itens: ["qtd_contada", "qtd_defeito", "qtd_conserto"], trava: "contagem_vs_nf",
+    ajuda: "Informe a quantidade contada de cada produto, cor e tamanho. A contagem inclui as peças com defeito e as que vão para conserto: informe quantas são de cada uma nos campos de cada linha. Conjuntos contam 2 peças. Havendo diferença com a NF, o sistema pede a recontagem." },
   { n: 4, chave: "ficha", nome: "Preenchimento da ficha", perfil: "doca", sla_exec_min: 30, sla_fila_min: 30,
     campos: [{ k: "ficha_numero", label: "Nº da ficha", tipo: "texto", obrigatorio: true }],
     itens: ["qtd_ficha"], trava: "ficha_vs_contagem",
@@ -44,9 +51,14 @@ const ETAPAS = [
     itens: ["cor_definida", "ref_zinzane"],
     ajuda: "Defina a cor e a referência Zinzane de cada linha." },
   { n: 7, chave: "etiquetas", nome: "Rodar as etiquetas", perfil: "cadastro", sla_exec_min: 30, sla_fila_min: 60,
-    campos: [{ k: "etiquetas_impressas", label: "Etiquetas impressas", tipo: "int", obrigatorio: true }],
+    campos: [
+      { k: "gerou_etiqueta", label: "Gerou etiqueta?", tipo: "select", opcoes: [["sim", "Sim"], ["nao", "Não"]], obrigatorio: true },
+      { k: "etiquetas_impressas", label: "Etiquetas impressas", tipo: "int", obrigatorio: true },
+      { k: "trocas_confirmadas", label: "Confirmo as trocas de etiqueta pedidas na separação", tipo: "bool", so_trocas: true },
+      { k: "etiquetas_obs", label: "Observações", tipo: "texto" },
+    ],
     trava: "etiquetas_vs_ficha",
-    ajuda: "Informe quantas etiquetas foram impressas. Precisa bater com o total da ficha." },
+    ajuda: "Informe quantas etiquetas foram impressas. Precisa bater com o total da ficha. Se a separação pediu troca de etiqueta de composição, de marca ou de código de barras, confirme que foi feita." },
   { n: 8, chave: "pedido", nome: "Gerar o pedido", perfil: "cadastro", sla_exec_min: 20, sla_fila_min: 60,
     campos: [{ k: "numero_pedido", label: "Nº do pedido", tipo: "texto", obrigatorio: true }] },
   { n: 9, chave: "entrada", nome: "Entrada da nota", perfil: "cadastro", sla_exec_min: 30, sla_fila_min: 60,
@@ -84,19 +96,27 @@ const TRAVAS = {
 };
 
 const ITEM_CAMPOS = {
-  modelo: "texto", ref_fornecedor: "texto", cor: "texto", tamanho: "texto", qtd_nf: "int", qtd_contada: "int", qtd_ficha: "int", qtd_checkout: "int",
+  modelo: "texto", ref_fornecedor: "texto", cor: "texto", cor_codigo: "texto", tamanho: "texto", qtd_nf: "int", qtd_defeito: "int", qtd_conserto: "int", qtd_contada: "int", qtd_ficha: "int", qtd_checkout: "int",
   amostra_separada: "bool", cor_definida: "texto", ref_zinzane: "texto", justificativa_confronto: "texto",
 };
 
-// Grade de tamanhos aceita nas linhas de produto (na ordem em que aparecem na tela).
-const TAMANHOS = ["Único", "PP", "P", "M", "G", "GG", "XG", "XGG"];
+// Grade de tamanhos da ficha de papel: cada coluna tem o tamanho de letra e o numerico equivalente.
+// Único e PP ficam na mesma coluna ("Único/PP" = 34), como na ficha.
+const TAMANHOS_INFO = [
+  { t: "Único/PP", num: "34" }, { t: "P", num: "36" }, { t: "M", num: "38" }, { t: "G", num: "40" }, { t: "GG", num: "42" },
+  { t: "XG", num: "44" }, { t: "XGG", num: "46" }, { t: "48", num: "48" }, { t: "50", num: "50" }, { t: "52", num: "52" },
+];
+const TAMANHOS = TAMANHOS_INFO.map((x) => x.t);
+const semAcento = (v) => String(v || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+// Aceita também apelidos (único, pp, 34, xxg...) e devolve o nome padrão da coluna.
+const ALIAS_TAM = { unico: "Único/PP", "unico/pp": "Único/PP", pp: "Único/PP", "34": "Único/PP", "36": "P", "38": "M", "40": "G", "42": "GG", "44": "XG", xxg: "XGG", "46": "XGG" };
 const tamanhoCanonico = (t) => {
-  const k = String(t || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  return TAMANHOS.find((x) => x.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") === k) || null;
+  const k = semAcento(t);
+  return TAMANHOS.find((x) => semAcento(x) === k) || ALIAS_TAM[k] || null;
 };
 
 const etapaPorNumero = (n) => ETAPAS.find((e) => e.n === Number(n));
 // Número da etapa a partir da chave (o código nunca deve fixar "etapa 12": os números mudam se o processo mudar).
 const numeroDe = (chave) => (ETAPAS.find((e) => e.chave === chave) || {}).n;
 
-module.exports = { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, tamanhoCanonico, etapaPorNumero, numeroDe };
+module.exports = { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, TAMANHOS_INFO, tamanhoCanonico, etapaPorNumero, numeroDe };
