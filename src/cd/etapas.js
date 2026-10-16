@@ -42,8 +42,8 @@ const ETAPAS = [
     itens: ["qtd_contada", "contado_por", "qtd_defeito", "qtd_conserto"], trava: "contagem_vs_nf",
     ajuda: "Informe a quantidade contada de cada produto, cor e tamanho e o nome de quem contou. A contagem inclui as peças com defeito e as que vão para conserto: informe quantas são de cada uma nos campos de cada linha. Conjuntos contam 2 peças. Havendo diferença com a NF, o sistema pede a recontagem." },
   { n: 4, chave: "referencia", nome: "Definir a referência Zinzane", perfil: "estilo", sla_exec_min: 60, sla_fila_min: 120,
-    itens: ["cor_definida", "ref_zinzane"],
-    ajuda: "Defina a cor e a referência Zinzane de cada linha." },
+    itens: ["cor_def_codigo", "ref_zinzane"],
+    ajuda: "Informe a referência Zinzane de cada produto e cor (os tamanhos vêm juntos). A cor já vem da separação; só troque se o Estilo definir outra, escolhendo no catálogo." },
   { n: 5, chave: "etiquetas", nome: "Rodar as etiquetas", perfil: "cadastro", sla_exec_min: 30, sla_fila_min: 60,
     campos: [
       { k: "gerou_etiqueta", label: "Gerou etiqueta?", tipo: "select", opcoes: [["sim", "Sim"], ["nao", "Não"]], obrigatorio: true },
@@ -90,7 +90,7 @@ const TRAVAS = {
 
 const ITEM_CAMPOS = {
   modelo: "texto", ref_fornecedor: "texto", cor: "texto", cor_codigo: "texto", tamanho: "texto", qtd_nf: "int", qtd_defeito: "int", qtd_conserto: "int", qtd_contada: "int", contado_por: "texto", qtd_ficha: "int", qtd_checkout: "int",
-  amostra_separada: "bool", cor_definida: "texto", ref_zinzane: "texto", justificativa_confronto: "texto",
+  amostra_separada: "bool", cor_definida: "texto", cor_def_codigo: "texto", ref_zinzane: "texto", justificativa_confronto: "texto",
 };
 
 // Grade de tamanhos da ficha de papel: cada coluna tem o tamanho de letra e o numerico equivalente.
