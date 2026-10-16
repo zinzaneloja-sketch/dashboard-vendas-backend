@@ -247,6 +247,8 @@ CREATE TABLE IF NOT EXISTS cd_cores (
 );
 -- Quem contou cada linha (contagem manual)
 ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS contado_por TEXT;
+-- Cor definida pelo Estilo (catalogo): por padrao e a cor da separacao
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS cor_def_codigo TEXT;
 CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
 
 CREATE TABLE IF NOT EXISTS cd_nota_etapas (
