@@ -1,10 +1,11 @@
 const { pool } = require("../db");
-const { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, etapaPorNumero, numeroDe } = require("./etapas");
+const { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, tamanhoCanonico, etapaPorNumero, numeroDe } = require("./etapas");
 const { minutosUteis, diaLocal, expediente } = require("./tempo");
 
 const TOTAL_ETAPAS = ETAPAS.length;
-// Rótulo de uma linha de produto: modelo / cor / tamanho
-const rotulo = (i) => [i.modelo, i.cor, i.tamanho].filter(Boolean).join(" / ");
+// Rótulo de uma linha de produto: produto / referência do fornecedor / cor / tamanho
+const rotulo = (i) => [i.modelo, i.ref_fornecedor, i.cor, i.tamanho].filter(Boolean).join(" / ");
+const chaveRef = (v) => String(v || "").trim().toLowerCase();
 
 function erro(status, message, extra) {
   const e = new Error(message);
@@ -52,6 +53,7 @@ async function configPublica() {
     etapas: await etapasConfig(),
     travas: TRAVAS,
     itemCampos: ITEM_CAMPOS,
+    tamanhos: TAMANHOS,
     expediente: { inicio: expediente.inicioMin, fim: expediente.fimMin, dias: expediente.dias },
   };
 }
@@ -109,6 +111,17 @@ async function criarNota(acc, b) {
     throw erro(422, `Volumes recebidos (${volRec}) diferem da NF (${volNf}). Explique a diferença para registrar.`);
   }
   const prioridade = b.prioridade === "urgente" ? "urgente" : "normal";
+  // Produtos lidos da NF (PDF/XML): código do fornecedor, descrição e quantidade. Opcional.
+  const itensNf = [];
+  if (Array.isArray(b.itens_nf)) {
+    if (b.itens_nf.length > 500) throw erro(400, "A NF tem produtos demais (máximo 500 linhas).");
+    for (const [k, it] of b.itens_nf.entries()) {
+      const codigo = txt(it && it.codigo).slice(0, 60);
+      if (!codigo) continue;
+      const q = Number(it.qtd);
+      itensNf.push({ ordem: k, codigo, descricao: txt(it.descricao).slice(0, 160) || null, qtd: Number.isFinite(q) && q >= 0 ? Math.round(q) : 0 });
+    }
+  }
 
   return comTransacao(async (c) => {
     let nota;
@@ -134,7 +147,11 @@ async function criarNota(acc, b) {
         nota.id, n, n === 2 ? new Date() : null,
       ]);
     }
+    for (const it of itensNf) {
+      await c.query("INSERT INTO cd_nota_nf_itens (nota_id, ordem, codigo, descricao, qtd) VALUES ($1,$2,$3,$4,$5)", [nota.id, it.ordem, it.codigo, it.descricao, it.qtd]);
+    }
     await evento(c, nota.id, 1, "nota_criada", acc.email, {
+      ...(itensNf.length ? { produtos_na_nf: itensNf.length } : {}),
       numero_nf, serie: txt(b.serie) || null, fornecedor, total_pecas_nf: total, volumes_nf: volNf, volumes_recebidos: volRec,
       prioridade, ...(diverge ? { divergencia: { tipo: "volumes", esperado: volNf, obtido: volRec, justificativa } } : {}),
     });
@@ -208,7 +225,7 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         const it = porId.get(String(id));
         await c.query("DELETE FROM cd_nota_itens WHERE id = $1 AND nota_id = $2", [id, notaId]);
         porId.delete(String(id));
-        mudancas.push({ acao: "removido", modelo: it.modelo, cor: it.cor, tamanho: it.tamanho });
+        mudancas.push({ acao: "removido", modelo: it.modelo, ref_fornecedor: it.ref_fornecedor, cor: it.cor, tamanho: it.tamanho });
       }
     }
     for (const raw of itens) {
@@ -218,14 +235,19 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         const vals = [];
         for (const campo of permitidos) {
           if (!(campo in raw)) continue;
-          const novo = valor(campo, raw[campo]);
+          let novo = valor(campo, raw[campo]);
           if (campo === "modelo" || campo === "cor" || campo === "tamanho") {
-            if (!novo) throw erro(400, "Modelo, cor e tamanho são obrigatórios.");
+            if (!novo) throw erro(400, "Produto, cor e tamanho são obrigatórios.");
+          }
+          if (campo === "tamanho") {
+            const canon = tamanhoCanonico(novo);
+            if (!canon) throw erro(400, `Tamanho inválido. Use: ${TAMANHOS.join(", ")}.`);
+            novo = canon;
           }
           if (campo === "amostra_separada" ? Boolean(cur[campo]) === novo : (cur[campo] ?? null) === novo) continue;
           vals.push(novo);
           sets.push(`${campo} = $${vals.length}`);
-          mudancas.push({ item: cur.id, modelo: cur.modelo, cor: cur.cor, tamanho: cur.tamanho, campo, de: cur[campo] ?? null, para: novo });
+          mudancas.push({ item: cur.id, modelo: cur.modelo, ref_fornecedor: cur.ref_fornecedor, cor: cur.cor, tamanho: cur.tamanho, campo, de: cur[campo] ?? null, para: novo });
         }
         if (sets.length) {
           vals.push(raw.id, notaId);
@@ -234,13 +256,17 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
       } else if (cadastra && !raw.id) {
         const modelo = txt(raw.modelo);
         const cor = txt(raw.cor);
-        const tamanho = txt(raw.tamanho);
-        if (!modelo || !cor || !tamanho) throw erro(400, "Informe modelo, cor e tamanho.");
-        const dup = [...porId.values()].some((i) => i.modelo.toLowerCase() === modelo.toLowerCase() && i.cor.toLowerCase() === cor.toLowerCase() && String(i.tamanho || "").toLowerCase() === tamanho.toLowerCase());
-        if (dup) throw erro(409, `${modelo} / ${cor} / ${tamanho} já está na lista.`);
-        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, cor, tamanho) VALUES ($1,$2,$3,$4) RETURNING *", [notaId, modelo, cor, tamanho]);
+        const refForn = txt(raw.ref_fornecedor);
+        const refZ = txt(raw.ref_zinzane) || null;
+        const tamanho = tamanhoCanonico(raw.tamanho);
+        if (!modelo || !cor) throw erro(400, "Informe o produto e a cor.");
+        if (!refForn) throw erro(400, "Informe a referência do fornecedor (código do produto na NF).");
+        if (!tamanho) throw erro(400, `Informe o tamanho (${TAMANHOS.join(", ")}).`);
+        const dup = [...porId.values()].some((i) => chaveRef(i.ref_fornecedor) === chaveRef(refForn) && chaveRef(i.modelo) === chaveRef(modelo) && chaveRef(i.cor) === chaveRef(cor) && chaveRef(i.tamanho) === chaveRef(tamanho));
+        if (dup) throw erro(409, `${modelo} / ${refForn} / ${cor} / ${tamanho} já está na lista.`);
+        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, tamanho, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *", [notaId, modelo, refForn, cor, tamanho, refZ]);
         porId.set(String(r.rows[0].id), r.rows[0]);
-        mudancas.push({ acao: "incluido", modelo, cor, tamanho });
+        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor, tamanho });
       }
     }
     if (mudancas.length) await evento(c, notaId, def.n, "itens_atualizados", acc.email, { mudancas });
@@ -252,7 +278,7 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
 const soma = (arr, k) => arr.reduce((s, i) => s + (Number(i[k]) || 0), 0);
 
 /** Avalia se a etapa pode ser concluída. Não grava nada. */
-function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
+function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
   const erros = [];
   const divergencias = [];
   const d = dados || {};
@@ -267,9 +293,10 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
   }
 
   if (def.itens) {
-    if (!itens.length) erros.push("Cadastre pelo menos um modelo, cor e tamanho.");
+    if (!itens.length) erros.push("Cadastre pelo menos um produto, cor e tamanho.");
     for (const campo of def.itens) {
-      if (campo === "qtd_nf" || campo === "modelo" || campo === "cor" || campo === "tamanho" || campo === "justificativa_confronto") continue;
+      if (["qtd_nf", "modelo", "ref_fornecedor", "cor", "tamanho", "justificativa_confronto"].includes(campo)) continue;
+      if (campo === "ref_zinzane" && def.chave === "separacao") continue; // opcional na separação; o Estilo define na etapa própria
       const faltando = itens.filter((i) => {
         if (campo === "amostra_separada") return !i.amostra_separada;
         const v = i[campo];
@@ -292,9 +319,22 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
   switch (def.trava) {
     case "fardos_vs_volumes":
       if (d.fardos_abertos !== undefined && d.fardos_abertos !== "") compara(def.trava, TRAVAS[def.trava], Number(e1.volumes_recebidos ?? nota.volumes_nf), Number(d.fardos_abertos));
+      // produtos que vieram na NF e ainda não têm nenhuma linha separada
+      for (const p of nfItens) {
+        if (!itens.some((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo))) {
+          divergencias.push({ tipo: "produto_sem_linha", descricao: `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""} está na NF e não foi separado`, esperado: p.qtd, obtido: 0, diferenca: -p.qtd });
+        }
+      }
       break;
     case "contagem_vs_nf":
       compara(def.trava, TRAVAS[def.trava], nota.total_pecas_nf, soma(itens, "qtd_contada"));
+      // por produto da NF: soma das linhas (todas as cores e tamanhos) × quantidade da nota
+      for (const p of nfItens) {
+        const linhas = itens.filter((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo));
+        if (!linhas.length || linhas.some((i) => i.qtd_contada === null)) continue;
+        const contado = soma(linhas, "qtd_contada");
+        if (contado !== p.qtd) divergencias.push({ tipo: "contagem_produto", descricao: `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""}: contado × NF`, esperado: p.qtd, obtido: contado, diferenca: contado - p.qtd });
+      }
       for (const i of itens) if (i.qtd_nf !== null && i.qtd_contada !== null && i.qtd_nf !== i.qtd_contada) {
         divergencias.push({ tipo: "contagem_linha", descricao: `${rotulo(i)}: contado × NF`, esperado: i.qtd_nf, obtido: i.qtd_contada, diferenca: i.qtd_contada - i.qtd_nf });
       }
@@ -335,13 +375,14 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
 }
 
 async function carregarEstado(db, notaId) {
-  const [{ rows: itens }, { rows: etapas }] = await Promise.all([
+  const [{ rows: itens }, { rows: etapas }, { rows: nfItens }] = await Promise.all([
     db.query("SELECT * FROM cd_nota_itens WHERE nota_id = $1 ORDER BY id", [notaId]),
     db.query("SELECT * FROM cd_nota_etapas WHERE nota_id = $1 ORDER BY etapa", [notaId]),
+    db.query("SELECT id, ordem, codigo, descricao, qtd FROM cd_nota_nf_itens WHERE nota_id = $1 ORDER BY ordem, id", [notaId]),
   ]);
   const porN = {};
   for (const e of etapas) porN[e.etapa] = e;
-  return { itens, etapas, porN };
+  return { itens, etapas, porN, nfItens };
 }
 
 async function conferirEtapa(acc, notaId, n, dados) {
@@ -352,7 +393,7 @@ async function conferirEtapa(acc, notaId, n, dados) {
   const st = await carregarEstado(pool, notaId);
   // o que não vier na chamada vale o que já está gravado na etapa (ex.: contador de fardos salvo na hora)
   const guardados = (st.porN[def.n] || {}).dados || {};
-  return avaliarEtapa(def, rows[0], st.itens, st.porN, { ...guardados, ...(dados || {}) });
+  return avaliarEtapa(def, rows[0], st.itens, st.porN, { ...guardados, ...(dados || {}) }, st.nfItens);
 }
 
 // ---------- concluir ----------
@@ -375,7 +416,7 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     }
     if (txt(dados.justificativa)) limpo.justificativa = txt(dados.justificativa);
 
-    const av = avaliarEtapa(def, nota, st.itens, st.porN, limpo);
+    const av = avaliarEtapa(def, nota, st.itens, st.porN, limpo, st.nfItens);
     if (av.erros.length) throw erro(422, av.erros[0], { erros: av.erros, divergencias: av.divergencias });
     if (av.exigeGestor && !ehGestor(acc)) {
       throw erro(403, "Há divergência entre checkout e ficha. Só o gestor pode encerrar esta etapa.", { divergencias: av.divergencias });
@@ -513,10 +554,10 @@ async function detalheNota(acc, notaId) {
   const defAtual = cfg.find((d) => d.n === nota.etapa_atual);
   let conferencia = null;
   if (nota.status === "aberta" && defAtual && st.porN[defAtual.n].status === "em_andamento") {
-    conferencia = avaliarEtapa(defAtual, nota, st.itens, st.porN, st.porN[defAtual.n].dados || {});
+    conferencia = avaliarEtapa(defAtual, nota, st.itens, st.porN, st.porN[defAtual.n].dados || {}, st.nfItens);
   }
   return {
-    nota, etapas, itens: st.itens, eventos, conferencia,
+    nota, etapas, itens: st.itens, itens_nf: st.nfItens, eventos, conferencia,
     permissoes: {
       pode_atuar_etapa_atual: nota.status === "aberta" && defAtual ? podeAtuar(acc, defAtual) : false,
       gestor: ehGestor(acc),
