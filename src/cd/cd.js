@@ -304,15 +304,14 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         const refForn = txt(raw.ref_fornecedor);
         const refZ = txt(raw.ref_zinzane) || null;
         const tamanho = tamanhoCanonico(raw.tamanho);
-        const qtd = inteiro(raw.qtd_nf, "Quantidade", { min: 1 });
         if (!modelo) throw erro(400, "Informe o produto.");
         if (!refForn) throw erro(400, "Informe a referência do fornecedor (código do produto na NF).");
         if (!tamanho) throw erro(400, `Informe o tamanho (${TAMANHOS.join(", ")}).`);
         const dup = [...porId.values()].some((i) => chaveRef(i.ref_fornecedor) === chaveRef(refForn) && chaveRef(i.modelo) === chaveRef(modelo) && (i.cor_codigo ? i.cor_codigo === corRow.codigo : chaveRef(i.cor) === chaveRef(cor)) && chaveRef(i.tamanho) === chaveRef(tamanho));
         if (dup) throw erro(409, `${modelo} / ${refForn} / ${cor} / ${tamanho} já está na lista.`);
-        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, cor_codigo, tamanho, qtd_nf, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", [notaId, modelo, refForn, cor, corRow.codigo, tamanho, qtd, refZ]);
+        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, cor_codigo, tamanho, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *", [notaId, modelo, refForn, cor, corRow.codigo, tamanho, refZ]);
         porId.set(String(r.rows[0].id), r.rows[0]);
-        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor: `${corRow.codigo} ${cor}`, tamanho, quantidade: qtd });
+        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor: `${corRow.codigo} ${cor}`, tamanho });
       }
     }
     if (mudancas.length) await evento(c, notaId, def.n, "itens_atualizados", acc.email, { mudancas });
@@ -347,10 +346,6 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
 
   if (def.itens) {
     if (!itens.length) erros.push("Cadastre pelo menos um produto, cor e tamanho.");
-    if (def.chave === "separacao") {
-      const semQtd = itens.filter((i) => !(Number(i.qtd_nf) > 0));
-      if (semQtd.length) erros.push(`Falta a quantidade em ${semQtd.length} linha(s): ${semQtd.slice(0, 4).map(rotulo).join(", ")}${semQtd.length > 4 ? "…" : ""}.`);
-    }
     for (const campo of def.itens) {
       if (["qtd_nf", "modelo", "ref_fornecedor", "cor", "tamanho", "justificativa_confronto", "qtd_defeito", "qtd_conserto"].includes(campo)) continue; // defeito/conserto vazios valem 0
       if (campo === "ref_zinzane" && def.chave === "separacao") continue; // opcional na separação; o Estilo define na etapa própria
@@ -376,16 +371,9 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
   switch (def.trava) {
     case "fardos_vs_volumes":
       if (d.fardos_abertos !== undefined && d.fardos_abertos !== "") compara(def.trava, TRAVAS[def.trava], Number(e1.volumes_recebidos ?? nota.volumes_nf), Number(d.fardos_abertos));
-      // quantidades separadas (todas as cores e tamanhos) × quantidade de cada produto na NF
-      if (nfItens.length) {
-        for (const p of nfItens) {
-          const linhas = itens.filter((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo));
-          const separado = soma(linhas, "qtd_nf");
-          if (separado !== pecasNf(p)) divergencias.push({ tipo: linhas.length ? "separacao_produto" : "produto_sem_linha", descricao: linhas.length ? `${descProd(p)}: separado × NF (em peças${notaConjunto(p)})` : `${descProd(p)} está na NF e não foi separado`, esperado: pecasNf(p), obtido: separado, diferenca: separado - pecasNf(p), valor_rs: valorDif(p, separado - pecasNf(p)) });
-        }
-      } else if (itens.length) {
-        const sep = soma(itens, "qtd_nf");
-        if (sep !== nota.total_pecas_nf) divergencias.push({ tipo: "separacao_total", descricao: "Total separado × total da NF", esperado: nota.total_pecas_nf, obtido: sep, diferenca: sep - nota.total_pecas_nf });
+      // a separação não tem quantidade (quem confere as peças é a contagem): todo produto da NF precisa ter ao menos uma linha de cor/tamanho
+      for (const p of nfItens) {
+        if (!itens.some((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo))) divergencias.push({ tipo: "produto_sem_linha", descricao: `${descProd(p)} está na NF e nenhuma cor/tamanho foi separado (linhas)`, esperado: 1, obtido: 0, diferenca: -1 });
       }
       break;
     case "contagem_vs_nf":
@@ -411,9 +399,6 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
           const rc = Number(d.recontagem_total), cont = soma(itens, "qtd_contada");
           if (Number.isInteger(rc) && rc !== cont) divergencias.push({ tipo: "recontagem", descricao: "Recontagem × primeira contagem (corrija as linhas ou justifique)", esperado: cont, obtido: rc, diferenca: rc - cont });
         }
-      }
-      for (const i of itens) if (i.qtd_nf !== null && i.qtd_contada !== null && i.qtd_nf !== i.qtd_contada) {
-        divergencias.push({ tipo: "contagem_linha", descricao: `${rotulo(i)}: contado × NF`, esperado: i.qtd_nf, obtido: i.qtd_contada, diferenca: i.qtd_contada - i.qtd_nf });
       }
       break;
     case "ficha_vs_contagem":
