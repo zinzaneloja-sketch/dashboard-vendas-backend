@@ -218,6 +218,18 @@ CREATE TABLE IF NOT EXISTS cd_nota_itens (
   criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS tamanho TEXT NOT NULL DEFAULT '';
+ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS ref_fornecedor TEXT NOT NULL DEFAULT '';
+
+-- Produtos que vieram na propria NF (lidos do PDF/XML na entrada): servem de base para a separacao e a contagem.
+CREATE TABLE IF NOT EXISTS cd_nota_nf_itens (
+  id                  BIGSERIAL PRIMARY KEY,
+  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  ordem               INTEGER NOT NULL DEFAULT 0,
+  codigo              TEXT NOT NULL,
+  descricao           TEXT,
+  qtd                 INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS cd_nota_nf_itens_nota_idx ON cd_nota_nf_itens (nota_id);
 CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
 
 CREATE TABLE IF NOT EXISTS cd_nota_etapas (
