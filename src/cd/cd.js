@@ -1,5 +1,5 @@
 const { pool } = require("../db");
-const { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, tamanhoCanonico, etapaPorNumero, numeroDe } = require("./etapas");
+const { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, TAMANHOS_INFO, tamanhoCanonico, etapaPorNumero, numeroDe } = require("./etapas");
 const { minutosUteis, diaLocal, expediente } = require("./tempo");
 
 const TOTAL_ETAPAS = ETAPAS.length;
@@ -54,6 +54,7 @@ async function configPublica() {
     travas: TRAVAS,
     itemCampos: ITEM_CAMPOS,
     tamanhos: TAMANHOS,
+    tamanhos_info: TAMANHOS_INFO,
     expediente: { inicio: expediente.inicioMin, fim: expediente.fimMin, dias: expediente.dias },
   };
 }
@@ -119,17 +120,26 @@ async function criarNota(acc, b) {
       const codigo = txt(it && it.codigo).slice(0, 60);
       if (!codigo) continue;
       const q = Number(it.qtd);
-      itensNf.push({ ordem: k, codigo, descricao: txt(it.descricao).slice(0, 160) || null, qtd: Number.isFinite(q) && q >= 0 ? Math.round(q) : 0 });
+      const vu = Number(it.valor_unit);
+      itensNf.push({
+        ordem: k, codigo, descricao: txt(it.descricao).slice(0, 160) || null, qtd: Number.isFinite(q) && q >= 0 ? Math.round(q) : 0,
+        fator: Number(it.fator) === 2 ? 2 : 1, // conjunto: cada unidade da NF são 2 peças
+        valor_unit: Number.isFinite(vu) && vu >= 0 ? vu : null,
+      });
     }
   }
+
+  // Valor da NF: o informado ou, se vier com preço por produto, a soma (preço unitário × unidades da NF)
+  let valorNf = b.valor_nf !== undefined && b.valor_nf !== "" && Number.isFinite(Number(b.valor_nf)) ? Number(b.valor_nf) : null;
+  if (valorNf === null && itensNf.length && itensNf.every((x) => x.valor_unit !== null)) valorNf = Math.round(itensNf.reduce((a, x) => a + x.valor_unit * x.qtd, 0) * 100) / 100;
 
   return comTransacao(async (c) => {
     let nota;
     try {
       const r = await c.query(
-        `INSERT INTO cd_notas (numero_nf, serie, fornecedor, chave_nf, total_pecas_nf, volumes_nf, prioridade, observacao, criada_por, com_divergencia, etapa_atual)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,2) RETURNING *`,
-        [numero_nf, txt(b.serie) || null, fornecedor, chave || null, total, volNf, prioridade, txt(b.observacao) || null, acc.email, diverge]
+        `INSERT INTO cd_notas (numero_nf, serie, fornecedor, chave_nf, total_pecas_nf, volumes_nf, prioridade, observacao, criada_por, com_divergencia, etapa_atual, valor_nf)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,2,$11) RETURNING *`,
+        [numero_nf, txt(b.serie) || null, fornecedor, chave || null, total, volNf, prioridade, txt(b.observacao) || null, acc.email, diverge, valorNf]
       );
       nota = r.rows[0];
     } catch (e) {
@@ -148,7 +158,7 @@ async function criarNota(acc, b) {
       ]);
     }
     for (const it of itensNf) {
-      await c.query("INSERT INTO cd_nota_nf_itens (nota_id, ordem, codigo, descricao, qtd) VALUES ($1,$2,$3,$4,$5)", [nota.id, it.ordem, it.codigo, it.descricao, it.qtd]);
+      await c.query("INSERT INTO cd_nota_nf_itens (nota_id, ordem, codigo, descricao, qtd, fator, valor_unit) VALUES ($1,$2,$3,$4,$5,$6,$7)", [nota.id, it.ordem, it.codigo, it.descricao, it.qtd, it.fator, it.valor_unit]);
     }
     await evento(c, nota.id, 1, "nota_criada", acc.email, {
       ...(itensNf.length ? { produtos_na_nf: itensNf.length } : {}),
@@ -178,7 +188,26 @@ async function iniciarEtapa(acc, notaId, n) {
   });
 }
 
-// ---------- itens (modelo/cor/tamanho) ----------
+// Cor do catálogo (código + nome): a cor das linhas sempre vem daqui, nunca digitada.
+async function corPorCodigo(db, codigo) {
+  const { rows } = await db.query("SELECT codigo, nome FROM cd_cores WHERE codigo = $1 AND ativo", [txt(codigo)]);
+  return rows[0] || null;
+}
+async function listarCores() {
+  const { rows } = await pool.query("SELECT codigo, nome, nome_en FROM cd_cores WHERE ativo ORDER BY nome, codigo");
+  return { cores: rows };
+}
+async function criarCor(acc, b) {
+  if (!ehGestor(acc)) throw erro(403, "Somente o gestor cadastra cor nova.");
+  const codigo = txt(b.codigo), nome = txt(b.nome).toUpperCase();
+  if (!/^\d{1,6}$/.test(codigo)) throw erro(400, "O código da cor deve ter só números (ex.: 0001).");
+  if (nome.length < 2) throw erro(400, "Informe o nome da cor.");
+  const { rows } = await pool.query("INSERT INTO cd_cores (codigo, nome, ativo) VALUES ($1,$2,true) ON CONFLICT (codigo) DO NOTHING RETURNING codigo, nome", [codigo, nome]);
+  if (!rows.length) throw erro(409, `O código ${codigo} já existe no catálogo.`);
+  return rows[0];
+}
+
+// ---------- itens (produto/cor/tamanho) ----------
 async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } = {}) {
   const def = etapaPorNumero(n);
   if (!def || !def.itens) throw erro(400, "Essa etapa não tem itens para preencher.");
@@ -211,6 +240,9 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         novoD.fardos_abertos = dados.fardos_abertos === "" || dados.fardos_abertos === null ? null : inteiro(dados.fardos_abertos, "Fardos abertos");
       }
       if ("avarias" in dados) novoD.avarias = txt(dados.avarias) || null;
+      for (const k of ["trocar_composicao", "trocar_marca", "trocar_codbarras"]) {
+        if (k in dados) novoD[k] = dados[k] === true || dados[k] === "true" || dados[k] === 1;
+      }
       if (JSON.stringify(novoD) !== JSON.stringify(atualD)) {
         await c.query("UPDATE cd_nota_etapas SET dados = $3 WHERE nota_id = $1 AND etapa = $2", [notaId, def.n, JSON.stringify(novoD)]);
         if (novoD.fardos_abertos !== atualD.fardos_abertos) {
@@ -236,6 +268,16 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         for (const campo of permitidos) {
           if (!(campo in raw)) continue;
           let novo = valor(campo, raw[campo]);
+          if (campo === "cor_codigo") {
+            if (!novo) { if (cur.cor_codigo) throw erro(400, "Escolha a cor."); continue; } // linha antiga ainda sem cor do catálogo
+            const cr = await corPorCodigo(c, novo);
+            if (!cr) throw erro(400, `Cor ${novo} não existe no catálogo.`);
+            if ((cur.cor_codigo ?? null) === cr.codigo) continue;
+            vals.push(cr.codigo); sets.push(`cor_codigo = $${vals.length}`);
+            vals.push(cr.nome); sets.push(`cor = $${vals.length}`);
+            mudancas.push({ item: cur.id, modelo: cur.modelo, ref_fornecedor: cur.ref_fornecedor, tamanho: cur.tamanho, campo: "cor", de: cur.cor_codigo ? `${cur.cor_codigo} ${cur.cor}` : cur.cor, para: `${cr.codigo} ${cr.nome}` });
+            continue;
+          }
           if (campo === "modelo" || campo === "cor" || campo === "tamanho") {
             if (!novo) throw erro(400, "Produto, cor e tamanho são obrigatórios.");
           }
@@ -255,19 +297,21 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         }
       } else if (cadastra && !raw.id) {
         const modelo = txt(raw.modelo);
-        const cor = txt(raw.cor);
+        const corRow = raw.cor_codigo ? await corPorCodigo(c, txt(raw.cor_codigo)) : null;
+        if (!corRow) throw erro(400, "Escolha a cor na lista do catálogo (código e nome).");
+        const cor = corRow.nome;
         const refForn = txt(raw.ref_fornecedor);
         const refZ = txt(raw.ref_zinzane) || null;
         const tamanho = tamanhoCanonico(raw.tamanho);
         const qtd = inteiro(raw.qtd_nf, "Quantidade", { min: 1 });
-        if (!modelo || !cor) throw erro(400, "Informe o produto e a cor.");
+        if (!modelo) throw erro(400, "Informe o produto.");
         if (!refForn) throw erro(400, "Informe a referência do fornecedor (código do produto na NF).");
         if (!tamanho) throw erro(400, `Informe o tamanho (${TAMANHOS.join(", ")}).`);
-        const dup = [...porId.values()].some((i) => chaveRef(i.ref_fornecedor) === chaveRef(refForn) && chaveRef(i.modelo) === chaveRef(modelo) && chaveRef(i.cor) === chaveRef(cor) && chaveRef(i.tamanho) === chaveRef(tamanho));
+        const dup = [...porId.values()].some((i) => chaveRef(i.ref_fornecedor) === chaveRef(refForn) && chaveRef(i.modelo) === chaveRef(modelo) && (i.cor_codigo ? i.cor_codigo === corRow.codigo : chaveRef(i.cor) === chaveRef(cor)) && chaveRef(i.tamanho) === chaveRef(tamanho));
         if (dup) throw erro(409, `${modelo} / ${refForn} / ${cor} / ${tamanho} já está na lista.`);
-        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, tamanho, qtd_nf, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *", [notaId, modelo, refForn, cor, tamanho, qtd, refZ]);
+        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, ref_fornecedor, cor, cor_codigo, tamanho, qtd_nf, ref_zinzane) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", [notaId, modelo, refForn, cor, corRow.codigo, tamanho, qtd, refZ]);
         porId.set(String(r.rows[0].id), r.rows[0]);
-        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor, tamanho, quantidade: qtd });
+        mudancas.push({ acao: "incluido", modelo, ref_fornecedor: refForn, cor: `${corRow.codigo} ${cor}`, tamanho, quantidade: qtd });
       }
     }
     if (mudancas.length) await evento(c, notaId, def.n, "itens_atualizados", acc.email, { mudancas });
@@ -277,6 +321,13 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
 
 // ---------- conferência (travas) ----------
 const soma = (arr, k) => arr.reduce((s, i) => s + (Number(i[k]) || 0), 0);
+
+// Conjunto: cada unidade da NF vale 2 peças. Tudo que é conferido em peças usa estes helpers.
+const pecasNf = (p) => p.qtd * (p.fator || 1);
+const descProd = (p) => `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""}`;
+const notaConjunto = (p) => ((p.fator || 1) > 1 ? ` · NF: ${p.qtd} conjuntos = ${pecasNf(p)} peças` : "");
+// Valor aproximado de uma diferença em peças (preço unitário da NF ÷ peças por unidade)
+const valorDif = (p, dif) => (p.valor_unit ? Math.round(Math.abs(dif) * (Number(p.valor_unit) / (p.fator || 1)) * 100) / 100 : null);
 
 /** Avalia se a etapa pode ser concluída. Não grava nada. */
 function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
@@ -300,7 +351,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
       if (semQtd.length) erros.push(`Falta a quantidade em ${semQtd.length} linha(s): ${semQtd.slice(0, 4).map(rotulo).join(", ")}${semQtd.length > 4 ? "…" : ""}.`);
     }
     for (const campo of def.itens) {
-      if (["qtd_nf", "modelo", "ref_fornecedor", "cor", "tamanho", "justificativa_confronto"].includes(campo)) continue;
+      if (["qtd_nf", "modelo", "ref_fornecedor", "cor", "tamanho", "justificativa_confronto", "qtd_defeito", "qtd_conserto"].includes(campo)) continue; // defeito/conserto vazios valem 0
       if (campo === "ref_zinzane" && def.chave === "separacao") continue; // opcional na separação; o Estilo define na etapa própria
       const faltando = itens.filter((i) => {
         if (campo === "amostra_separada") return !i.amostra_separada;
@@ -329,7 +380,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
         for (const p of nfItens) {
           const linhas = itens.filter((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo));
           const separado = soma(linhas, "qtd_nf");
-          if (separado !== p.qtd) divergencias.push({ tipo: linhas.length ? "separacao_produto" : "produto_sem_linha", descricao: linhas.length ? `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""}: separado × NF` : `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""} está na NF e não foi separado`, esperado: p.qtd, obtido: separado, diferenca: separado - p.qtd });
+          if (separado !== pecasNf(p)) divergencias.push({ tipo: linhas.length ? "separacao_produto" : "produto_sem_linha", descricao: linhas.length ? `${descProd(p)}: separado × NF (em peças${notaConjunto(p)})` : `${descProd(p)} está na NF e não foi separado`, esperado: pecasNf(p), obtido: separado, diferenca: separado - pecasNf(p), valor_rs: valorDif(p, separado - pecasNf(p)) });
         }
       } else if (itens.length) {
         const sep = soma(itens, "qtd_nf");
@@ -343,7 +394,21 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
         const linhas = itens.filter((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo));
         if (!linhas.length || linhas.some((i) => i.qtd_contada === null)) continue;
         const contado = soma(linhas, "qtd_contada");
-        if (contado !== p.qtd) divergencias.push({ tipo: "contagem_produto", descricao: `Produto ${p.codigo}${p.descricao ? " (" + p.descricao + ")" : ""}: contado × NF`, esperado: p.qtd, obtido: contado, diferenca: contado - p.qtd });
+        if (contado !== pecasNf(p)) divergencias.push({ tipo: "contagem_produto", descricao: `${descProd(p)}: contado × NF (em peças${notaConjunto(p)})`, esperado: pecasNf(p), obtido: contado, diferenca: contado - pecasNf(p), valor_rs: valorDif(p, contado - pecasNf(p)) });
+      }
+      // defeito e conserto fazem parte da contagem: nunca podem passar do que foi contado na linha
+      for (const i of itens) {
+        const sub = (Number(i.qtd_defeito) || 0) + (Number(i.qtd_conserto) || 0);
+        if (i.qtd_contada !== null && sub > i.qtd_contada) erros.push(`${rotulo(i)}: defeito (${Number(i.qtd_defeito) || 0}) + conserto (${Number(i.qtd_conserto) || 0}) passam do total contado (${i.qtd_contada}).`);
+      }
+      // havendo diferença com a NF, a recontagem é obrigatória (manual ou pelo checkout)
+      if (divergencias.length) {
+        if (d.recontagem_metodo !== "manual" && d.recontagem_metodo !== "checkout") erros.push("Há diferença com a NF: faça a recontagem e informe se foi manual ou pelo checkout.");
+        if (d.recontagem_total === undefined || d.recontagem_total === null || String(d.recontagem_total).trim() === "") erros.push("Informe o total recontado (peças).");
+        else {
+          const rc = Number(d.recontagem_total), cont = soma(itens, "qtd_contada");
+          if (Number.isInteger(rc) && rc !== cont) divergencias.push({ tipo: "recontagem", descricao: "Recontagem × primeira contagem (corrija as linhas ou justifique)", esperado: cont, obtido: rc, diferenca: rc - cont });
+        }
       }
       for (const i of itens) if (i.qtd_nf !== null && i.qtd_contada !== null && i.qtd_nf !== i.qtd_contada) {
         divergencias.push({ tipo: "contagem_linha", descricao: `${rotulo(i)}: contado × NF`, esperado: i.qtd_nf, obtido: i.qtd_contada, diferenca: i.qtd_contada - i.qtd_nf });
@@ -354,9 +419,13 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
         divergencias.push({ tipo: "ficha_linha", descricao: `${rotulo(i)}: ficha × contagem`, esperado: i.qtd_contada, obtido: i.qtd_ficha, diferenca: i.qtd_ficha - i.qtd_contada });
       }
       break;
-    case "etiquetas_vs_ficha":
+    case "etiquetas_vs_ficha": {
+      const e2 = (etapasPorN[numeroDe("separacao")] || {}).dados || {};
+      const pedidas = [e2.trocar_composicao && "etiqueta de composição", e2.trocar_marca && "etiqueta de marca", e2.trocar_codbarras && "código de barras"].filter(Boolean);
+      if (pedidas.length && !(d.trocas_confirmadas === true || d.trocas_confirmadas === "true")) erros.push(`A separação pediu a troca de: ${pedidas.join(", ")}. Confirme que foi feita.`);
       if (d.etiquetas_impressas !== undefined && d.etiquetas_impressas !== "") compara(def.trava, TRAVAS[def.trava], soma(itens, "qtd_ficha"), Number(d.etiquetas_impressas));
       break;
+    }
     case "checkout_vs_ficha":
       for (const i of itens) if (i.qtd_checkout !== null && i.qtd_ficha !== null && i.qtd_checkout !== i.qtd_ficha) {
         divergencias.push({ tipo: "checkout_linha", item: i.id, descricao: `${rotulo(i)}: checkout × ficha`, esperado: i.qtd_ficha, obtido: i.qtd_checkout, diferenca: i.qtd_checkout - i.qtd_ficha, justificativa: i.justificativa_confronto || null });
@@ -388,7 +457,7 @@ async function carregarEstado(db, notaId) {
   const [{ rows: itens }, { rows: etapas }, { rows: nfItens }] = await Promise.all([
     db.query("SELECT * FROM cd_nota_itens WHERE nota_id = $1 ORDER BY id", [notaId]),
     db.query("SELECT * FROM cd_nota_etapas WHERE nota_id = $1 ORDER BY etapa", [notaId]),
-    db.query("SELECT id, ordem, codigo, descricao, qtd FROM cd_nota_nf_itens WHERE nota_id = $1 ORDER BY ordem, id", [notaId]),
+    db.query("SELECT id, ordem, codigo, descricao, qtd, fator, valor_unit FROM cd_nota_nf_itens WHERE nota_id = $1 ORDER BY ordem, id", [notaId]),
   ]);
   const porN = {};
   for (const e of etapas) porN[e.etapa] = e;
@@ -422,7 +491,9 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     const limpo = {};
     for (const campo of def.campos || []) {
       const v = dados[campo.k] !== undefined ? dados[campo.k] : (atual.dados || {})[campo.k];
-      limpo[campo.k] = campo.tipo === "int" ? (v === "" || v === undefined || v === null ? null : Number(v)) : txt(v) || null;
+      limpo[campo.k] = campo.tipo === "int" ? (v === "" || v === undefined || v === null ? null : Number(v))
+        : campo.tipo === "bool" ? (v === true || v === "true" || v === 1)
+        : txt(v) || null;
     }
     if (txt(dados.justificativa)) limpo.justificativa = txt(dados.justificativa);
 
@@ -665,7 +736,34 @@ async function gargalos({ dias = 30 } = {}) {
   return { dias: d, etapas: lista, ranking, notas_concluidas: lt.length, lead_time_medio_min: leads.length ? Math.round(leads.reduce((a, b) => a + b, 0) / leads.length) : null };
 }
 
+// Ranking de fornecedores: quem manda mais peça com defeito, mais conserto e mais diferença com a NF
+async function fornecedores({ dias = 90 } = {}) {
+  const d = Math.min(Math.max(Number(dias) || 90, 1), 730);
+  const { rows } = await pool.query(
+    `SELECT n.fornecedor,
+            COUNT(*)::int AS notas,
+            COALESCE(SUM(n.total_pecas_nf),0)::int AS pecas_nf,
+            COALESCE(SUM(n.valor_nf),0)::float AS valor_nf,
+            COALESCE(SUM(t.contado),0)::int AS contadas,
+            COALESCE(SUM(t.defeito),0)::int AS defeito,
+            COALESCE(SUM(t.conserto),0)::int AS conserto,
+            COUNT(*) FILTER (WHERE t.contado IS NOT NULL AND t.contado <> n.total_pecas_nf)::int AS notas_com_diferenca,
+            COALESCE(SUM(CASE WHEN t.contado IS NOT NULL THEN t.contado - n.total_pecas_nf ELSE 0 END),0)::int AS saldo_pecas
+       FROM cd_notas n
+       LEFT JOIN (SELECT nota_id, SUM(qtd_contada) AS contado, SUM(COALESCE(qtd_defeito,0)) AS defeito, SUM(COALESCE(qtd_conserto,0)) AS conserto
+                    FROM cd_nota_itens WHERE qtd_contada IS NOT NULL AND nota_id IN (SELECT nota_id FROM cd_nota_etapas WHERE etapa = $2 AND status = 'concluida') GROUP BY nota_id) t ON t.nota_id = n.id
+      WHERE n.status <> 'cancelada' AND n.criada_em >= now() - ($1 || ' days')::interval
+      GROUP BY n.fornecedor`, [String(d), numeroDe("contagem")]
+  );
+  const lista = rows.map((r) => ({
+    ...r,
+    pct_defeito: r.contadas ? Math.round((r.defeito / r.contadas) * 1000) / 10 : null,
+    pct_conserto: r.contadas ? Math.round((r.conserto / r.contadas) * 1000) / 10 : null,
+  })).sort((a, b) => ((b.defeito + b.conserto) - (a.defeito + a.conserto)) || (b.notas_com_diferenca - a.notas_com_diferenca));
+  return { dias: d, fornecedores: lista };
+}
+
 module.exports = {
   configPublica, salvarConfigEtapas, criarNota, iniciarEtapa, salvarItens, conferirEtapa, concluirEtapa, reabrirEtapa, cancelarNota,
-  comentar, listarNotas, detalheNota, painel, gargalos,
+  comentar, listarNotas, detalheNota, painel, gargalos, listarCores, criarCor, fornecedores,
 };
