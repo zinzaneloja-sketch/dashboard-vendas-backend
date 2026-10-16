@@ -5,6 +5,7 @@ const { minutosUteis, diaLocal, expediente } = require("./tempo");
 const TOTAL_ETAPAS = ETAPAS.length;
 // Rótulo de uma linha de produto: produto / referência do fornecedor / cor / tamanho
 const rotulo = (i) => [i.modelo, i.ref_fornecedor, i.cor, i.tamanho].filter(Boolean).join(" / ");
+const corTxtSep = (i) => (i.cor_codigo ? `${i.cor_codigo} ${i.cor}` : i.cor);
 const chaveRef = (v) => String(v || "").trim().toLowerCase();
 
 function erro(status, message, extra) {
@@ -169,6 +170,15 @@ async function criarNota(acc, b) {
   });
 }
 
+
+// Etapa de referência: a cor definida já vem da separação. Preenche o que o Estilo não trocou.
+async function preencherCorDefinida(db, notaId) {
+  await db.query(
+    `UPDATE cd_nota_itens SET cor_def_codigo = cor_codigo, cor_definida = cor_codigo || ' ' || cor
+      WHERE nota_id = $1 AND cor_def_codigo IS NULL AND cor_codigo IS NOT NULL AND (cor_definida IS NULL OR cor_definida = '')`, [notaId]);
+  await db.query("UPDATE cd_nota_itens SET cor_definida = cor WHERE nota_id = $1 AND cor_codigo IS NULL AND (cor_definida IS NULL OR cor_definida = '')", [notaId]);
+}
+
 // ---------- iniciar ----------
 async function iniciarEtapa(acc, notaId, n) {
   const def = etapaPorNumero(n);
@@ -183,6 +193,7 @@ async function iniciarEtapa(acc, notaId, n) {
     await c.query("UPDATE cd_nota_etapas SET status = 'em_andamento', iniciada_em = now(), iniciada_por = $3 WHERE nota_id = $1 AND etapa = $2", [
       notaId, def.n, acc.email,
     ]);
+    if (def.chave === "referencia") await preencherCorDefinida(c, notaId);
     await evento(c, notaId, def.n, "etapa_iniciada", acc.email, {});
     return { ok: true };
   });
@@ -268,6 +279,16 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } =
         for (const campo of permitidos) {
           if (!(campo in raw)) continue;
           let novo = valor(campo, raw[campo]);
+          if (campo === "cor_def_codigo") {
+            if (!novo) continue;
+            const cd = await corPorCodigo(c, novo);
+            if (!cd) throw erro(400, `Cor ${novo} não existe no catálogo.`);
+            if ((cur.cor_def_codigo ?? null) === cd.codigo) continue;
+            vals.push(cd.codigo); sets.push(`cor_def_codigo = $${vals.length}`);
+            vals.push(`${cd.codigo} ${cd.nome}`); sets.push(`cor_definida = $${vals.length}`);
+            mudancas.push({ item: cur.id, modelo: cur.modelo, ref_fornecedor: cur.ref_fornecedor, tamanho: cur.tamanho, campo: "cor definida", de: cur.cor_definida ?? corTxtSep(cur), para: `${cd.codigo} ${cd.nome}` });
+            continue;
+          }
           if (campo === "cor_codigo") {
             if (!novo) { if (cur.cor_codigo) throw erro(400, "Escolha a cor."); continue; } // linha antiga ainda sem cor do catálogo
             const cr = await corPorCodigo(c, novo);
@@ -351,13 +372,14 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = []) {
       if (campo === "ref_zinzane" && def.chave === "separacao") continue; // opcional na separação; o Estilo define na etapa própria
       const faltando = itens.filter((i) => {
         if (campo === "amostra_separada") return !i.amostra_separada;
+        if (campo === "cor_def_codigo") return !(i.cor_def_codigo || i.cor_definida || i.cor); // padrão: a cor da separação (preenchida ao concluir)
         const v = i[campo];
         return v === null || v === undefined || String(v).trim() === "";
       });
       if (faltando.length) {
         const rot = {
           qtd_contada: "contagem", qtd_ficha: "quantidade da ficha", qtd_checkout: "quantidade do checkout", contado_por: "o nome de quem contou",
-          amostra_separada: "peça separada para o Estilo", cor_definida: "cor definida", ref_zinzane: "referência Zinzane",
+          amostra_separada: "peça separada para o Estilo", cor_definida: "cor definida", cor_def_codigo: "cor definida", ref_zinzane: "referência Zinzane",
         }[campo] || campo;
         erros.push(`Falta ${rot} em ${faltando.length} linha(s): ${faltando.slice(0, 4).map(rotulo).join(", ")}${faltando.length > 4 ? "…" : ""}.`);
       }
@@ -466,6 +488,7 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     if (nota.status !== "aberta") throw erro(409, "Essa nota não está aberta.");
     if (nota.etapa_atual !== def.n) throw erro(409, `A nota está na etapa ${nota.etapa_atual}.`);
     if (!podeAtuar(acc, def)) throw erro(403, `Etapa ${def.n} é do perfil "${PERFIS[def.perfil]}".`);
+    if (def.chave === "referencia") await preencherCorDefinida(c, notaId);
     const st = await carregarEstado(c, notaId);
     const atual = st.porN[def.n];
     if (atual.status !== "em_andamento") throw erro(409, "Inicie a etapa antes de concluir.");
