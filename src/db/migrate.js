@@ -349,6 +349,44 @@ async function migrarEtapas14() {
   }
 }
 
+
+// Processo de 12 etapas: saem "Preenchimento da ficha" (antiga 4) e "Separacao de 1 peca para o Estilo" (antiga 5,
+// que virou uma marcacao dentro da etapa 2). Renumera as etapas seguintes e converte as notas em andamento.
+async function migrarEtapas12() {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock(7002)");
+    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'etapas_12'");
+    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
+
+    const { rows: [{ n: antigas }] } = await c.query("SELECT count(*)::int AS n FROM cd_nota_etapas WHERE etapa = 14");
+    if (antigas > 0) {
+      // historico das etapas extintas fica, marcado como "etapa antiga" (sem numero)
+      await c.query("UPDATE cd_eventos SET detalhe = detalhe || jsonb_build_object('etapa_antiga', etapa), etapa = NULL WHERE etapa IN (4, 5)");
+      await c.query("UPDATE cd_eventos SET etapa = etapa - 2 WHERE etapa >= 6");
+      await c.query("DELETE FROM cd_nota_etapas WHERE etapa IN (4, 5)");
+      await c.query("UPDATE cd_nota_etapas SET etapa = -(etapa - 2) WHERE etapa >= 6");
+      await c.query("UPDATE cd_nota_etapas SET etapa = -etapa WHERE etapa < 0");
+      await c.query("UPDATE cd_notas SET etapa_atual = CASE WHEN etapa_atual IN (4, 5) THEN 4 WHEN etapa_atual >= 6 THEN etapa_atual - 2 ELSE etapa_atual END");
+      // nota que estava na ficha ou na amostra passa a ficar aguardando a referencia Zinzane (nova etapa 4)
+      await c.query(`UPDATE cd_nota_etapas e SET liberada_em = now(), status = 'pendente', iniciada_em = NULL, iniciada_por = NULL
+                       FROM cd_notas n WHERE e.nota_id = n.id AND e.etapa = 4 AND n.status = 'aberta' AND n.etapa_atual = 4 AND e.status = 'pendente' AND e.liberada_em IS NULL`);
+      await c.query("DELETE FROM cd_etapa_config WHERE etapa IN (4, 5)");
+      await c.query("UPDATE cd_etapa_config SET etapa = -(etapa - 2) WHERE etapa >= 6");
+      await c.query("UPDATE cd_etapa_config SET etapa = -etapa WHERE etapa < 0");
+      console.log("[migrate] Notas do CD convertidas para o processo de 12 etapas (" + antigas + " nota(s)).");
+    }
+    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('etapas_12', 'ok')");
+    await c.query("COMMIT");
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 // Garante que o admin master exista. Se ADMIN_PASSWORD não vier configurada,
 // gera uma senha aleatória e a imprime UMA vez nos logs do deploy, para que
 // o dono da conta consiga recuperá-la ali (nunca fica salva em texto puro).
@@ -397,6 +435,7 @@ async function seedAdmin() {
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
+  await migrarEtapas12();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
