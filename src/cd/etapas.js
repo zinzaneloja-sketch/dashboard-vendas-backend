@@ -27,9 +27,9 @@ const ETAPAS = [
       { k: "fardos_abertos", label: "Fardos abertos", tipo: "int", obrigatorio: true },
       { k: "avarias", label: "Avarias / observações", tipo: "texto" },
     ],
-    itens: ["modelo", "cor", "tamanho"],
+    itens: ["modelo", "ref_fornecedor", "cor", "tamanho", "ref_zinzane"],
     trava: "fardos_vs_volumes",
-    ajuda: "Abra um fardo por vez: toque em \"+1 fardo aberto\" e cadastre o que saiu dele (modelo, cor e tamanho). Repita até abrir todos. No fim, os fardos abertos precisam bater com os volumes recebidos." },
+    ajuda: "Abra um fardo por vez: toque em \"+1 fardo aberto\" e cadastre o que saiu dele (produto, cor e tamanhos). Os produtos já vêm da NF. Repita até abrir todos. No fim, os fardos abertos precisam bater com os volumes recebidos." },
   { n: 3, chave: "contagem", nome: "Contagem", perfil: "doca", sla_exec_min: 90, sla_fila_min: 60,
     itens: ["qtd_contada"], trava: "contagem_vs_nf",
     ajuda: "Informe a quantidade contada de cada modelo, cor e tamanho. O total é comparado com a NF." },
@@ -84,12 +84,19 @@ const TRAVAS = {
 };
 
 const ITEM_CAMPOS = {
-  modelo: "texto", cor: "texto", tamanho: "texto", qtd_nf: "int", qtd_contada: "int", qtd_ficha: "int", qtd_checkout: "int",
+  modelo: "texto", ref_fornecedor: "texto", cor: "texto", tamanho: "texto", qtd_nf: "int", qtd_contada: "int", qtd_ficha: "int", qtd_checkout: "int",
   amostra_separada: "bool", cor_definida: "texto", ref_zinzane: "texto", justificativa_confronto: "texto",
+};
+
+// Grade de tamanhos aceita nas linhas de produto (na ordem em que aparecem na tela).
+const TAMANHOS = ["Único", "PP", "P", "M", "G", "GG", "XG", "XGG"];
+const tamanhoCanonico = (t) => {
+  const k = String(t || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return TAMANHOS.find((x) => x.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") === k) || null;
 };
 
 const etapaPorNumero = (n) => ETAPAS.find((e) => e.n === Number(n));
 // Número da etapa a partir da chave (o código nunca deve fixar "etapa 12": os números mudam se o processo mudar).
 const numeroDe = (chave) => (ETAPAS.find((e) => e.chave === chave) || {}).n;
 
-module.exports = { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, etapaPorNumero, numeroDe };
+module.exports = { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, tamanhoCanonico, etapaPorNumero, numeroDe };
