@@ -529,6 +529,9 @@ app.get("/api/cd/usuarios", cdAuth, handle(async () => {
 }));
 app.get("/api/cd/painel", cdAuth, handle((req) => cd.painel(req.access)));
 app.get("/api/cd/gargalos", cdAuth, handle((req) => cd.gargalos({ dias: req.query.dias })));
+app.get("/api/cd/cores", cdAuth, handle(() => cd.listarCores()));
+app.post("/api/cd/cores", cdAuth, handle((req) => cd.criarCor(req.access, req.body || {})));
+app.get("/api/cd/fornecedores", cdAuth, handle((req) => cd.fornecedores({ dias: req.query.dias })));
 app.get("/api/cd/notas", cdAuth, handle((req) => cd.listarNotas({ status: req.query.status, q: req.query.q, limit: req.query.limit })));
 app.post("/api/cd/notas", cdAuth, handle((req) => cd.criarNota(req.access, req.body || {})));
 app.get("/api/cd/notas/:id", cdAuth, handle((req) => cd.detalheNota(req.access, nid(req))));
