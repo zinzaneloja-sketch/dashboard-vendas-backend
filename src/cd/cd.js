@@ -1,8 +1,10 @@
 const { pool } = require("../db");
-const { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, etapaPorNumero } = require("./etapas");
+const { PERFIS, ETAPAS, TRAVAS, ITEM_CAMPOS, etapaPorNumero, numeroDe } = require("./etapas");
 const { minutosUteis, diaLocal, expediente } = require("./tempo");
 
 const TOTAL_ETAPAS = ETAPAS.length;
+// Rótulo de uma linha de produto: modelo / cor / tamanho
+const rotulo = (i) => [i.modelo, i.cor, i.tamanho].filter(Boolean).join(" / ");
 
 function erro(status, message, extra) {
   const e = new Error(message);
@@ -159,10 +161,11 @@ async function iniciarEtapa(acc, notaId, n) {
   });
 }
 
-// ---------- itens (modelo/cor) ----------
-async function salvarItens(acc, notaId, n, { itens = [], remover = [] }) {
+// ---------- itens (modelo/cor/tamanho) ----------
+async function salvarItens(acc, notaId, n, { itens = [], remover = [], dados } = {}) {
   const def = etapaPorNumero(n);
   if (!def || !def.itens) throw erro(400, "Essa etapa não tem itens para preencher.");
+  const cadastra = def.chave === "separacao"; // só a separação cria/remove linhas
   return comTransacao(async (c) => {
     const nota = await travarNota(c, notaId);
     if (nota.status !== "aberta" || nota.etapa_atual !== def.n) throw erro(409, "Essa etapa não está disponível para edição.");
@@ -182,13 +185,30 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [] }) {
       return txt(v) || null;
     };
 
-    if (def.n === 3) {
+    // Dados parciais da etapa (ex.: contador de fardos abertos), gravados na hora para não se perder
+    if (dados && typeof dados === "object" && def.chave === "separacao") {
+      const { rows: er2 } = await c.query("SELECT dados FROM cd_nota_etapas WHERE nota_id = $1 AND etapa = $2", [notaId, def.n]);
+      const atualD = er2[0].dados || {};
+      const novoD = { ...atualD };
+      if ("fardos_abertos" in dados) {
+        novoD.fardos_abertos = dados.fardos_abertos === "" || dados.fardos_abertos === null ? null : inteiro(dados.fardos_abertos, "Fardos abertos");
+      }
+      if ("avarias" in dados) novoD.avarias = txt(dados.avarias) || null;
+      if (JSON.stringify(novoD) !== JSON.stringify(atualD)) {
+        await c.query("UPDATE cd_nota_etapas SET dados = $3 WHERE nota_id = $1 AND etapa = $2", [notaId, def.n, JSON.stringify(novoD)]);
+        if (novoD.fardos_abertos !== atualD.fardos_abertos) {
+          mudancas.push({ acao: "fardos_abertos", de: atualD.fardos_abertos ?? null, para: novoD.fardos_abertos ?? null });
+        }
+      }
+    }
+
+    if (cadastra) {
       for (const id of remover) {
         if (!porId.has(String(id))) continue;
         const it = porId.get(String(id));
         await c.query("DELETE FROM cd_nota_itens WHERE id = $1 AND nota_id = $2", [id, notaId]);
         porId.delete(String(id));
-        mudancas.push({ acao: "removido", modelo: it.modelo, cor: it.cor });
+        mudancas.push({ acao: "removido", modelo: it.modelo, cor: it.cor, tamanho: it.tamanho });
       }
     }
     for (const raw of itens) {
@@ -199,28 +219,28 @@ async function salvarItens(acc, notaId, n, { itens = [], remover = [] }) {
         for (const campo of permitidos) {
           if (!(campo in raw)) continue;
           const novo = valor(campo, raw[campo]);
-          if (campo === "modelo" || campo === "cor") {
-            if (!novo) throw erro(400, "Modelo e cor são obrigatórios.");
+          if (campo === "modelo" || campo === "cor" || campo === "tamanho") {
+            if (!novo) throw erro(400, "Modelo, cor e tamanho são obrigatórios.");
           }
           if (campo === "amostra_separada" ? Boolean(cur[campo]) === novo : (cur[campo] ?? null) === novo) continue;
           vals.push(novo);
           sets.push(`${campo} = $${vals.length}`);
-          mudancas.push({ item: cur.id, modelo: cur.modelo, cor: cur.cor, campo, de: cur[campo] ?? null, para: novo });
+          mudancas.push({ item: cur.id, modelo: cur.modelo, cor: cur.cor, tamanho: cur.tamanho, campo, de: cur[campo] ?? null, para: novo });
         }
         if (sets.length) {
           vals.push(raw.id, notaId);
           await c.query(`UPDATE cd_nota_itens SET ${sets.join(", ")} WHERE id = $${vals.length - 1} AND nota_id = $${vals.length}`, vals);
         }
-      } else if (def.n === 3 && !raw.id) {
+      } else if (cadastra && !raw.id) {
         const modelo = txt(raw.modelo);
         const cor = txt(raw.cor);
-        if (!modelo || !cor) throw erro(400, "Informe modelo e cor.");
-        const dup = [...porId.values()].some((i) => i.modelo.toLowerCase() === modelo.toLowerCase() && i.cor.toLowerCase() === cor.toLowerCase());
-        if (dup) throw erro(409, `${modelo} / ${cor} já está na lista.`);
-        const qtd = raw.qtd_nf === undefined || raw.qtd_nf === "" || raw.qtd_nf === null ? null : inteiro(raw.qtd_nf, "Quantidade na NF");
-        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, cor, qtd_nf) VALUES ($1,$2,$3,$4) RETURNING *", [notaId, modelo, cor, qtd]);
+        const tamanho = txt(raw.tamanho);
+        if (!modelo || !cor || !tamanho) throw erro(400, "Informe modelo, cor e tamanho.");
+        const dup = [...porId.values()].some((i) => i.modelo.toLowerCase() === modelo.toLowerCase() && i.cor.toLowerCase() === cor.toLowerCase() && String(i.tamanho || "").toLowerCase() === tamanho.toLowerCase());
+        if (dup) throw erro(409, `${modelo} / ${cor} / ${tamanho} já está na lista.`);
+        const r = await c.query("INSERT INTO cd_nota_itens (nota_id, modelo, cor, tamanho) VALUES ($1,$2,$3,$4) RETURNING *", [notaId, modelo, cor, tamanho]);
         porId.set(String(r.rows[0].id), r.rows[0]);
-        mudancas.push({ acao: "incluido", modelo, cor, qtd_nf: qtd });
+        mudancas.push({ acao: "incluido", modelo, cor, tamanho });
       }
     }
     if (mudancas.length) await evento(c, notaId, def.n, "itens_atualizados", acc.email, { mudancas });
@@ -247,9 +267,9 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
   }
 
   if (def.itens) {
-    if (!itens.length) erros.push("Cadastre pelo menos um modelo e cor.");
+    if (!itens.length) erros.push("Cadastre pelo menos um modelo, cor e tamanho.");
     for (const campo of def.itens) {
-      if (campo === "qtd_nf" || campo === "modelo" || campo === "cor" || campo === "justificativa_confronto") continue;
+      if (campo === "qtd_nf" || campo === "modelo" || campo === "cor" || campo === "tamanho" || campo === "justificativa_confronto") continue;
       const faltando = itens.filter((i) => {
         if (campo === "amostra_separada") return !i.amostra_separada;
         const v = i[campo];
@@ -260,7 +280,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
           qtd_contada: "contagem", qtd_ficha: "quantidade da ficha", qtd_checkout: "quantidade do checkout",
           amostra_separada: "peça separada para o Estilo", cor_definida: "cor definida", ref_zinzane: "referência Zinzane",
         }[campo] || campo;
-        erros.push(`Falta ${rot} em ${faltando.length} linha(s): ${faltando.slice(0, 4).map((i) => `${i.modelo}/${i.cor}`).join(", ")}${faltando.length > 4 ? "…" : ""}.`);
+        erros.push(`Falta ${rot} em ${faltando.length} linha(s): ${faltando.slice(0, 4).map(rotulo).join(", ")}${faltando.length > 4 ? "…" : ""}.`);
       }
     }
   }
@@ -268,7 +288,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
   const compara = (tipo, descricao, esperado, obtido, extra = {}) => {
     if (esperado !== obtido) divergencias.push({ tipo, descricao, esperado, obtido, diferenca: obtido - esperado, ...extra });
   };
-  const e1 = (etapasPorN[1] || {}).dados || {};
+  const e1 = (etapasPorN[numeroDe("recebimento")] || {}).dados || {};
   switch (def.trava) {
     case "fardos_vs_volumes":
       if (d.fardos_abertos !== undefined && d.fardos_abertos !== "") compara(def.trava, TRAVAS[def.trava], Number(e1.volumes_recebidos ?? nota.volumes_nf), Number(d.fardos_abertos));
@@ -276,12 +296,12 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
     case "contagem_vs_nf":
       compara(def.trava, TRAVAS[def.trava], nota.total_pecas_nf, soma(itens, "qtd_contada"));
       for (const i of itens) if (i.qtd_nf !== null && i.qtd_contada !== null && i.qtd_nf !== i.qtd_contada) {
-        divergencias.push({ tipo: "contagem_linha", descricao: `${i.modelo} / ${i.cor}: contado × NF`, esperado: i.qtd_nf, obtido: i.qtd_contada, diferenca: i.qtd_contada - i.qtd_nf });
+        divergencias.push({ tipo: "contagem_linha", descricao: `${rotulo(i)}: contado × NF`, esperado: i.qtd_nf, obtido: i.qtd_contada, diferenca: i.qtd_contada - i.qtd_nf });
       }
       break;
     case "ficha_vs_contagem":
       for (const i of itens) if (i.qtd_ficha !== null && i.qtd_contada !== null && i.qtd_ficha !== i.qtd_contada) {
-        divergencias.push({ tipo: "ficha_linha", descricao: `${i.modelo} / ${i.cor}: ficha × contagem`, esperado: i.qtd_contada, obtido: i.qtd_ficha, diferenca: i.qtd_ficha - i.qtd_contada });
+        divergencias.push({ tipo: "ficha_linha", descricao: `${rotulo(i)}: ficha × contagem`, esperado: i.qtd_contada, obtido: i.qtd_ficha, diferenca: i.qtd_ficha - i.qtd_contada });
       }
       break;
     case "etiquetas_vs_ficha":
@@ -289,14 +309,14 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
       break;
     case "checkout_vs_ficha":
       for (const i of itens) if (i.qtd_checkout !== null && i.qtd_ficha !== null && i.qtd_checkout !== i.qtd_ficha) {
-        divergencias.push({ tipo: "checkout_linha", item: i.id, descricao: `${i.modelo} / ${i.cor}: checkout × ficha`, esperado: i.qtd_ficha, obtido: i.qtd_checkout, diferenca: i.qtd_checkout - i.qtd_ficha, justificativa: i.justificativa_confronto || null });
+        divergencias.push({ tipo: "checkout_linha", item: i.id, descricao: `${rotulo(i)}: checkout × ficha`, esperado: i.qtd_ficha, obtido: i.qtd_checkout, diferenca: i.qtd_checkout - i.qtd_ficha, justificativa: i.justificativa_confronto || null });
       }
       break;
     case "distribuicao_vs_checkout":
       if (d.total_distribuido !== undefined && d.total_distribuido !== "") compara(def.trava, TRAVAS[def.trava], soma(itens, "qtd_checkout"), Number(d.total_distribuido));
       break;
     case "pack_vs_distribuicao": {
-      const e13 = (etapasPorN[13] || {}).dados || {};
+      const e13 = (etapasPorN[numeroDe("distribuicao")] || {}).dados || {};
       if (d.pecas_embaladas !== undefined && d.pecas_embaladas !== "") compara(def.trava, TRAVAS[def.trava], Number(e13.total_distribuido), Number(d.pecas_embaladas));
       break;
     }
@@ -304,7 +324,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados) {
   }
 
   let exigeGestor = false;
-  if (def.n === 12) {
+  if (def.chave === "confronto") {
     const semJust = divergencias.filter((x) => !x.justificativa || x.justificativa.length < 5);
     if (semJust.length) erros.push(`Justifique ${semJust.length} linha(s) com diferença entre checkout e ficha.`);
     if (divergencias.length) exigeGestor = true;
@@ -330,7 +350,9 @@ async function conferirEtapa(acc, notaId, n, dados) {
   const { rows } = await pool.query("SELECT * FROM cd_notas WHERE id = $1", [notaId]);
   if (!rows[0]) throw erro(404, "Nota não encontrada.");
   const st = await carregarEstado(pool, notaId);
-  return avaliarEtapa(def, rows[0], st.itens, st.porN, dados);
+  // o que não vier na chamada vale o que já está gravado na etapa (ex.: contador de fardos salvo na hora)
+  const guardados = (st.porN[def.n] || {}).dados || {};
+  return avaliarEtapa(def, rows[0], st.itens, st.porN, { ...guardados, ...(dados || {}) });
 }
 
 // ---------- concluir ----------
@@ -348,7 +370,7 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
 
     const limpo = {};
     for (const campo of def.campos || []) {
-      const v = dados[campo.k];
+      const v = dados[campo.k] !== undefined ? dados[campo.k] : (atual.dados || {})[campo.k];
       limpo[campo.k] = campo.tipo === "int" ? (v === "" || v === undefined || v === null ? null : Number(v)) : txt(v) || null;
     }
     if (txt(dados.justificativa)) limpo.justificativa = txt(dados.justificativa);
@@ -376,9 +398,10 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     await evento(c, notaId, def.n, "etapa_concluida", acc.email, {
       exec_min_uteis: minutosUteis(atual.iniciada_em, new Date()), dados: limpo, ...(diverge ? { divergencias: av.divergencias } : {}),
     });
-    if (def.n === 11 && st.porN[5] && st.porN[5].concluida_por === atual.iniciada_por) {
-      await evento(c, notaId, 11, "alerta_segregacao", acc.email, {
-        mensagem: "A mesma pessoa preencheu a ficha (etapa 5) e fez o checkout (etapa 11).", usuario: acc.email,
+    const nFicha = numeroDe("ficha");
+    if (def.chave === "checkout" && st.porN[nFicha] && st.porN[nFicha].concluida_por === atual.iniciada_por) {
+      await evento(c, notaId, def.n, "alerta_segregacao", acc.email, {
+        mensagem: `A mesma pessoa preencheu a ficha (etapa ${nFicha}) e fez o checkout (etapa ${def.n}).`, usuario: acc.email,
       });
     }
     return { ok: true, nota_concluida: fim };
