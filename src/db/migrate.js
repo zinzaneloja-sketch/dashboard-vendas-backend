@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS cd_recontagens (
   obs             TEXT,
   criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE cd_recontagens ADD COLUMN IF NOT EXISTS itens JSONB;
 CREATE INDEX IF NOT EXISTS cd_recontagens_nota_idx ON cd_recontagens (nota_id, tentativa);
 
 -- Lotes de etiquetas: a etiquetagem corre em paralelo com a contagem, lote a lote
