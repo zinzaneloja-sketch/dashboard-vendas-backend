@@ -554,13 +554,16 @@ app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: re
 app.get(T + "/resumo", cdAuth, handle((req) => trn.resumo(req.access)));
 app.get(T + "/nfs", cdAuth, handle((req) => trn.listarNfs(req.access, req.query)));
 app.post(T + "/nfs", cdAuth, grande, handle((req) => trn.enviarNf(req.access, req.body || {})));
+app.post(T + "/nfs/excluir", cdAuth, handle((req) => trn.excluirNfs(req.access, req.body || {})));
+app.get(T + "/nfs/lidas", cdAuth, handle((req) => trn.transportadorasLidas(req.access)));
+app.post(T + "/nfs/vincular-lidas", cdAuth, handle((req) => trn.vincularLidas(req.access, req.body || {})));
 app.post(T + "/nfs/transportadora", cdAuth, handle((req) => trn.definirTransportadora(req.access, req.body || {})));
 app.post(T + "/nfs/coleta", cdAuth, handle((req) => trn.marcarColeta(req.access, req.body || {})));
 app.post(T + "/nfs/entrega", cdAuth, handle((req) => trn.marcarEntregue(req.access, req.body || {})));
 app.get(T + "/nfs/:id", cdAuth, handle((req) => trn.detalheNf(req.access, nid(req))));
 app.put(T + "/nfs/:id", cdAuth, handle((req) => trn.editarNf(req.access, nid(req), req.body || {})));
 app.post(T + "/nfs/:id/voltar", cdAuth, handle((req) => trn.voltarStatus(req.access, nid(req), req.body || {})));
-app.delete(T + "/nfs/:id", cdAuth, handle((req) => trn.cancelarNf(req.access, nid(req), req.body || {})));
+app.delete(T + "/nfs/:id", cdAuth, handle((req) => trn.excluirNfs(req.access, { ids: [nid(req)], motivo: (req.body || {}).motivo })));
 app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
   try {
     const f = await trn.baixarArquivo(req.access, nid(req));
