@@ -29,7 +29,7 @@ const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 const jsonPadrao = express.json();
-app.use((req, res, next) => (req.method === "POST" && /\/api\/cd\/notas\/\d+\/nfs-saida$/.test(req.path) ? next() : jsonPadrao(req, res, next)));
+app.use((req, res, next) => (req.method === "POST" && /^\/api\/cd\/transito\/(nfs|transportadoras\/\d+\/tabela)$/.test(req.path) ? next() : jsonPadrao(req, res, next)));
 
 function parseDateRange(req) {
   const { dateFrom, dateTo } = req.query;
@@ -545,17 +545,36 @@ app.post("/api/cd/notas/:id/recontagens", cdAuth, handle((req) => cd.registrarRe
 app.post("/api/cd/notas/:id/etiquetas", cdAuth, handle((req) => cd.registrarLoteEtiquetas(req.access, nid(req), req.body || {})));
 app.delete("/api/cd/notas/:id/etiquetas/:lid", cdAuth, handle((req) => cd.removerLoteEtiquetas(req.access, nid(req), Number(req.params.lid))));
 app.put("/api/cd/notas/:id/ranking", cdAuth, handle((req) => cd.definirRanking(req.access, nid(req), (req.body || {}).ranking)));
-// NFs de saída do faturamento: um arquivo por chamada (o navegador envia vários em fila). O corpo leva o arquivo em base64.
-app.post("/api/cd/notas/:id/nfs-saida", cdAuth, express.json({ limit: "7mb" }), handle((req) => cd.enviarNfSaida(req.access, nid(req), req.body || {})));
-app.put("/api/cd/notas/:id/nfs-saida/:sid", cdAuth, handle((req) => cd.editarNfSaida(req.access, nid(req), Number(req.params.sid), req.body || {})));
-app.delete("/api/cd/notas/:id/nfs-saida/:sid", cdAuth, handle((req) => cd.removerNfSaida(req.access, nid(req), Number(req.params.sid))));
-app.get("/api/cd/notas/:id/nfs-saida/:sid/arquivo", cdAuth, async (req, res) => {
+// ---- Faturamento e trânsito (aba própria: NFs de saída, tabelas das transportadoras, coleta, entrega) ----
+const trn = require("./cd/transito");
+const T = "/api/cd/transito";
+const grande = express.json({ limit: "7mb" });
+const grandeTabela = express.json({ limit: "25mb" });
+app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, uf: req.query.uf })));
+app.get(T + "/resumo", cdAuth, handle((req) => trn.resumo(req.access)));
+app.get(T + "/nfs", cdAuth, handle((req) => trn.listarNfs(req.access, req.query)));
+app.post(T + "/nfs", cdAuth, grande, handle((req) => trn.enviarNf(req.access, req.body || {})));
+app.post(T + "/nfs/transportadora", cdAuth, handle((req) => trn.definirTransportadora(req.access, req.body || {})));
+app.post(T + "/nfs/coleta", cdAuth, handle((req) => trn.marcarColeta(req.access, req.body || {})));
+app.post(T + "/nfs/entrega", cdAuth, handle((req) => trn.marcarEntregue(req.access, req.body || {})));
+app.get(T + "/nfs/:id", cdAuth, handle((req) => trn.detalheNf(req.access, nid(req))));
+app.put(T + "/nfs/:id", cdAuth, handle((req) => trn.editarNf(req.access, nid(req), req.body || {})));
+app.post(T + "/nfs/:id/voltar", cdAuth, handle((req) => trn.voltarStatus(req.access, nid(req), req.body || {})));
+app.delete(T + "/nfs/:id", cdAuth, handle((req) => trn.cancelarNf(req.access, nid(req), req.body || {})));
+app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
   try {
-    const f = await cd.baixarNfSaida(req.access, nid(req), Number(req.params.sid));
+    const f = await trn.baixarArquivo(req.access, nid(req));
     res.set({ "Content-Type": f.tipo === "pdf" ? "application/pdf" : "application/xml", "Content-Disposition": `attachment; filename="${String(f.nome).replace(/[^\w.\- ]/g, "_")}"` });
     res.send(f.conteudo);
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
+app.get(T + "/transportadoras", cdAuth, handle((req) => trn.listarTransportadoras(req.access)));
+app.post(T + "/transportadoras", cdAuth, handle((req) => trn.salvarTransportadora(req.access, null, req.body || {})));
+app.put(T + "/transportadoras/:id", cdAuth, handle((req) => trn.salvarTransportadora(req.access, nid(req), req.body || {})));
+app.post(T + "/transportadoras/:id/tabela", cdAuth, grandeTabela, handle((req) => trn.importarTabela(req.access, nid(req), req.body || {})));
+app.get(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.verTabela(req.access, nid(req), { uf: req.query.uf })));
+app.delete(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.limparTabela(req.access, nid(req))));
+app.post(T + "/simular", cdAuth, handle((req) => trn.simular(req.access, req.body || {})));
 app.post("/api/cd/notas/:id/etapas/:n/reabrir", cdAuth, handle((req) => cd.reabrirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).motivo)));
 app.post("/api/cd/notas/:id/cancelar", cdAuth, handle((req) => cd.cancelarNota(req.access, nid(req), (req.body || {}).motivo)));
 app.post("/api/cd/notas/:id/comentarios", cdAuth, handle((req) => cd.comentar(req.access, nid(req), (req.body || {}).texto, (req.body || {}).etapa)));
