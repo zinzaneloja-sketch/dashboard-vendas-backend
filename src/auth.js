@@ -25,11 +25,20 @@ async function findUserByEmail(email) {
 }
 
 const MODULES = ["vendas", "cd"];
-const CD_PERFIS = ["doca", "estilo", "cadastro", "expedicao", "gestor"];
+// Cada etapa do CD é uma mesa (um login por etapa). "gestor" é o consolidado: enxerga tudo.
+const CD_PERFIS = ["recebimento", "separacao", "contagem", "referencia", "etiquetas", "pedido", "entrada", "checkout", "confronto", "distribuicao", "picking", "faturamento", "gestor"];
+// Perfis agrupados do modelo antigo: viram as mesas equivalentes (ninguém perde acesso).
+const CD_PERFIS_LEGADO = {
+  doca: ["recebimento", "separacao", "contagem"],
+  estilo: ["referencia"],
+  cadastro: ["etiquetas", "pedido", "entrada", "checkout", "confronto"],
+  expedicao: ["distribuicao", "picking", "faturamento"],
+};
+const expandirPerfis = (arr) => [...new Set((arr || []).flatMap((x) => CD_PERFIS_LEGADO[x] || [x]))];
 
 function sanitizeAccess({ modules, cd_perfis }) {
   const m = Array.isArray(modules) ? [...new Set(modules.filter((x) => MODULES.includes(x)))] : ["vendas"];
-  const p = Array.isArray(cd_perfis) ? [...new Set(cd_perfis.filter((x) => CD_PERFIS.includes(x)))] : [];
+  const p = Array.isArray(cd_perfis) ? [...new Set(expandirPerfis(cd_perfis).filter((x) => CD_PERFIS.includes(x)))] : [];
   // Perfil do CD sem acesso ao modulo nao faz sentido: libera o modulo automaticamente.
   if (p.length && !m.includes("cd")) m.push("cd");
   return { modules: m, cd_perfis: p };
@@ -76,7 +85,7 @@ async function loadAccess(userId) {
     nome: u.nome,
     role: u.role,
     modules: admin ? MODULES.slice() : u.modules || [],
-    cd_perfis: admin ? CD_PERFIS.slice() : u.cd_perfis || [],
+    cd_perfis: admin ? CD_PERFIS.slice() : expandirPerfis(u.cd_perfis),
   };
 }
 
