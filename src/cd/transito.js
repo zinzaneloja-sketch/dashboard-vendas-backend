@@ -173,10 +173,12 @@ async function salvarTransportadora(acc, id, b = {}) {
     if (id) {
       const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa) WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa]);
       if (!rows[0]) throw erro(404, "Transportadora não encontrada.");
-      return { ok: true, id: Number(id) };
+      const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
+      return { ok: true, id: Number(id), vinculadas: rl.vinculadas };
     }
     const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos) VALUES ($1,$2,$3) RETURNING id", [nome, opt(txt(b.cnpj)), corr]);
-    return { ok: true, id: Number(rows[0].id) };
+    const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
+    return { ok: true, id: Number(rows[0].id), vinculadas: rl.vinculadas };
   } catch (e) {
     if (e.code === "23505") throw erro(409, "Já existe uma transportadora com esse nome.");
     throw e;
@@ -248,7 +250,7 @@ async function simular(acc, b = {}) {
 
 // ---------- NFs de saída ----------
 const COLS_LISTA = `n.id::int AS id, n.tipo, n.arquivo_nome, n.numero, n.serie, n.chave, n.emitida_em, n.destino_nome, n.destino_cnpj, n.destino_uf, n.destino_cidade, n.destino_cep,
-  n.volumes, n.peso_kg::float AS peso_kg, n.valor::float AS valor, n.pecas, n.transportadora_xml, n.transportadora_id::int AS transportadora_id, t.nome AS transportadora, t.prazo_corridos,
+  n.volumes, n.peso_kg::float AS peso_kg, n.valor::float AS valor, n.pecas, n.transportadora_xml, n.transportadora_cnpj, n.transportadora_id::int AS transportadora_id, t.nome AS transportadora, t.prazo_corridos,
   n.frete_previsto::float AS frete_previsto, n.frete_real::float AS frete_real, n.prazo_dias, n.prazo_manual, n.status, n.coleta_data, n.previsao_entrega, n.entregue_data, n.entregue_por, n.recebido_por, n.obs, n.enviada_por, n.enviada_em`;
 
 // situação calculada: aguardando coleta, no prazo, vence hoje, atrasada, entregue (no prazo ou atrasada)
@@ -343,6 +345,92 @@ async function acharTransportadoraXml(db, nome, cnpj) {
   return null;
 }
 
+// Liga às transportadoras cadastradas as NFs que ainda não têm transportadora e cujo nome/CNPJ lido na nota bate com uma delas.
+async function religarNfs(db) {
+  const { rows: grupos } = await db.query(
+    `SELECT transportadora_xml AS nome, coalesce(transportadora_cnpj,'') AS cnpj FROM cd_fat_nfs
+      WHERE transportadora_id IS NULL AND status <> 'cancelada' AND (coalesce(transportadora_xml,'') <> '' OR coalesce(transportadora_cnpj,'') <> '') GROUP BY 1, 2`);
+  let vinculadas = 0;
+  for (const g of grupos) {
+    const tid = await acharTransportadoraXml(db, g.nome, g.cnpj);
+    if (!tid) continue;
+    const { rows } = await db.query(
+      `UPDATE cd_fat_nfs SET transportadora_id = $1, atualizada_em = now()
+        WHERE transportadora_id IS NULL AND status <> 'cancelada' AND coalesce(transportadora_xml,'') = coalesce($2,'') AND coalesce(transportadora_cnpj,'') = $3 RETURNING id, status`,
+      [tid, g.nome || null, g.cnpj]);
+    for (const r of rows) { if (r.status !== "entregue") await recalcular(db, Number(r.id)).catch(() => {}); vinculadas++; }
+  }
+  return { vinculadas };
+}
+
+// Transportadoras que vieram escritas nas notas e ainda não estão ligadas a nenhuma cadastrada.
+async function transportadorasLidas(acc) {
+  exigirFat(acc);
+  await religarNfs(pool);
+  const { rows } = await pool.query(
+    `SELECT coalesce(transportadora_xml,'') AS nome, coalesce(transportadora_cnpj,'') AS cnpj, count(*)::int AS qtd
+       FROM cd_fat_nfs WHERE transportadora_id IS NULL AND status <> 'cancelada' AND (coalesce(transportadora_xml,'') <> '' OR coalesce(transportadora_cnpj,'') <> '')
+      GROUP BY 1, 2 ORDER BY qtd DESC, nome`);
+  const { rows: sem } = await pool.query("SELECT count(*)::int AS n FROM cd_fat_nfs WHERE transportadora_id IS NULL AND status <> 'cancelada' AND coalesce(transportadora_xml,'') = '' AND coalesce(transportadora_cnpj,'') = ''");
+  return { lidas: rows, sem_leitura: sem[0].n };
+}
+
+// itens: [{nome, cnpj, transportadora_id?}] — sem transportadora_id cadastra uma nova com o nome lido; com id liga à existente
+// (e, se ela ainda não tem CNPJ, guarda o lido para as próximas notas casarem sozinhas).
+async function vincularLidas(acc, b = {}) {
+  exigirFat(acc);
+  const itens = Array.isArray(b.itens) ? b.itens.slice(0, 100) : [];
+  return comTransacao(async (c) => {
+    let criadas = 0, ligadas = 0;
+    for (const it of itens) {
+      const nome = txt(it.nome).slice(0, 80), cnpj = txt(it.cnpj).replace(/\D/g, "").slice(0, 14);
+      if (!nome && !cnpj) continue;
+      let tid = it.transportadora_id ? Number(it.transportadora_id) : null;
+      if (tid) {
+        const { rows } = await c.query("SELECT id, cnpj FROM cd_transportadoras WHERE id = $1", [tid]);
+        if (!rows[0]) throw erro(404, "Transportadora escolhida não existe.");
+        if (cnpj && !String(rows[0].cnpj || "").replace(/\D/g, "")) await c.query("UPDATE cd_transportadoras SET cnpj = $2 WHERE id = $1", [tid, cnpj]);
+      } else {
+        if (nome.length < 2) continue;
+        const { rows } = await c.query(
+          `INSERT INTO cd_transportadoras (nome, cnpj) VALUES ($1,$2)
+             ON CONFLICT (lower(nome)) DO UPDATE SET ativa = true, cnpj = coalesce(cd_transportadoras.cnpj, EXCLUDED.cnpj) RETURNING id, (xmax = 0) AS nova`, [nome, cnpj || null]);
+        tid = Number(rows[0].id); if (rows[0].nova) criadas++;
+      }
+      const { rows: up } = await c.query(
+        `UPDATE cd_fat_nfs SET transportadora_id = $1, atualizada_em = now()
+          WHERE transportadora_id IS NULL AND status <> 'cancelada' AND coalesce(transportadora_xml,'') = $2 AND coalesce(transportadora_cnpj,'') = $3 RETURNING id, status`, [tid, nome, cnpj]);
+      for (const r of up) { if (r.status !== "entregue") await recalcular(c, Number(r.id)).catch(() => {}); ligadas++; }
+      if (up.length) await c.query("INSERT INTO cd_fat_eventos (nfs_id, tipo, usuario, detalhe) SELECT id, 'transportadora', $2, $3::jsonb FROM cd_fat_nfs WHERE id = ANY($1)", [up.map((r) => Number(r.id)), acc.email, JSON.stringify({ transportadora_id: tid, origem: "lida na NF", lida: nome || cnpj })]);
+    }
+    const rl = await religarNfs(c);
+    return { ok: true, criadas, vinculadas: ligadas + rl.vinculadas };
+  });
+}
+
+// Exclui de vez NFs de saída anexadas (arquivo, dados e histórico); guarda só um registro de quem excluiu.
+// Mesa de faturamento exclui o que ainda não foi coletado; depois disso só o consolidado (gestor).
+async function excluirNfs(acc, b = {}) {
+  exigirFat(acc);
+  const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Boolean))];
+  if (!ids.length) throw erro(400, "Selecione ao menos uma NF.");
+  if (ids.length > 500) throw erro(400, "Selecione no máximo 500 NFs por vez.");
+  const motivo = txt(b.motivo).slice(0, 300) || null;
+  return comTransacao(async (c) => {
+    const res = []; let n = 0;
+    for (const id of ids) {
+      const { rows } = await c.query("SELECT id, numero, serie, chave, destino_nome, status, arquivo_nome FROM cd_fat_nfs WHERE id = $1 FOR UPDATE", [id]);
+      const x = rows[0];
+      if (!x) { res.push({ id, ok: false, motivo: "NF não encontrada (talvez já excluída)." }); continue; }
+      if (x.status !== "emitida" && x.status !== "cancelada" && !ehGestor(acc)) { res.push({ id, numero: x.numero, ok: false, motivo: "Já foi coletada/entregue: só o consolidado (gestor) exclui." }); continue; }
+      await c.query("INSERT INTO cd_fat_excluidas (nfs_id, numero, serie, chave, destino, status, arquivo_nome, motivo, excluida_por) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [x.id, x.numero, x.serie, x.chave, x.destino_nome, x.status, x.arquivo_nome, motivo, acc.email]);
+      await c.query("DELETE FROM cd_fat_nfs WHERE id = $1", [id]);
+      res.push({ id, numero: x.numero, ok: true }); n++;
+    }
+    return { ok: true, excluidas: n, resultados: res };
+  });
+}
+
 // Um arquivo por chamada (o navegador envia vários em fila). O corpo leva o arquivo em base64.
 async function enviarNf(acc, b = {}) {
   exigirFat(acc);
@@ -378,10 +466,10 @@ async function enviarNf(acc, b = {}) {
     }
     const tid = await acharTransportadoraXml(c, m.transportadora_xml, m.transportadora_cnpj);
     const { rows } = await c.query(
-      `INSERT INTO cd_fat_nfs (tipo, arquivo_nome, tamanho, numero, serie, chave, emitida_em, destino_nome, destino_cnpj, destino_uf, destino_cidade, destino_cep, volumes, peso_kg, valor, pecas, transportadora_xml, transportadora_id, enviada_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+      `INSERT INTO cd_fat_nfs (tipo, arquivo_nome, tamanho, numero, serie, chave, emitida_em, destino_nome, destino_cnpj, destino_uf, destino_cidade, destino_cep, volumes, peso_kg, valor, pecas, transportadora_xml, transportadora_cnpj, transportadora_id, enviada_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
       [tipo, nome, buf.length, m.numero || null, m.serie || null, m.chave || null, m.emitida_em || null, m.destino_nome || null, m.destino_cnpj || null, m.destino_uf || null, m.destino_cidade || null, m.destino_cep || null,
-        m.volumes ?? null, m.peso_kg ?? null, m.valor ?? null, m.pecas ?? null, m.transportadora_xml || null, tid, acc.email]);
+        m.volumes ?? null, m.peso_kg ?? null, m.valor ?? null, m.pecas ?? null, m.transportadora_xml || null, m.transportadora_cnpj || null, tid, acc.email]);
     const id = Number(rows[0].id);
     await c.query("INSERT INTO cd_fat_nfs_arq (nfs_id, conteudo) VALUES ($1,$2)", [id, buf]);
     await evento(c, id, "enviada", acc.email, { arquivo: nome, tipo, numero: m.numero || null, destino: m.destino_nome || null, uf: m.destino_uf || null, pecas: m.pecas ?? null, volumes: m.volumes ?? null, peso_kg: m.peso_kg ?? null, valor: m.valor ?? null });
@@ -629,5 +717,5 @@ async function resumo(acc) {
 module.exports = {
   lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
-  listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, baixarArquivo, quadro, resumo,
+  listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
 };
