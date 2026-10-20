@@ -290,6 +290,62 @@ CREATE TABLE IF NOT EXISTS cd_meta (
   valor               TEXT,
   criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Posicao na fila de prioridade informada na entrada da NF (1 = primeira a ser atendida)
+ALTER TABLE cd_notas ADD COLUMN IF NOT EXISTS ranking INTEGER;
+
+-- Cada recontagem da etapa de contagem: quem recontou, qual tentativa, quanto deu
+CREATE TABLE IF NOT EXISTS cd_recontagens (
+  id              BIGSERIAL PRIMARY KEY,
+  nota_id         BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  tentativa       INTEGER NOT NULL,
+  por             TEXT NOT NULL,
+  registrado_por  TEXT NOT NULL,
+  metodo          TEXT NOT NULL,
+  total           INTEGER NOT NULL,
+  contado         INTEGER,
+  esperado        INTEGER,
+  contadores      TEXT[] NOT NULL DEFAULT '{}',
+  obs             TEXT,
+  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_recontagens_nota_idx ON cd_recontagens (nota_id, tentativa);
+
+-- Lotes de etiquetas: a etiquetagem corre em paralelo com a contagem, lote a lote
+CREATE TABLE IF NOT EXISTS cd_etiquetas_lotes (
+  id              BIGSERIAL PRIMARY KEY,
+  nota_id         BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  qtd             INTEGER NOT NULL,
+  por             TEXT NOT NULL,
+  registrado_por  TEXT NOT NULL,
+  obs             TEXT,
+  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_etiquetas_lotes_nota_idx ON cd_etiquetas_lotes (nota_id, criado_em);
+
+-- NFs de saida (uma entrada pode gerar dezenas, uma por loja). O arquivo fica em tabela a parte.
+CREATE TABLE IF NOT EXISTS cd_nfs_saida (
+  id              BIGSERIAL PRIMARY KEY,
+  nota_id         BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
+  tipo            TEXT NOT NULL,           -- xml | pdf
+  arquivo_nome    TEXT NOT NULL,
+  tamanho         INTEGER NOT NULL DEFAULT 0,
+  numero          TEXT,
+  serie           TEXT,
+  chave           TEXT,
+  destino_nome    TEXT,
+  destino_cnpj    TEXT,
+  pecas           INTEGER,
+  valor           NUMERIC(14,2),
+  enviada_por     TEXT NOT NULL,
+  enviada_em      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_nfs_saida_nota_idx ON cd_nfs_saida (nota_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS cd_nfs_saida_chave_uq ON cd_nfs_saida (chave) WHERE chave IS NOT NULL;
+CREATE TABLE IF NOT EXISTS cd_nfs_saida_arq (
+  nfs_id          BIGINT PRIMARY KEY REFERENCES cd_nfs_saida(id) ON DELETE CASCADE,
+  conteudo        BYTEA NOT NULL
+);
 `;
 
 // Migracao unica: o processo tinha 15 etapas (2 = abertura dos fardos, 3 = separacao). Como as duas
@@ -389,6 +445,45 @@ async function migrarEtapas12() {
   }
 }
 
+// Mesas: cada etapa e um perfil. Os perfis agrupados antigos viram as mesas equivalentes (ninguem perde acesso).
+async function migrarMesas() {
+  const r = await pool.query(
+    `UPDATE users SET cd_perfis = (
+       SELECT COALESCE(array_agg(DISTINCT x), '{}') FROM (
+         SELECT unnest(CASE p
+           WHEN 'doca' THEN ARRAY['recebimento','separacao','contagem']
+           WHEN 'estilo' THEN ARRAY['referencia']
+           WHEN 'cadastro' THEN ARRAY['etiquetas','pedido','entrada','checkout','confronto']
+           WHEN 'expedicao' THEN ARRAY['distribuicao','picking','faturamento']
+           ELSE ARRAY[p] END) AS x
+         FROM unnest(cd_perfis) AS p) q)
+     WHERE cd_perfis && ARRAY['doca','estilo','cadastro','expedicao']`);
+  if (r.rowCount) console.log("[migrate] Perfis do CD convertidos para mesas (" + r.rowCount + " usuario(s)).");
+}
+
+// Contagem, referencia e etiquetas rodam em paralelo: notas que ja estavam na frente liberam as etapas seguintes da frente.
+async function migrarParalela() {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock(7003)");
+    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'paralela_v1'");
+    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
+    await c.query(
+      `UPDATE cd_nota_etapas e SET liberada_em = now()
+         FROM cd_notas n
+        WHERE e.nota_id = n.id AND n.status = 'aberta' AND e.status = 'pendente' AND e.liberada_em IS NULL
+          AND e.etapa IN (3, 4, 5) AND n.etapa_atual BETWEEN 3 AND 5`);
+    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('paralela_v1', 'ok')");
+    await c.query("COMMIT");
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 // Garante que o admin master exista. Se ADMIN_PASSWORD não vier configurada,
 // gera uma senha aleatória e a imprime UMA vez nos logs do deploy, para que
 // o dono da conta consiga recuperá-la ali (nunca fica salva em texto puro).
@@ -438,6 +533,8 @@ async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
   await migrarEtapas12();
+  await migrarMesas();
+  await migrarParalela();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
