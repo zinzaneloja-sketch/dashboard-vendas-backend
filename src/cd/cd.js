@@ -472,15 +472,6 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = [], ext = {
       if (d.pecas_embaladas !== undefined && d.pecas_embaladas !== "") compara(def.trava, TRAVAS[def.trava], Number(e13.total_distribuido), Number(d.pecas_embaladas));
       break;
     }
-    case "faturamento_vs_picking": {
-      const sd = ext.saidas || [];
-      if (!sd.length && !txt(d.numero_nf_saida)) erros.push("Envie ao menos uma NF de saída (XML ou PDF).");
-      const sem = sd.filter((x) => x.pecas === null || x.pecas === undefined || !txt(x.destino_nome));
-      if (sem.length) erros.push(`Complete a loja e as peças de ${sem.length} NF(s) de saída: ${sem.slice(0, 4).map((x) => x.numero || x.arquivo_nome).join(", ")}${sem.length > 4 ? "…" : ""}.`);
-      const pick = Number(((etapasPorN[numeroDe("picking")] || {}).dados || {}).pecas_embaladas);
-      if (sd.length && !sem.length && Number.isFinite(pick)) compara(def.trava, TRAVAS[def.trava], pick, sd.reduce((a, x) => a + Number(x.pecas), 0));
-      break;
-    }
     default:
   }
 
@@ -512,12 +503,11 @@ async function carregarEstado(db, notaId) {
 
 // Registros que moram em tabelas próprias: recontagens, lotes de etiqueta e NFs de saída.
 async function carregarExtras(db, notaId) {
-  const [{ rows: recontagens }, { rows: lotes }, { rows: saidas }] = await Promise.all([
+  const [{ rows: recontagens }, { rows: lotes }] = await Promise.all([
     db.query("SELECT * FROM cd_recontagens WHERE nota_id = $1 ORDER BY tentativa, id", [notaId]),
     db.query("SELECT * FROM cd_etiquetas_lotes WHERE nota_id = $1 ORDER BY criado_em, id", [notaId]),
-    db.query("SELECT id, tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor::float AS valor, enviada_por, enviada_em FROM cd_nfs_saida WHERE nota_id = $1 ORDER BY id", [notaId]),
   ]);
-  return { recontagens, lotes: { n: lotes.length, total: lotes.reduce((a, l) => a + l.qtd, 0), itens: lotes }, saidas };
+  return { recontagens, lotes: { n: lotes.length, total: lotes.reduce((a, l) => a + l.qtd, 0), itens: lotes } };
 }
 
 async function conferirEtapa(acc, notaId, n, dados) {
@@ -563,13 +553,6 @@ async function concluirEtapa(acc, notaId, n, dados = {}) {
     if (def.chave === "etiquetas") {
       if (ext.lotes.n > 0) Object.assign(limpo, { etiquetas_impressas: ext.lotes.total, lotes_etiquetas: ext.lotes.n });
       else if (dados.etiquetas_impressas !== undefined && dados.etiquetas_impressas !== "") limpo.etiquetas_impressas = Number(dados.etiquetas_impressas);
-    }
-    if (def.chave === "faturamento" && ext.saidas.length) {
-      Object.assign(limpo, {
-        nfs_saida: ext.saidas.length, lojas_atendidas: new Set(ext.saidas.map((x) => txt(x.destino_cnpj) || txt(x.destino_nome).toLowerCase())).size,
-        pecas_nfs_saida: ext.saidas.reduce((a, x) => a + (Number(x.pecas) || 0), 0),
-      });
-      if (dados.numero_nf_saida) limpo.numero_nf_saida = txt(dados.numero_nf_saida);
     }
 
     const av = avaliarEtapa(def, nota, st.itens, st.porN, limpo, st.nfItens, ext);
@@ -738,125 +721,6 @@ async function definirRanking(acc, notaId, ranking) {
   });
 }
 
-// ---------- NFs de saída (faturamento) ----------
-const tagXml = (src, t) => { const m = String(src || "").match(new RegExp(`<${t}(?:\\s[^>]*)?>\\s*([^<]*?)\\s*</${t}>`)); return m ? m[1] : null; };
-const blocoXml = (src, t) => { const m = String(src || "").match(new RegExp(`<${t}(?:\\s[^>]*)?>([\\s\\S]*?)</${t}>`)); return m ? m[1] : null; };
-// Lê os dados que importam de uma NF-e (XML): número, série, chave, destinatário (loja), peças e valor.
-function lerXmlSaida(xml) {
-  if (!/<infNFe[\s>]/.test(xml)) return null;
-  const chave = ((xml.match(/<infNFe[^>]*\sId="NFe(\d{44})"/) || [])[1]) || tagXml(xml, "chNFe") || null;
-  const ide = blocoXml(xml, "ide"), dest = blocoXml(xml, "dest"), tot = blocoXml(xml, "ICMSTot");
-  let pecas = 0, achou = false;
-  for (const m of xml.matchAll(/<det\b[\s\S]*?<\/det>/g)) { const q = Number(String(tagXml(m[0], "qCom") || "").replace(",", ".")); if (Number.isFinite(q)) { pecas += q; achou = true; } }
-  const vNF = Number(tagXml(tot, "vNF"));
-  return {
-    numero: tagXml(ide, "nNF"), serie: tagXml(ide, "serie"), chave,
-    destino_nome: tagXml(dest, "xNome"), destino_cnpj: tagXml(dest, "CNPJ") || tagXml(dest, "CPF"),
-    pecas: achou ? Math.round(pecas) : null, valor: Number.isFinite(vNF) ? vNF : null,
-  };
-}
-
-async function enviarNfSaida(acc, notaId, b = {}) {
-  const def = etapaPorNumero(numeroDe("faturamento"));
-  const nome = txt(b.nome).slice(0, 200) || "arquivo";
-  let buf;
-  try { buf = Buffer.from(String(b.base64 || ""), "base64"); } catch (e) { buf = Buffer.alloc(0); }
-  if (!buf.length) throw erro(400, "Arquivo vazio.");
-  if (buf.length > 4 * 1024 * 1024) throw erro(413, `${nome}: arquivo maior que 4 MB.`);
-  const ehPdf = buf.slice(0, 5).toString("latin1") === "%PDF-";
-  const textoIni = buf.slice(0, 200).toString("utf8");
-  const ehXml = !ehPdf && /^\s*(<\?xml|<)/.test(textoIni);
-  if (!ehPdf && !ehXml) throw erro(422, `${nome}: envie o XML ou o PDF da NF.`);
-  let m = { numero: null, serie: null, chave: null, destino_nome: null, destino_cnpj: null, pecas: null, valor: null };
-  if (ehXml) {
-    const lido = lerXmlSaida(buf.toString("utf8"));
-    if (!lido) throw erro(422, `${nome}: esse XML não parece uma NF-e (não achei <infNFe>).`);
-    m = lido;
-  } else {
-    // no PDF a leitura é do navegador (chave, número, série); loja e peças a pessoa confere na tela
-    const chave = txt(b.chave).replace(/\s+/g, "");
-    m = {
-      numero: txt(b.numero) || null, serie: txt(b.serie) || null, chave: /^\d{44}$/.test(chave) ? chave : null, destino_nome: txt(b.destino_nome) || null,
-      destino_cnpj: txt(b.destino_cnpj).replace(/\D/g, "") || null, pecas: b.pecas === "" || b.pecas === undefined || b.pecas === null ? null : Number(b.pecas), valor: b.valor === "" || b.valor === undefined || b.valor === null ? null : Number(b.valor),
-    };
-    if (m.pecas !== null && (!Number.isInteger(m.pecas) || m.pecas < 0)) m.pecas = null;
-    if (m.valor !== null && !Number.isFinite(m.valor)) m.valor = null;
-  }
-  return comTransacao(async (c) => {
-    const nota = await travarNota(c, notaId);
-    if (!podeAtuar(acc, def)) throw erro(403, `O faturamento é da mesa "${PERFIS[def.perfil]}".`);
-    const { rows: l } = await c.query("SELECT * FROM cd_nota_etapas WHERE nota_id = $1 AND etapa = $2", [notaId, def.n]);
-    exigirDisponivel(nota, def, l[0], "enviar NFs de saída na");
-    if (l[0].status !== "em_andamento") throw erro(409, "Inicie o faturamento antes de enviar as NFs.");
-    if (m.chave) {
-      const { rows: dup } = await c.query("SELECT nota_id, numero FROM cd_nfs_saida WHERE chave = $1", [m.chave]);
-      if (dup[0]) throw erro(409, `${nome}: essa NF (${dup[0].numero || m.chave}) já foi enviada${String(dup[0].nota_id) === String(notaId) ? " nesta nota" : " em outra nota"}.`);
-    }
-    const { rows } = await c.query(
-      `INSERT INTO cd_nfs_saida (nota_id, tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor, enviada_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor::float AS valor, enviada_por, enviada_em`,
-      [notaId, ehPdf ? "pdf" : "xml", nome, buf.length, m.numero, m.serie, m.chave, m.destino_nome, m.destino_cnpj, m.pecas, m.valor, acc.email]);
-    await c.query("INSERT INTO cd_nfs_saida_arq (nfs_id, conteudo) VALUES ($1,$2)", [rows[0].id, buf]);
-    await evento(c, notaId, def.n, "nf_saida_enviada", acc.email, { id: rows[0].id, arquivo: nome, tipo: rows[0].tipo, numero: m.numero, destino: m.destino_nome, pecas: m.pecas });
-    return { ok: true, nf: rows[0] };
-  });
-}
-
-async function editarNfSaida(acc, notaId, sid, b = {}) {
-  const def = etapaPorNumero(numeroDe("faturamento"));
-  return comTransacao(async (c) => {
-    const nota = await travarNota(c, notaId);
-    if (!podeAtuar(acc, def)) throw erro(403, `O faturamento é da mesa "${PERFIS[def.perfil]}".`);
-    const { rows: l } = await c.query("SELECT * FROM cd_nota_etapas WHERE nota_id = $1 AND etapa = $2", [notaId, def.n]);
-    exigirDisponivel(nota, def, l[0], "corrigir NFs de saída na");
-    const { rows: cur } = await c.query("SELECT * FROM cd_nfs_saida WHERE id = $1 AND nota_id = $2", [sid, notaId]);
-    if (!cur[0]) throw erro(404, "NF de saída não encontrada.");
-    const sets = [], vals = [], mud = [];
-    const set = (col, v, antes) => { vals.push(v); sets.push(`${col} = $${vals.length}`); mud.push({ campo: col, de: antes ?? null, para: v }); };
-    if ("destino_nome" in b) { const v = txt(b.destino_nome).slice(0, 120) || null; if (v !== cur[0].destino_nome) set("destino_nome", v, cur[0].destino_nome); }
-    if ("destino_cnpj" in b) { const v = txt(b.destino_cnpj).replace(/\D/g, "") || null; if (v !== cur[0].destino_cnpj) set("destino_cnpj", v, cur[0].destino_cnpj); }
-    if ("numero" in b) { const v = txt(b.numero).slice(0, 20) || null; if (v !== cur[0].numero) set("numero", v, cur[0].numero); }
-    if ("serie" in b) { const v = txt(b.serie).slice(0, 10) || null; if (v !== cur[0].serie) set("serie", v, cur[0].serie); }
-    if ("pecas" in b) {
-      const v = b.pecas === "" || b.pecas === null ? null : inteiro(b.pecas, "Peças");
-      if (v !== cur[0].pecas) set("pecas", v, cur[0].pecas);
-    }
-    if ("valor" in b) {
-      const v = b.valor === "" || b.valor === null ? null : Number(b.valor);
-      if (v !== null && (!Number.isFinite(v) || v < 0)) throw erro(400, "Valor da NF inválido.");
-      if (v !== (cur[0].valor === null ? null : Number(cur[0].valor))) set("valor", v, cur[0].valor);
-    }
-    if (!sets.length) return { ok: true };
-    vals.push(sid);
-    await c.query(`UPDATE cd_nfs_saida SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
-    await evento(c, notaId, def.n, "nf_saida_editada", acc.email, { id: Number(sid), numero: cur[0].numero, mudancas: mud });
-    return { ok: true };
-  });
-}
-
-async function removerNfSaida(acc, notaId, sid) {
-  const def = etapaPorNumero(numeroDe("faturamento"));
-  return comTransacao(async (c) => {
-    const nota = await travarNota(c, notaId);
-    if (!podeAtuar(acc, def)) throw erro(403, `O faturamento é da mesa "${PERFIS[def.perfil]}".`);
-    const { rows: l } = await c.query("SELECT * FROM cd_nota_etapas WHERE nota_id = $1 AND etapa = $2", [notaId, def.n]);
-    exigirDisponivel(nota, def, l[0], "remover NFs de saída na");
-    const { rows } = await c.query("DELETE FROM cd_nfs_saida WHERE id = $1 AND nota_id = $2 RETURNING numero, arquivo_nome, destino_nome", [sid, notaId]);
-    if (!rows[0]) throw erro(404, "NF de saída não encontrada.");
-    await evento(c, notaId, def.n, "nf_saida_removida", acc.email, { id: Number(sid), numero: rows[0].numero, arquivo: rows[0].arquivo_nome, destino: rows[0].destino_nome });
-    return { ok: true };
-  });
-}
-
-async function baixarNfSaida(acc, notaId, sid) {
-  const def = etapaPorNumero(numeroDe("faturamento"));
-  if (!podeAtuar(acc, def)) throw erro(403, "O arquivo da NF de saída é do faturamento e do consolidado.");
-  const { rows } = await pool.query(
-    "SELECT s.arquivo_nome, s.tipo, a.conteudo FROM cd_nfs_saida s JOIN cd_nfs_saida_arq a ON a.nfs_id = s.id WHERE s.id = $1 AND s.nota_id = $2", [sid, notaId]);
-  if (!rows[0]) throw erro(404, "NF de saída não encontrada.");
-  return { nome: rows[0].arquivo_nome, tipo: rows[0].tipo, conteudo: rows[0].conteudo };
-}
-
 // ---------- reabrir ----------
 async function reabrirEtapa(acc, notaId, n, motivo) {
   if (!ehGestor(acc)) throw erro(403, "Somente o consolidado (gestor) pode reabrir uma etapa.");
@@ -1008,14 +872,12 @@ async function detalheNota(acc, notaId) {
   }
   const verRecont = gestor || acc.cd_perfis.includes("contagem");
   const verEtiq = gestor || acc.cd_perfis.includes("etiquetas");
-  const verSaidas = gestor || acc.cd_perfis.includes("faturamento");
   const disponivelEtiq = Math.max(0, st.itens.filter((i) => i.qtd_contada !== null && txt(i.ref_zinzane)).reduce((a, i) => a + i.qtd_contada, 0) - ext.lotes.total);
   const ativas = etapas.filter((e) => e.ativa).map((e) => e.n);
   return {
     nota: notaOut, etapas, itens, itens_nf: nfItens, eventos, conferencia: conferencias[nota.etapa_atual] || null, conferencias,
     recontagens: verRecont ? ext.recontagens : [],
     etiquetas: verEtiq ? { lotes: ext.lotes.itens, total: ext.lotes.total, disponivel: disponivelEtiq, contado_com_ref: st.itens.filter((i) => i.qtd_contada !== null && txt(i.ref_zinzane)).reduce((a, i) => a + i.qtd_contada, 0) } : null,
-    saidas: verSaidas ? ext.saidas : [],
     tempo_total_min: minutosUteis(nota.criada_em, nota.concluida_em || agora),
     etapas_ativas: ativas,
     permissoes: {
@@ -1178,5 +1040,4 @@ module.exports = {
   configPublica, salvarConfigEtapas, criarNota, iniciarEtapa, salvarItens, conferirEtapa, concluirEtapa, reabrirEtapa, cancelarNota,
   comentar, listarNotas, detalheNota, painel, gargalos, listarCores, criarCor, fornecedores,
   registrarRecontagem, registrarLoteEtiquetas, removerLoteEtiquetas, definirRanking,
-  enviarNfSaida, editarNfSaida, removerNfSaida, baixarNfSaida, lerXmlSaida,
 };
