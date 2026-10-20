@@ -430,7 +430,7 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = [], ext = {
         const linhas = itens.filter((i) => chaveRef(i.ref_fornecedor) === chaveRef(p.codigo));
         if (!linhas.length || linhas.some((i) => i.qtd_contada === null)) continue;
         const contado = soma(linhas, "qtd_contada");
-        if (contado !== pecasNf(p)) divergencias.push({ tipo: "contagem_produto", descricao: `${descProd(p)}: contado × NF (em peças${notaConjunto(p)})`, esperado: pecasNf(p), obtido: contado, diferenca: contado - pecasNf(p), valor_rs: valorDif(p, contado - pecasNf(p)) });
+        if (contado !== pecasNf(p)) divergencias.push({ tipo: "contagem_produto", produto: p.codigo, descricao: `${descProd(p)}: contado × NF (em peças${notaConjunto(p)})`, esperado: pecasNf(p), obtido: contado, diferenca: contado - pecasNf(p), valor_rs: valorDif(p, contado - pecasNf(p)) });
       }
       // defeito e conserto fazem parte da contagem: nunca podem passar do que foi contado na linha
       for (const i of itens) {
@@ -490,7 +490,11 @@ function avaliarEtapa(def, nota, itens, etapasPorN, dados, nfItens = [], ext = {
     if (semJust.length) erros.push(`Justifique ${semJust.length} linha(s) com diferença entre checkout e contagem.`);
     if (divergencias.length) exigeGestor = true;
   } else if (divergencias.length && txt(d.justificativa).length < 5) {
-    erros.push("Há divergência na conferência. Explique o motivo para concluir.");
+    if (def.chave === "contagem" && (ext.recontagens || []).length) {
+      const dif = soma(itens, "qtd_contada") - nota.total_pecas_nf;
+      erros.push(dif === 0 ? "Há diferença em algum produto mesmo com o total igual à NF. Escreva a observação para avançar."
+        : `Mesmo depois da recontagem a contagem está ${Math.abs(dif)} peça(s) ${dif < 0 ? "a MENOS" : "a MAIS"} que a NF. Escreva a observação da divergência para poder avançar.`);
+    } else erros.push("Há divergência na conferência. Explique o motivo para concluir.");
   }
   return { erros, divergencias, exigeGestor };
 }
@@ -637,7 +641,8 @@ async function registrarRecontagem(acc, notaId, b = {}) {
   const por = txt(b.por).slice(0, 80);
   if (por.length < 2) throw erro(400, "Informe o nome de quem fez a recontagem.");
   if (b.metodo !== "manual" && b.metodo !== "checkout") throw erro(400, "Informe se a recontagem foi manual ou pelo checkout.");
-  const total = inteiro(b.total, "Total recontado (peças)");
+  const porLinha = Array.isArray(b.itens) && b.itens.length > 0;
+  const totalInformado = porLinha ? null : inteiro(b.total, "Total recontado (peças)");
   return comTransacao(async (c) => {
     const nota = await travarNota(c, notaId);
     if (!podeAtuar(acc, def)) throw erro(403, `A recontagem é da mesa "${PERFIS[def.perfil]}".`);
@@ -649,16 +654,32 @@ async function registrarRecontagem(acc, notaId, b = {}) {
     const contado = soma(st.itens, "qtd_contada");
     const av = avaliarEtapa(def, nota, st.itens, st.porN, {}, st.nfItens, { recontagens: [{ tentativa: 0, total: contado, por: "" }] });
     if (!av.divergencias.some((x) => x.tipo === "contagem_vs_nf" || x.tipo === "contagem_produto")) throw erro(409, "A contagem confere com a NF: não há o que recontar.");
+    // recontagem por linha: cada linha escolhida recebe a quantidade recontada (fica o de → para registrado)
+    let total = totalInformado, linhas = null;
+    if (porLinha) {
+      const vistos = new Set(); linhas = [];
+      for (const r of b.itens) {
+        const it = st.itens.find((x) => Number(x.id) === Number(r.id));
+        if (!it) throw erro(400, "Uma das linhas escolhidas não pertence a esta nota.");
+        if (vistos.has(Number(it.id))) continue; vistos.add(Number(it.id));
+        const para = inteiro(r.qtd, `Quantidade recontada de ${rotulo(it)}`);
+        const sub = (Number(it.qtd_defeito) || 0) + (Number(it.qtd_conserto) || 0);
+        if (sub > para) throw erro(422, `${rotulo(it)}: defeito (${Number(it.qtd_defeito) || 0}) + conserto (${Number(it.qtd_conserto) || 0}) passam do total recontado (${para}). Ajuste defeito/conserto na linha.`);
+        linhas.push({ id: Number(it.id), rotulo: rotulo(it), de: it.qtd_contada, para });
+      }
+      total = contado + linhas.reduce((a, x) => a + (x.para - x.de), 0);
+      for (const x of linhas) if (x.para !== x.de) await c.query("UPDATE cd_nota_itens SET qtd_contada = $1 WHERE id = $2 AND nota_id = $3", [x.para, x.id, notaId]);
+    }
     const { rows: ult } = await c.query("SELECT COALESCE(MAX(tentativa), 0) AS m FROM cd_recontagens WHERE nota_id = $1", [notaId]);
     const tentativa = Number(ult[0].m) + 1;
     const contadores = [...new Set(st.itens.map((i) => txt(i.contado_por)).filter(Boolean))];
     await c.query(
-      "INSERT INTO cd_recontagens (nota_id, tentativa, por, registrado_por, metodo, total, contado, esperado, contadores, obs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-      [notaId, tentativa, por, acc.email, b.metodo, total, contado, nota.total_pecas_nf, contadores, txt(b.obs) || null]);
+      "INSERT INTO cd_recontagens (nota_id, tentativa, por, registrado_por, metodo, total, contado, esperado, contadores, obs, itens) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+      [notaId, tentativa, por, acc.email, b.metodo, total, contado, nota.total_pecas_nf, contadores, txt(b.obs) || null, linhas ? JSON.stringify(linhas) : null]);
     await evento(c, notaId, def.n, "recontagem_registrada", acc.email, {
-      tentativa, por, metodo: b.metodo, total, contado, esperado: nota.total_pecas_nf, diferenca_nf: total - nota.total_pecas_nf, contadores, ...(txt(b.obs) ? { obs: txt(b.obs) } : {}),
+      tentativa, por, metodo: b.metodo, total, contado, esperado: nota.total_pecas_nf, diferenca_nf: total - nota.total_pecas_nf, contadores, ...(linhas ? { itens: linhas } : {}), ...(txt(b.obs) ? { obs: txt(b.obs) } : {}),
     });
-    return { ok: true, tentativa, bate_com_nf: total === nota.total_pecas_nf, total, contado, esperado: nota.total_pecas_nf };
+    return { ok: true, tentativa, bate_com_nf: total === nota.total_pecas_nf, total, contado, esperado: nota.total_pecas_nf, diferenca_nf: total - nota.total_pecas_nf, itens: linhas || [] };
   });
 }
 
