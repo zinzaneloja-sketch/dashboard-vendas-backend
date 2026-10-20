@@ -330,7 +330,16 @@ async function recalcular(db, id) {
 async function acharTransportadoraXml(db, nome, cnpj) {
   const c = txt(cnpj).replace(/\D/g, "");
   if (c) { const { rows } = await db.query("SELECT id FROM cd_transportadoras WHERE regexp_replace(coalesce(cnpj,''), '\\D', '', 'g') = $1 AND ativa LIMIT 1", [c]); if (rows[0]) return Number(rows[0].id); }
-  if (txt(nome)) { const { rows } = await db.query("SELECT id FROM cd_transportadoras WHERE lower(nome) = lower($1) AND ativa LIMIT 1", [txt(nome)]); if (rows[0]) return Number(rows[0].id); }
+  if (txt(nome)) {
+    const { rows } = await db.query("SELECT id, nome FROM cd_transportadoras WHERE ativa ORDER BY nome");
+    const k = (x) => semAcento(x).replace(/[^a-z0-9]/g, "");
+    const alvo = k(nome);
+    // 1) nome igual; 2) um contém o outro (ex.: "PATRUS" x "PATRUS TRANSPORTES LTDA"), com pelo menos 4 letras
+    const igual = rows.find((r) => k(r.nome) === alvo);
+    if (igual) return Number(igual.id);
+    const parecido = rows.filter((r) => { const n = k(r.nome); return n.length >= 4 && alvo.length >= 4 && (alvo.includes(n) || n.includes(alvo)); });
+    if (parecido.length === 1) return Number(parecido[0].id);
+  }
   return null;
 }
 
@@ -349,7 +358,18 @@ async function enviarNf(acc, b = {}) {
     if (!lido) throw erro(422, `${nome}: não é um XML de NF-e (não achei <infNFe>).`);
     m = lido;
   } else {
-    m = { numero: txt(b.numero) || null, serie: txt(b.serie) || null, chave: /^\d{44}$/.test(txt(b.chave).replace(/\D/g, "")) ? txt(b.chave).replace(/\D/g, "") : null };
+    // PDF (DANFE): o navegador lê o texto de cada nota e manda os campos junto com o arquivo (cada nota já vem separada)
+    const pos = (v) => { const n = numBR(v); return n !== null && n > 0 ? n : null; };
+    const ufb = txt(b.destino_uf).toUpperCase();
+    m = {
+      numero: txt(b.numero) || null, serie: txt(b.serie) || null,
+      chave: /^\d{44}$/.test(txt(b.chave).replace(/\D/g, "")) ? txt(b.chave).replace(/\D/g, "") : null,
+      emitida_em: /^\d{4}-\d{2}-\d{2}$/.test(txt(b.emissao)) ? txt(b.emissao) + "T12:00:00-03:00" : null,
+      destino_nome: txt(b.destino_nome).slice(0, 200) || null, destino_cnpj: txt(b.destino_cnpj).replace(/\D/g, "").slice(0, 14) || null,
+      destino_uf: UFS.has(ufb) ? ufb : null, destino_cidade: txt(b.destino_cidade).slice(0, 120) || null, destino_cep: txt(b.destino_cep).replace(/\D/g, "").slice(0, 8) || null,
+      volumes: pos(b.volumes) === null ? null : Math.round(pos(b.volumes)), peso_kg: pos(b.peso_kg), valor: pos(b.valor), pecas: pos(b.pecas) === null ? null : Math.round(pos(b.pecas)),
+      transportadora_xml: txt(b.transportadora_nome).slice(0, 120) || null, transportadora_cnpj: txt(b.transportadora_cnpj).replace(/\D/g, "").slice(0, 14) || null,
+    };
   }
   return comTransacao(async (c) => {
     if (m.chave) {
