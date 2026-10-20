@@ -24,7 +24,7 @@ const PERFIS = {
   confronto: "Mesa 9 · Confronto",
   distribuicao: "Mesa 10 · Distribuição",
   picking: "Mesa 11 · Picking e pack",
-  faturamento: "Mesa 12 · Faturamento",
+  faturamento: "Mesa 12 · Faturamento e trânsito (aba própria)",
   gestor: "Consolidado (gestor)",
 };
 // Perfis antigos (agrupados) viram as mesas equivalentes: ninguém perde acesso na migração.
@@ -88,9 +88,6 @@ const ETAPAS = [
       { k: "volumes_saida", label: "Volumes de saída", tipo: "int", obrigatorio: true },
     ],
     trava: "pack_vs_distribuicao" },
-  { n: 12, chave: "faturamento", nome: "Faturamento", perfil: "faturamento", sla_exec_min: 30, sla_fila_min: 60,
-    saidas: true, trava: "faturamento_vs_picking",
-    ajuda: "Envie os XML ou PDF das NFs de saída (uma nota de entrada pode gerar dezenas de NFs, uma por loja; pode enviar vários arquivos de uma vez). O XML é lido sozinho (número, loja, peças e valor). No PDF, confira a loja e as peças. A soma das peças das NFs precisa bater com o picking." },
 ];
 
 const TRAVAS = {
@@ -100,7 +97,6 @@ const TRAVAS = {
   checkout_vs_contagem: "Checkout × contagem",
   distribuicao_vs_checkout: "Distribuído × checkout",
   pack_vs_distribuicao: "Embalado × distribuído",
-  faturamento_vs_picking: "Peças das NFs de saída × embalado no picking",
 };
 
 const ITEM_CAMPOS = {
