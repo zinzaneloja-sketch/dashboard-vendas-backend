@@ -311,6 +311,89 @@ CREATE TABLE IF NOT EXISTS cd_recontagens (
 );
 ALTER TABLE cd_recontagens ADD COLUMN IF NOT EXISTS itens JSONB;
 CREATE INDEX IF NOT EXISTS cd_recontagens_nota_idx ON cd_recontagens (nota_id, tentativa);
+-- ===== Faturamento e trânsito (aba própria, independente das notas de entrada) =====
+CREATE TABLE IF NOT EXISTS cd_transportadoras (
+  id                   BIGSERIAL PRIMARY KEY,
+  nome                 TEXT NOT NULL,
+  cnpj                 TEXT,
+  prazo_corridos       BOOLEAN NOT NULL DEFAULT false,
+  ativa                BOOLEAN NOT NULL DEFAULT true,
+  tabela_importada_em  TIMESTAMPTZ,
+  tabela_importada_por TEXT,
+  criada_em            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cd_transportadoras_nome_uq ON cd_transportadoras (lower(nome));
+CREATE TABLE IF NOT EXISTS cd_frete_tabela (
+  id               BIGSERIAL PRIMARY KEY,
+  transportadora_id BIGINT NOT NULL REFERENCES cd_transportadoras(id) ON DELETE CASCADE,
+  uf               TEXT NOT NULL,
+  cidade           TEXT,
+  cidade_norm      TEXT,
+  peso_de          NUMERIC(12,3) NOT NULL DEFAULT 0,
+  peso_ate         NUMERIC(12,3),
+  frete            NUMERIC(12,2),
+  frete_kg         NUMERIC(12,4),
+  excedente_kg     NUMERIC(12,4),
+  adv_pct          NUMERIC(8,4),
+  gris_pct         NUMERIC(8,4),
+  taxa_fixa        NUMERIC(12,2),
+  frete_minimo     NUMERIC(12,2),
+  prazo_dias       INTEGER
+);
+CREATE INDEX IF NOT EXISTS cd_frete_tabela_idx ON cd_frete_tabela (transportadora_id, uf);
+CREATE TABLE IF NOT EXISTS cd_fat_nfs (
+  id                BIGSERIAL PRIMARY KEY,
+  tipo              TEXT NOT NULL,
+  arquivo_nome      TEXT,
+  tamanho           INTEGER,
+  numero            TEXT,
+  serie             TEXT,
+  chave             TEXT,
+  emitida_em        TIMESTAMPTZ,
+  destino_nome      TEXT,
+  destino_cnpj      TEXT,
+  destino_uf        TEXT,
+  destino_cidade    TEXT,
+  destino_cep       TEXT,
+  volumes           INTEGER,
+  peso_kg           NUMERIC(12,3),
+  valor             NUMERIC(14,2),
+  pecas             INTEGER,
+  transportadora_xml TEXT,
+  transportadora_id BIGINT REFERENCES cd_transportadoras(id) ON DELETE SET NULL,
+  frete_previsto    NUMERIC(12,2),
+  prazo_dias        INTEGER,
+  status            TEXT NOT NULL DEFAULT 'emitida',
+  coleta_data       DATE,
+  previsao_entrega  DATE,
+  entregue_data     DATE,
+  entregue_marcada_em TIMESTAMPTZ,
+  entregue_por      TEXT,
+  recebido_por      TEXT,
+  frete_real        NUMERIC(12,2),
+  obs               TEXT,
+  origem_saida_id   BIGINT,
+  enviada_por       TEXT NOT NULL,
+  enviada_em        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizada_em     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cd_fat_nfs_chave_uq ON cd_fat_nfs (chave) WHERE chave IS NOT NULL;
+ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS prazo_manual BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS cd_fat_nfs_status_idx ON cd_fat_nfs (status, previsao_entrega);
+CREATE TABLE IF NOT EXISTS cd_fat_nfs_arq (
+  nfs_id   BIGINT PRIMARY KEY REFERENCES cd_fat_nfs(id) ON DELETE CASCADE,
+  conteudo BYTEA NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cd_fat_eventos (
+  id        BIGSERIAL PRIMARY KEY,
+  nfs_id    BIGINT NOT NULL REFERENCES cd_fat_nfs(id) ON DELETE CASCADE,
+  tipo      TEXT NOT NULL,
+  usuario   TEXT NOT NULL,
+  detalhe   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_fat_eventos_idx ON cd_fat_eventos (nfs_id, id);
+
 
 -- Lotes de etiquetas: a etiquetagem corre em paralelo com a contagem, lote a lote
 CREATE TABLE IF NOT EXISTS cd_etiquetas_lotes (
@@ -446,6 +529,38 @@ async function migrarEtapas12() {
   }
 }
 
+
+// O faturamento saiu do fluxo da nota de entrada (uma NF de saida mistura produtos de varias entradas).
+// A nota termina no Picking; as NFs de saida vao para a aba Faturamento e transito.
+async function migrarFaturamento() {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock(7004)");
+    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'faturamento_aba'");
+    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
+    // NFs de saida ja enviadas dentro das notas passam para a aba nova (sem perder o arquivo)
+    await c.query(`INSERT INTO cd_fat_nfs (tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor, enviada_por, enviada_em, origem_saida_id)
+                     SELECT tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor, enviada_por, enviada_em, id FROM cd_nfs_saida
+                     ON CONFLICT DO NOTHING`);
+    await c.query(`INSERT INTO cd_fat_nfs_arq (nfs_id, conteudo)
+                     SELECT f.id, a.conteudo FROM cd_fat_nfs f JOIN cd_nfs_saida_arq a ON a.nfs_id = f.origem_saida_id ON CONFLICT DO NOTHING`);
+    // notas paradas no antigo faturamento: encerram (o fluxo da nota agora acaba no picking)
+    const enc = await c.query("UPDATE cd_notas SET status = 'concluida', concluida_em = COALESCE(concluida_em, now()) WHERE status = 'aberta' AND etapa_atual = 12");
+    await c.query("UPDATE cd_eventos SET detalhe = detalhe || jsonb_build_object('etapa_antiga', etapa), etapa = NULL WHERE etapa = 12");
+    await c.query("DELETE FROM cd_nota_etapas WHERE etapa = 12");
+    await c.query("DELETE FROM cd_etapa_config WHERE etapa = 12");
+    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('faturamento_aba', 'ok')");
+    await c.query("COMMIT");
+    if (enc.rowCount) console.log("[migrate] " + enc.rowCount + " nota(s) que estavam no faturamento foram encerradas (o fluxo da nota termina no picking).");
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 // Mesas: cada etapa e um perfil. Os perfis agrupados antigos viram as mesas equivalentes (ninguem perde acesso).
 async function migrarMesas() {
   const r = await pool.query(
@@ -536,6 +651,7 @@ async function migrate() {
   await migrarEtapas12();
   await migrarMesas();
   await migrarParalela();
+  await migrarFaturamento();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
