@@ -340,7 +340,7 @@ async function enviarNf(acc, b = {}) {
   const nome = txt(b.nome).slice(0, 200) || "nf";
   const buf = Buffer.from(String(b.base64 || ""), "base64");
   if (!buf.length) throw erro(400, "Arquivo vazio.");
-  if (buf.length > 4 * 1024 * 1024) throw erro(413, "Arquivo maior que 4 MB.");
+  if (buf.length > 10 * 1024 * 1024) throw erro(413, "Arquivo maior que 10 MB.");
   const ehPdf = buf.slice(0, 5).toString("latin1") === "%PDF-";
   const tipo = ehPdf ? "pdf" : "xml";
   let m = {};
