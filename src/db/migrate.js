@@ -1,664 +1,620 @@
-// Cria o schema do Postgres usado para armazenar os dados sincronizados da Vtex.
-// GA4 não precisa de tabelas próprias: consultamos a Data API sob demanda (com cache em memória).
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const cron = require("node-cron");
+
+const vendas = require("./metrics/vendas");
+const logistica = require("./metrics/logistica");
+const marketing = require("./metrics/marketing");
+const overview = require("./metrics/overview");
+const { syncOrders, syncInventory, syncWarehouses, backfillCategories, backfillOrderFields } = require("./sync/syncVtex");
+const { runJobInBackground, getAllJobStatuses, reconcileStaleJobsOnBoot } = require("./sync/jobRunner");
+const { pool } = require("./db");
 const bcrypt = require("bcryptjs");
-const { pool } = require("../db");
+const {
+  requireAuth,
+  requireAdmin,
+  signToken,
+  findUserByEmail,
+  createUser,
+  listUsers,
+  deleteUser,
+  updateUserAccess,
+  loadAccess,
+  requireModule,
+} = require("./auth");
+const cd = require("./cd/cd");
 
-const SQL = `
-CREATE TABLE IF NOT EXISTS orders (
-  order_id            TEXT PRIMARY KEY,
-  creation_date       TIMESTAMPTZ NOT NULL,
-  status              TEXT NOT NULL,
-  total_value         NUMERIC(14,2) NOT NULL DEFAULT 0,
-  shipping_value      NUMERIC(14,2) NOT NULL DEFAULT 0,
-  sales_channel       TEXT,
-  client_id           TEXT,
-  payment_method      TEXT,
-  payment_group       TEXT,
-  region_state        TEXT,
-  region_city         TEXT,
-  shipping_carrier    TEXT,
-  shipping_promised_days NUMERIC(6,2),
-  shipping_actual_days   NUMERIC(6,2),
-  delivered_at        TIMESTAMPTZ,
-  invoiced_at         TIMESTAMPTZ,
-  raw                 JSONB,
-  synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+const app = express();
+app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
+// o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
+const jsonPadrao = express.json();
+app.use((req, res, next) => (req.method === "POST" && /^\/api\/cd\/transito\/(nfs|transportadoras\/\d+\/tabela)$/.test(req.path) ? next() : jsonPadrao(req, res, next)));
 
-CREATE TABLE IF NOT EXISTS order_items (
-  id                  BIGSERIAL PRIMARY KEY,
-  order_id            TEXT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
-  product_id          TEXT NOT NULL,
-  sku                 TEXT,
-  product_name        TEXT,
-  category            TEXT,
-  quantity            NUMERIC(12,2) NOT NULL DEFAULT 0,
-  unit_price          NUMERIC(14,2) NOT NULL DEFAULT 0,
-  total_price         NUMERIC(14,2) NOT NULL DEFAULT 0,
-  warehouse_id        TEXT
-);
-
--- order_items já existia em produção antes da coluna warehouse_id existir, então o
--- CREATE TABLE IF NOT EXISTS acima não a adiciona sozinho — garantimos aqui, ANTES de
--- qualquer índice que use essa coluna (senão o CREATE INDEX abaixo falha na coluna que
--- ainda não existe nessa tabela já existente).
-ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_id TEXT;
-
--- Preço de tabela (sem desconto) do item, por unidade, segundo a Vtex (campo listPrice
--- do pedido). Comparado com unit_price pra saber se o item foi vendido em Liquidação
--- (preço com desconto) ou Coleção (preço cheio, sem desconto) — ver extractItems() em
--- syncVtex.js. Pedidos já sincronizados antes dessa coluna existir ficam com ela vazia
--- até rodar "Recalcular pedidos já sincronizados" no Admin (reaproveita o JSON bruto já
--- salvo em orders.raw, sem precisar buscar de novo na Vtex).
-ALTER TABLE order_items ADD COLUMN IF NOT EXISTS list_unit_price NUMERIC(14,2);
-
--- Cupom aplicado ao pedido (marketingData.coupon da Vtex), valor de desconto concedido no
--- pedido (totals[].id === "Discounts", inclui cupom + outras promoções de pedido — diferente
--- do desconto por item de list_unit_price acima, que é sobre o preço de tabela do produto),
--- origem de UTM (marketingData.utmSource) e nº de parcelas do pagamento principal. Todos
--- vêm do JSON do pedido que a Vtex já manda e que já guardamos em orders.raw — dá pra
--- popular pedidos antigos com "Recalcular pedidos já sincronizados" no Admin, sem precisar
--- buscar de novo na Vtex.
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS coupon_code TEXT;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_value NUMERIC(14,2);
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS utm_source TEXT;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS installments INTEGER;
-
-CREATE INDEX IF NOT EXISTS idx_orders_client_id ON orders (client_id);
-CREATE INDEX IF NOT EXISTS idx_orders_coupon_code ON orders (coupon_code);
-
-CREATE INDEX IF NOT EXISTS idx_orders_creation_date ON orders (creation_date);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
-CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);
-CREATE INDEX IF NOT EXISTS idx_order_items_category ON order_items (category);
-CREATE INDEX IF NOT EXISTS idx_order_items_warehouse_id ON order_items (warehouse_id);
-
--- Lojas/depósitos OMNI cadastrados na Vtex (de onde o estoque do e-commerce é expedido).
--- Sincronizado via syncWarehouses(); guardamos o JSON bruto porque o formato exato do
--- endpoint de configuração de depósitos da Vtex pode variar por conta.
-CREATE TABLE IF NOT EXISTS warehouses (
-  warehouse_id        TEXT PRIMARY KEY,
-  name                TEXT,
-  state               TEXT,
-  city                TEXT,
-  is_active           BOOLEAN,
-  raw                 JSONB,
-  synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Correção manual do estado de cada loja/depósito OMNI. A API de depósitos da Vtex
--- (/api/logistics/pvt/configuration/warehouses) nessa conta não retorna endereço/UF —
--- isso normalmente só vem cadastrado nos "pickup points", não nos warehouses de estoque —
--- então o estado real de cada loja precisa ser informado manualmente aqui pelo admin
--- (tela "Estados das lojas" no Admin). Quando existir, esse valor tem prioridade sobre
--- warehouses.state nas métricas de logística.
-CREATE TABLE IF NOT EXISTS warehouse_state_overrides (
-  warehouse_id        TEXT PRIMARY KEY,
-  state               TEXT NOT NULL,
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS inventory (
-  product_id          TEXT NOT NULL,
-  sku                 TEXT PRIMARY KEY,
-  product_name        TEXT,
-  category            TEXT,
-  available_quantity  NUMERIC(12,2) NOT NULL DEFAULT 0,
-  synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Data em que o produto entrou no site (campo "DateFirstAvailable" do catálogo da Vtex),
--- usada pra calcular "tempo até a 1a venda" no lugar do giro de estoque. Guardamos o JSON
--- bruto do SKU junto porque o nome exato do campo pode variar por conta/versão da Vtex —
--- se date_first_available não vier populado, dá pra inspecionar a coluna raw direto no
--- banco pra achar o campo certo sem precisar buscar de novo na Vtex.
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS date_first_available TIMESTAMPTZ;
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS raw JSONB;
-
--- Flag "estoque ilimitado" (campo hasUnlimitedQuantity de cada depósito na resposta da Vtex
--- em /api/logistics/pvt/inventory/skus/{id}). Um SKU nesse modo fica sempre disponível pra
--- venda na Vtex independente da quantidade numérica do depósito (a própria Vtex documenta
--- que, nesse caso, "a quantidade disponível nunca diminui, e o SKU nunca fica sem estoque") —
--- por isso available_quantity sozinho não basta pra saber se o produto está "zerado" de
--- verdade: um SKU ilimitado pode ter totalQuantity=0 num depósito e ainda assim estar
--- disponível. Guardamos a flag separada pra exibir "Ilimitado" no painel em vez de "0".
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS has_unlimited_quantity BOOLEAN NOT NULL DEFAULT false;
-
--- Data prometida de entrega do pedido (shippingEstimateDate da Vtex, ou calculada a partir do
--- shippingEstimate somando dias uteis/corridos a data da compra). E com ela que o painel decide se
--- uma entrega foi no prazo, comparando datas de calendario (entregar no ultimo dia prometido conta
--- como no prazo).
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_promised_date TIMESTAMPTZ;
-
-CREATE TABLE IF NOT EXISTS sync_state (
-  key                 TEXT PRIMARY KEY,
-  value                TEXT,
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Cache da foto principal de cada produto (buscada sob demanda na Vtex — ver
--- resolveProductImages em metrics/vendas.js), usada no card "Top produtos mais vendidos".
--- Só guarda produtos que já apareceram nesse ranking, não o catálogo inteiro: buscar a foto
--- de TODOS os produtos a cada sync seria centenas de chamadas na Vtex sem necessidade, já
--- que só os mais vendidos aparecem no card.
-CREATE TABLE IF NOT EXISTS product_images (
-  product_id          TEXT PRIMARY KEY,
-  image_url           TEXT,
-  synced_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Limpeza única do cache de fotos gravado com a URL errada: até essa correção,
--- getSkuMainImageUrl (connectors/vtex.js) usava o campo Url que a Vtex devolve pro arquivo
--- do SKU, que aponta pro bucket S3 de upload interno da Vtex (ex.: sincdn.s3.sa-east-1.
--- amazonaws.com) — esse bucket não é acessível publicamente pelo navegador, por isso a foto
--- não aparecia no card mesmo quando a Vtex retornava uma Url preenchida. Confirmado
--- comparando com o site público da Zinzane: lá as fotos são servidas por
--- {conta}.vtexassets.com, a partir do ArchiveId do arquivo — é isso que getSkuMainImageUrl
--- passou a usar. Sem essa limpeza, produtos que já tinham uma foto (errada) cacheada aqui
--- nunca seriam buscados de novo (resolveProductImages só busca o que ainda não está em
--- cache). Idempotente: só apaga o que não é do domínio novo, então não faz nada depois que o
--- cache for todo repovoado com a URL certa.
-DELETE FROM product_images WHERE image_url NOT LIKE '%.vtexassets.com/%';
-
--- Metas de receita configuráveis manualmente pelo usuário (Vtex não tem conceito de "meta")
-CREATE TABLE IF NOT EXISTS revenue_goals (
-  month               DATE PRIMARY KEY, -- sempre dia 1 do mês
-  goal_value          NUMERIC(14,2) NOT NULL
-);
-
--- Usuários com acesso ao painel (login por email/senha).
-CREATE TABLE IF NOT EXISTS users (
-  id                  BIGSERIAL PRIMARY KEY,
-  email               TEXT UNIQUE NOT NULL,
-  password_hash       TEXT NOT NULL,
-  role                TEXT NOT NULL DEFAULT 'viewer', -- 'admin' ou 'viewer'
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Acesso por modulo e perfil operacional do CD (usuarios antigos continuam so no painel de vendas).
-ALTER TABLE users ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT '{vendas}';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS cd_perfis TEXT[] NOT NULL DEFAULT '{}';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;
-
--- ===== Modulo Recebimento / CD: da NF na doca ate o faturamento =====
-CREATE TABLE IF NOT EXISTS cd_notas (
-  id                  BIGSERIAL PRIMARY KEY,
-  numero_nf           TEXT NOT NULL,
-  serie               TEXT,
-  fornecedor          TEXT NOT NULL,
-  chave_nf            TEXT,
-  total_pecas_nf      INTEGER NOT NULL DEFAULT 0,
-  volumes_nf          INTEGER NOT NULL DEFAULT 0,
-  prioridade          TEXT NOT NULL DEFAULT 'normal',
-  status              TEXT NOT NULL DEFAULT 'aberta', -- aberta | concluida | cancelada
-  etapa_atual         INTEGER NOT NULL DEFAULT 2,
-  com_divergencia     BOOLEAN NOT NULL DEFAULT false,
-  observacao          TEXT,
-  criada_por          TEXT NOT NULL,
-  criada_em           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  concluida_em        TIMESTAMPTZ
-);
-CREATE UNIQUE INDEX IF NOT EXISTS cd_notas_chave_uniq ON cd_notas (chave_nf) WHERE chave_nf IS NOT NULL AND status <> 'cancelada';
-CREATE UNIQUE INDEX IF NOT EXISTS cd_notas_nf_uniq ON cd_notas (numero_nf, COALESCE(serie, ''), lower(fornecedor)) WHERE status <> 'cancelada';
-CREATE INDEX IF NOT EXISTS cd_notas_status_idx ON cd_notas (status, etapa_atual);
-
-CREATE TABLE IF NOT EXISTS cd_nota_itens (
-  id                  BIGSERIAL PRIMARY KEY,
-  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  modelo              TEXT NOT NULL,
-  cor                 TEXT NOT NULL,
-  qtd_nf              INTEGER,
-  qtd_contada         INTEGER,
-  qtd_ficha           INTEGER,
-  qtd_checkout        INTEGER,
-  amostra_separada    BOOLEAN NOT NULL DEFAULT false,
-  cor_definida        TEXT,
-  ref_zinzane         TEXT,
-  justificativa_confronto TEXT,
-  criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS tamanho TEXT NOT NULL DEFAULT '';
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS ref_fornecedor TEXT NOT NULL DEFAULT '';
-
--- Produtos que vieram na propria NF (lidos do PDF/XML na entrada): servem de base para a separacao e a contagem.
-CREATE TABLE IF NOT EXISTS cd_nota_nf_itens (
-  id                  BIGSERIAL PRIMARY KEY,
-  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  ordem               INTEGER NOT NULL DEFAULT 0,
-  codigo              TEXT NOT NULL,
-  descricao           TEXT,
-  qtd                 INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS cd_nota_nf_itens_nota_idx ON cd_nota_nf_itens (nota_id);
--- Conjunto: cada unidade da NF vale 2 pecas (fator = 2). valor_unit = preco unitario da NF.
-ALTER TABLE cd_nota_nf_itens ADD COLUMN IF NOT EXISTS fator INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE cd_nota_nf_itens ADD COLUMN IF NOT EXISTS valor_unit NUMERIC(14,4);
-ALTER TABLE cd_notas ADD COLUMN IF NOT EXISTS valor_nf NUMERIC(14,2);
-
--- Cor pelo catalogo (codigo + nome), no lugar de texto livre. Defeito e conserto fazem parte da contagem.
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS cor_codigo TEXT;
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS qtd_defeito INTEGER;
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS qtd_conserto INTEGER;
-CREATE TABLE IF NOT EXISTS cd_cores (
-  codigo              TEXT PRIMARY KEY,
-  nome                TEXT NOT NULL,
-  nome_en             TEXT,
-  ativo               BOOLEAN NOT NULL DEFAULT true
-);
--- Quem contou cada linha (contagem manual)
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS contado_por TEXT;
--- Cor definida pelo Estilo (catalogo): por padrao e a cor da separacao
-ALTER TABLE cd_nota_itens ADD COLUMN IF NOT EXISTS cor_def_codigo TEXT;
-CREATE INDEX IF NOT EXISTS cd_nota_itens_nota_idx ON cd_nota_itens (nota_id);
-
-CREATE TABLE IF NOT EXISTS cd_nota_etapas (
-  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  etapa               INTEGER NOT NULL,
-  status              TEXT NOT NULL DEFAULT 'pendente', -- pendente | em_andamento | concluida
-  liberada_em         TIMESTAMPTZ, -- quando a etapa anterior terminou (comeca a contar a fila)
-  iniciada_em         TIMESTAMPTZ,
-  iniciada_por        TEXT,
-  concluida_em        TIMESTAMPTZ,
-  concluida_por       TEXT,
-  dados               JSONB NOT NULL DEFAULT '{}'::jsonb,
-  divergencia         BOOLEAN NOT NULL DEFAULT false,
-  PRIMARY KEY (nota_id, etapa)
-);
-
--- Trilha de auditoria: nada e apagado, cada acao vira um evento.
-CREATE TABLE IF NOT EXISTS cd_eventos (
-  id                  BIGSERIAL PRIMARY KEY,
-  nota_id             BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  etapa               INTEGER,
-  tipo                TEXT NOT NULL,
-  usuario             TEXT NOT NULL,
-  detalhe             JSONB NOT NULL DEFAULT '{}'::jsonb,
-  criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS cd_eventos_nota_idx ON cd_eventos (nota_id, criado_em);
-
--- Metas de tempo por etapa (minutos), ajustaveis pelo admin.
-CREATE TABLE IF NOT EXISTS cd_etapa_config (
-  etapa               INTEGER PRIMARY KEY,
-  sla_exec_min        INTEGER NOT NULL,
-  sla_fila_min        INTEGER NOT NULL
-);
-
--- Marcas de migracoes unicas do modulo CD.
-CREATE TABLE IF NOT EXISTS cd_meta (
-  chave               TEXT PRIMARY KEY,
-  valor               TEXT,
-  criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Posicao na fila de prioridade informada na entrada da NF (1 = primeira a ser atendida)
-ALTER TABLE cd_notas ADD COLUMN IF NOT EXISTS ranking INTEGER;
-
--- Cada recontagem da etapa de contagem: quem recontou, qual tentativa, quanto deu
-CREATE TABLE IF NOT EXISTS cd_recontagens (
-  id              BIGSERIAL PRIMARY KEY,
-  nota_id         BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  tentativa       INTEGER NOT NULL,
-  por             TEXT NOT NULL,
-  registrado_por  TEXT NOT NULL,
-  metodo          TEXT NOT NULL,
-  total           INTEGER NOT NULL,
-  contado         INTEGER,
-  esperado        INTEGER,
-  contadores      TEXT[] NOT NULL DEFAULT '{}',
-  obs             TEXT,
-  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE cd_recontagens ADD COLUMN IF NOT EXISTS itens JSONB;
-CREATE INDEX IF NOT EXISTS cd_recontagens_nota_idx ON cd_recontagens (nota_id, tentativa);
--- ===== Faturamento e trânsito (aba própria, independente das notas de entrada) =====
-CREATE TABLE IF NOT EXISTS cd_transportadoras (
-  id                   BIGSERIAL PRIMARY KEY,
-  nome                 TEXT NOT NULL,
-  cnpj                 TEXT,
-  prazo_corridos       BOOLEAN NOT NULL DEFAULT false,
-  ativa                BOOLEAN NOT NULL DEFAULT true,
-  tabela_importada_em  TIMESTAMPTZ,
-  tabela_importada_por TEXT,
-  criada_em            TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS cd_transportadoras_nome_uq ON cd_transportadoras (lower(nome));
-CREATE TABLE IF NOT EXISTS cd_frete_tabela (
-  id               BIGSERIAL PRIMARY KEY,
-  transportadora_id BIGINT NOT NULL REFERENCES cd_transportadoras(id) ON DELETE CASCADE,
-  uf               TEXT NOT NULL,
-  cidade           TEXT,
-  cidade_norm      TEXT,
-  peso_de          NUMERIC(12,3) NOT NULL DEFAULT 0,
-  peso_ate         NUMERIC(12,3),
-  frete            NUMERIC(12,2),
-  frete_kg         NUMERIC(12,4),
-  excedente_kg     NUMERIC(12,4),
-  adv_pct          NUMERIC(8,4),
-  gris_pct         NUMERIC(8,4),
-  taxa_fixa        NUMERIC(12,2),
-  frete_minimo     NUMERIC(12,2),
-  prazo_dias       INTEGER
-);
-CREATE INDEX IF NOT EXISTS cd_frete_tabela_idx ON cd_frete_tabela (transportadora_id, uf);
-CREATE TABLE IF NOT EXISTS cd_fat_nfs (
-  id                BIGSERIAL PRIMARY KEY,
-  tipo              TEXT NOT NULL,
-  arquivo_nome      TEXT,
-  tamanho           INTEGER,
-  numero            TEXT,
-  serie             TEXT,
-  chave             TEXT,
-  emitida_em        TIMESTAMPTZ,
-  destino_nome      TEXT,
-  destino_cnpj      TEXT,
-  destino_uf        TEXT,
-  destino_cidade    TEXT,
-  destino_cep       TEXT,
-  volumes           INTEGER,
-  peso_kg           NUMERIC(12,3),
-  valor             NUMERIC(14,2),
-  pecas             INTEGER,
-  transportadora_xml TEXT,
-  transportadora_id BIGINT REFERENCES cd_transportadoras(id) ON DELETE SET NULL,
-  frete_previsto    NUMERIC(12,2),
-  prazo_dias        INTEGER,
-  status            TEXT NOT NULL DEFAULT 'emitida',
-  coleta_data       DATE,
-  previsao_entrega  DATE,
-  entregue_data     DATE,
-  entregue_marcada_em TIMESTAMPTZ,
-  entregue_por      TEXT,
-  recebido_por      TEXT,
-  frete_real        NUMERIC(12,2),
-  obs               TEXT,
-  origem_saida_id   BIGINT,
-  enviada_por       TEXT NOT NULL,
-  enviada_em        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  atualizada_em     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS cd_fat_nfs_chave_uq ON cd_fat_nfs (chave) WHERE chave IS NOT NULL;
-ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS prazo_manual BOOLEAN NOT NULL DEFAULT false;
-CREATE INDEX IF NOT EXISTS cd_fat_nfs_status_idx ON cd_fat_nfs (status, previsao_entrega);
-CREATE TABLE IF NOT EXISTS cd_fat_nfs_arq (
-  nfs_id   BIGINT PRIMARY KEY REFERENCES cd_fat_nfs(id) ON DELETE CASCADE,
-  conteudo BYTEA NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cd_fat_eventos (
-  id        BIGSERIAL PRIMARY KEY,
-  nfs_id    BIGINT NOT NULL REFERENCES cd_fat_nfs(id) ON DELETE CASCADE,
-  tipo      TEXT NOT NULL,
-  usuario   TEXT NOT NULL,
-  detalhe   JSONB NOT NULL DEFAULT '{}'::jsonb,
-  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS cd_fat_eventos_idx ON cd_fat_eventos (nfs_id, id);
-
-
--- Lotes de etiquetas: a etiquetagem corre em paralelo com a contagem, lote a lote
-CREATE TABLE IF NOT EXISTS cd_etiquetas_lotes (
-  id              BIGSERIAL PRIMARY KEY,
-  nota_id         BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  qtd             INTEGER NOT NULL,
-  por             TEXT NOT NULL,
-  registrado_por  TEXT NOT NULL,
-  obs             TEXT,
-  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS cd_etiquetas_lotes_nota_idx ON cd_etiquetas_lotes (nota_id, criado_em);
-
--- NFs de saida (uma entrada pode gerar dezenas, uma por loja). O arquivo fica em tabela a parte.
-CREATE TABLE IF NOT EXISTS cd_nfs_saida (
-  id              BIGSERIAL PRIMARY KEY,
-  nota_id         BIGINT NOT NULL REFERENCES cd_notas(id) ON DELETE CASCADE,
-  tipo            TEXT NOT NULL,           -- xml | pdf
-  arquivo_nome    TEXT NOT NULL,
-  tamanho         INTEGER NOT NULL DEFAULT 0,
-  numero          TEXT,
-  serie           TEXT,
-  chave           TEXT,
-  destino_nome    TEXT,
-  destino_cnpj    TEXT,
-  pecas           INTEGER,
-  valor           NUMERIC(14,2),
-  enviada_por     TEXT NOT NULL,
-  enviada_em      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS cd_nfs_saida_nota_idx ON cd_nfs_saida (nota_id, id);
-CREATE UNIQUE INDEX IF NOT EXISTS cd_nfs_saida_chave_uq ON cd_nfs_saida (chave) WHERE chave IS NOT NULL;
-CREATE TABLE IF NOT EXISTS cd_nfs_saida_arq (
-  nfs_id          BIGINT PRIMARY KEY REFERENCES cd_nfs_saida(id) ON DELETE CASCADE,
-  conteudo        BYTEA NOT NULL
-);
-`;
-
-// Migracao unica: o processo tinha 15 etapas (2 = abertura dos fardos, 3 = separacao). Como as duas
-// acontecem juntas, viraram uma so (etapa 2) e as seguintes foram renumeradas (4..15 -> 3..14).
-// Notas que ja existiam sao convertidas; roda uma vez so (marca em cd_meta) e dentro de uma transacao.
-// Carga unica do catalogo de cores (codigo + nome) a partir do arquivo cores.json, so quando a tabela esta vazia.
-async function semearCores() {
-  const { rows: [{ n }] } = await pool.query("SELECT count(*)::int AS n FROM cd_cores");
-  if (n > 0) return;
-  const cores = require("../cd/cores.json");
-  for (const c of cores) {
-    await pool.query("INSERT INTO cd_cores (codigo, nome, nome_en, ativo) VALUES ($1,$2,$3,$4) ON CONFLICT (codigo) DO NOTHING", [c.codigo, c.nome, c.nome_en || null, c.ativo !== false]);
-  }
-  console.log("[migrate] Catalogo de cores carregado: " + cores.length + " cores.");
+function parseDateRange(req) {
+  const { dateFrom, dateTo } = req.query;
+  return {
+    dateFrom: dateFrom ? new Date(dateFrom) : null,
+    dateTo: dateTo ? new Date(dateTo) : null,
+  };
 }
 
-async function migrarEtapas14() {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    await c.query("SELECT pg_advisory_xact_lock(7001)");
-    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'etapas_14'");
-    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
+// Filtro de status da aba Vendas (ex.: ?status=invoiced,handling). Sem o parâmetro
+// (undefined) cada função de vendas.js cai no comportamento histórico do painel: tudo
+// exceto cancelado — ver pushStatusParam/statusClause em vendas.js.
+function parseStatusFilter(req) {
+  const raw = req.query.status;
+  if (!raw) return undefined;
+  const list = String(raw).split(",").map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
 
-    const { rows: [{ n: temAntigas }] } = await c.query("SELECT count(*)::int AS n FROM cd_nota_etapas WHERE etapa = 15");
-    if (temAntigas > 0) {
-      // 1) etapa 2 absorve a 3 (status, datas e dados)
-      await c.query(`
-        UPDATE cd_nota_etapas t2 SET
-          status = CASE WHEN t3.status = 'concluida' THEN 'concluida' WHEN t2.status = 'pendente' THEN 'pendente' ELSE 'em_andamento' END,
-          iniciada_em = COALESCE(t2.iniciada_em, t3.iniciada_em),
-          iniciada_por = COALESCE(t2.iniciada_por, t3.iniciada_por),
-          concluida_em = CASE WHEN t3.status = 'concluida' THEN t3.concluida_em ELSE NULL END,
-          concluida_por = CASE WHEN t3.status = 'concluida' THEN t3.concluida_por ELSE NULL END,
-          dados = COALESCE(t2.dados, '{}'::jsonb) || COALESCE(t3.dados, '{}'::jsonb),
-          divergencia = t2.divergencia OR t3.divergencia
-        FROM cd_nota_etapas t3
-        WHERE t2.nota_id = t3.nota_id AND t2.etapa = 2 AND t3.etapa = 3`);
-      await c.query("DELETE FROM cd_nota_etapas WHERE etapa = 3");
-      // 2) renumera 4..15 -> 3..14 (passando por negativos para nao colidir na chave primaria)
-      await c.query("UPDATE cd_nota_etapas SET etapa = -(etapa - 1) WHERE etapa >= 4");
-      await c.query("UPDATE cd_nota_etapas SET etapa = -etapa WHERE etapa < 0");
-      // 3) etapa atual das notas e historico (eventos)
-      await c.query("UPDATE cd_notas SET etapa_atual = CASE WHEN etapa_atual <= 3 THEN 2 ELSE etapa_atual - 1 END");
-      await c.query("UPDATE cd_eventos SET etapa = CASE WHEN etapa = 3 THEN 2 WHEN etapa >= 4 THEN etapa - 1 ELSE etapa END WHERE etapa IS NOT NULL");
-      // 4) metas de tempo: as da abertura/separacao antigas deixam de valer (a etapa 2 nova tem meta propria)
-      await c.query("DELETE FROM cd_etapa_config WHERE etapa IN (2, 3)");
-      await c.query("UPDATE cd_etapa_config SET etapa = -(etapa - 1) WHERE etapa >= 4");
-      await c.query("UPDATE cd_etapa_config SET etapa = -etapa WHERE etapa < 0");
-      console.log("[migrate] Notas do CD convertidas para o processo de 14 etapas (" + temAntigas + " nota(s)).");
+function parseGa4DateRanges(req) {
+  const { startDate, endDate } = req.query;
+  if (!startDate && !endDate) return undefined; // usa default (últimos 30 dias) do connector
+  return [{ startDate: startDate || "30daysAgo", endDate: endDate || "today" }];
+}
+
+function handle(fn) {
+  return async (req, res) => {
+    try {
+      const result = await fn(req);
+      res.json(result);
+    } catch (err) {
+      const details = err.response?.data || err.message;
+      const status = err.status || 500;
+      if (status >= 500) console.error("[api]", JSON.stringify(details));
+      res.status(status).json({ error: err.message, details, ...(err.extra || {}) });
     }
-    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('etapas_14', 'ok')");
-    await c.query("COMMIT");
-  } catch (e) {
-    await c.query("ROLLBACK").catch(() => {});
-    throw e;
-  } finally {
-    c.release();
-  }
+  };
 }
 
+const PROCESS_STARTED_AT = new Date().toISOString();
+app.get("/health", (req, res) => res.json({
+  ok: true,
+  time: new Date().toISOString(),
+  processStartedAt: PROCESS_STARTED_AT,
+  uptimeSeconds: Math.round(process.uptime()),
+}));
 
-// Processo de 12 etapas: saem "Preenchimento da ficha" (antiga 4) e "Separacao de 1 peca para o Estilo" (antiga 5,
-// que virou uma marcacao dentro da etapa 2). Renumera as etapas seguintes e converte as notas em andamento.
-async function migrarEtapas12() {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    await c.query("SELECT pg_advisory_xact_lock(7002)");
-    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'etapas_12'");
-    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
-
-    const { rows: [{ n: antigas }] } = await c.query("SELECT count(*)::int AS n FROM cd_nota_etapas WHERE etapa = 14");
-    if (antigas > 0) {
-      // historico das etapas extintas fica, marcado como "etapa antiga" (sem numero)
-      await c.query("UPDATE cd_eventos SET detalhe = detalhe || jsonb_build_object('etapa_antiga', etapa), etapa = NULL WHERE etapa IN (4, 5)");
-      await c.query("UPDATE cd_eventos SET etapa = etapa - 2 WHERE etapa >= 6");
-      await c.query("DELETE FROM cd_nota_etapas WHERE etapa IN (4, 5)");
-      await c.query("UPDATE cd_nota_etapas SET etapa = -(etapa - 2) WHERE etapa >= 6");
-      await c.query("UPDATE cd_nota_etapas SET etapa = -etapa WHERE etapa < 0");
-      await c.query("UPDATE cd_notas SET etapa_atual = CASE WHEN etapa_atual IN (4, 5) THEN 4 WHEN etapa_atual >= 6 THEN etapa_atual - 2 ELSE etapa_atual END");
-      // nota que estava na ficha ou na amostra passa a ficar aguardando a referencia Zinzane (nova etapa 4)
-      await c.query(`UPDATE cd_nota_etapas e SET liberada_em = now(), status = 'pendente', iniciada_em = NULL, iniciada_por = NULL
-                       FROM cd_notas n WHERE e.nota_id = n.id AND e.etapa = 4 AND n.status = 'aberta' AND n.etapa_atual = 4 AND e.status = 'pendente' AND e.liberada_em IS NULL`);
-      await c.query("DELETE FROM cd_etapa_config WHERE etapa IN (4, 5)");
-      await c.query("UPDATE cd_etapa_config SET etapa = -(etapa - 2) WHERE etapa >= 6");
-      await c.query("UPDATE cd_etapa_config SET etapa = -etapa WHERE etapa < 0");
-      console.log("[migrate] Notas do CD convertidas para o processo de 12 etapas (" + antigas + " nota(s)).");
-    }
-    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('etapas_12', 'ok')");
-    await c.query("COMMIT");
-  } catch (e) {
-    await c.query("ROLLBACK").catch(() => {});
-    throw e;
-  } finally {
-    c.release();
-  }
-}
-
-
-// O faturamento saiu do fluxo da nota de entrada (uma NF de saida mistura produtos de varias entradas).
-// A nota termina no Picking; as NFs de saida vao para a aba Faturamento e transito.
-async function migrarFaturamento() {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    await c.query("SELECT pg_advisory_xact_lock(7004)");
-    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'faturamento_aba'");
-    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
-    // NFs de saida ja enviadas dentro das notas passam para a aba nova (sem perder o arquivo)
-    await c.query(`INSERT INTO cd_fat_nfs (tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor, enviada_por, enviada_em, origem_saida_id)
-                     SELECT tipo, arquivo_nome, tamanho, numero, serie, chave, destino_nome, destino_cnpj, pecas, valor, enviada_por, enviada_em, id FROM cd_nfs_saida
-                     ON CONFLICT DO NOTHING`);
-    await c.query(`INSERT INTO cd_fat_nfs_arq (nfs_id, conteudo)
-                     SELECT f.id, a.conteudo FROM cd_fat_nfs f JOIN cd_nfs_saida_arq a ON a.nfs_id = f.origem_saida_id ON CONFLICT DO NOTHING`);
-    // notas paradas no antigo faturamento: encerram (o fluxo da nota agora acaba no picking)
-    const enc = await c.query("UPDATE cd_notas SET status = 'concluida', concluida_em = COALESCE(concluida_em, now()) WHERE status = 'aberta' AND etapa_atual = 12");
-    await c.query("UPDATE cd_eventos SET detalhe = detalhe || jsonb_build_object('etapa_antiga', etapa), etapa = NULL WHERE etapa = 12");
-    await c.query("DELETE FROM cd_nota_etapas WHERE etapa = 12");
-    await c.query("DELETE FROM cd_etapa_config WHERE etapa = 12");
-    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('faturamento_aba', 'ok')");
-    await c.query("COMMIT");
-    if (enc.rowCount) console.log("[migrate] " + enc.rowCount + " nota(s) que estavam no faturamento foram encerradas (o fluxo da nota termina no picking).");
-  } catch (e) {
-    await c.query("ROLLBACK").catch(() => {});
-    throw e;
-  } finally {
-    c.release();
-  }
-}
-
-// Mesas: cada etapa e um perfil. Os perfis agrupados antigos viram as mesas equivalentes (ninguem perde acesso).
-async function migrarMesas() {
-  const r = await pool.query(
-    `UPDATE users SET cd_perfis = (
-       SELECT COALESCE(array_agg(DISTINCT x), '{}') FROM (
-         SELECT unnest(CASE p
-           WHEN 'doca' THEN ARRAY['recebimento','separacao','contagem']
-           WHEN 'estilo' THEN ARRAY['referencia']
-           WHEN 'cadastro' THEN ARRAY['etiquetas','pedido','entrada','checkout','confronto']
-           WHEN 'expedicao' THEN ARRAY['distribuicao','picking','faturamento']
-           ELSE ARRAY[p] END) AS x
-         FROM unnest(cd_perfis) AS p) q)
-     WHERE cd_perfis && ARRAY['doca','estilo','cadastro','expedicao']`);
-  if (r.rowCount) console.log("[migrate] Perfis do CD convertidos para mesas (" + r.rowCount + " usuario(s)).");
-}
-
-// Contagem, referencia e etiquetas rodam em paralelo: notas que ja estavam na frente liberam as etapas seguintes da frente.
-async function migrarParalela() {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    await c.query("SELECT pg_advisory_xact_lock(7003)");
-    const jaFeito = await c.query("SELECT 1 FROM cd_meta WHERE chave = 'paralela_v1'");
-    if (jaFeito.rows.length) { await c.query("COMMIT"); return; }
-    await c.query(
-      `UPDATE cd_nota_etapas e SET liberada_em = now()
-         FROM cd_notas n
-        WHERE e.nota_id = n.id AND n.status = 'aberta' AND e.status = 'pendente' AND e.liberada_em IS NULL
-          AND e.etapa IN (3, 4, 5) AND n.etapa_atual BETWEEN 3 AND 5`);
-    await c.query("INSERT INTO cd_meta (chave, valor) VALUES ('paralela_v1', 'ok')");
-    await c.query("COMMIT");
-  } catch (e) {
-    await c.query("ROLLBACK").catch(() => {});
-    throw e;
-  } finally {
-    c.release();
-  }
-}
-
-// Garante que o admin master exista. Se ADMIN_PASSWORD não vier configurada,
-// gera uma senha aleatória e a imprime UMA vez nos logs do deploy, para que
-// o dono da conta consiga recuperá-la ali (nunca fica salva em texto puro).
-//
-// Se o admin JÁ existir e a variável ADMIN_PASSWORD estiver definida, a senha
-// é redefinida para o valor da variável a cada deploy — isso permite trocar a
-// senha do admin master a qualquer momento só mudando a variável no Railway,
-// e também corrige o caso em que o usuário foi criado antes de ADMIN_PASSWORD
-// estar configurada (senha aleatória "perdida" nos logs de um deploy anterior).
-async function seedAdmin() {
-  const email = (process.env.ADMIN_EMAIL || "tbarone@zinzane.com.br").toLowerCase();
-  const { rows } = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
-
-  if (rows.length > 0) {
-    if (process.env.ADMIN_PASSWORD) {
-      const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
-      await pool.query(
-        "UPDATE users SET password_hash = $2, role = 'admin' WHERE email = $1",
-        [email, hash]
-      );
-      console.log("========================================================");
-      console.log(`[seed] Senha do admin ${email} redefinida a partir da variável ADMIN_PASSWORD.`);
-      console.log("========================================================");
-    }
-    return;
-  }
-
-  const password = process.env.ADMIN_PASSWORD || Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6).toUpperCase();
-  const hash = await bcrypt.hash(password, 10);
-  await pool.query(
-    "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'admin') ON CONFLICT (email) DO NOTHING",
-    [email, hash]
+// ---- DIAGNÓSTICO TEMPORÁRIO: investigar por que nenhum item está sendo classificado
+// como Liquidação. Mostra os campos de preço brutos que a Vtex manda pra alguns
+// pedidos recentes (reaproveita o JSON já salvo em orders.raw, não busca de novo na
+// Vtex). Só admin autenticado consegue chamar. Remover depois de confirmar o campo
+// certo pra usar como "preço de tabela".
+app.get("/api/debug/sample-item-pricing", requireAuth, requireAdmin, handle(async () => {
+  const { rows } = await pool.query(
+    "SELECT order_id, raw FROM orders WHERE raw IS NOT NULL ORDER BY creation_date DESC LIMIT 5"
   );
+  return rows.map((r) => {
+    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
+    const items = (raw.items || []).map((it) => ({
+      name: it.name,
+      quantity: it.quantity,
+      price: it.price,
+      listPrice: it.listPrice,
+      sellingPrice: it.sellingPrice,
+      manualPrice: it.manualPrice,
+      priceTags: it.priceTags,
+    }));
+    return { order_id: r.order_id, items };
+  });
+}));
 
-  console.log("========================================================");
-  console.log(`[seed] Usuário admin criado: ${email}`);
-  if (!process.env.ADMIN_PASSWORD) {
-    console.log(`[seed] Senha gerada automaticamente: ${password}`);
-    console.log("[seed] Guarde essa senha agora — ela não aparece de novo nos logs.");
-  } else {
-    console.log("[seed] Senha definida pela variável de ambiente ADMIN_PASSWORD.");
+// ---- DIAGNÓSTICO TEMPORÁRIO: descobrir qual campo da Vtex identifica o canal de venda
+// (App x Site x Vitrine/venda assistida), pra construir a métrica "Canal de venda" sem
+// chutar o campo errado (mesmo cuidado do diagnóstico de preço acima). Mostra marketingData,
+// origin, callCenterOperatorData, openTextField e salesChannel de alguns pedidos recentes,
+// reaproveitando o JSON já salvo em orders.raw — não busca de novo na Vtex. Só admin
+// autenticado consegue chamar. Remover depois de confirmar o campo certo.
+app.get("/api/debug/sample-order-channel", requireAuth, requireAdmin, handle(async () => {
+  const { rows } = await pool.query(
+    "SELECT order_id, raw FROM orders WHERE raw IS NOT NULL ORDER BY creation_date DESC LIMIT 8"
+  );
+  return rows.map((r) => {
+    const raw = typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
+    return {
+      order_id: r.order_id,
+      salesChannel: raw.salesChannel,
+      origin: raw.origin,
+      marketingData: raw.marketingData,
+      callCenterOperatorData: raw.callCenterOperatorData,
+      openTextField: raw.openTextField,
+      hostname: raw.hostname,
+    };
+  });
+}));
+
+// ---- DIAGNÓSTICO TEMPORÁRIO: confirmar (a) o formato da resposta da Vtex pra foto de SKU
+// (endpoint /api/catalog/pvt/stockkeepingunit/{skuId}/file — ver getSkuMainImageUrl em
+// connectors/vtex.js) e (b) quais campos do SKU indicam "mesma referência, tamanho
+// diferente" (RefId/ProductRefId/nomes). Chama a Vtex de verdade e devolve a resposta crua
+// pra conferência manual. Só admin autenticado consegue chamar.
+//
+// Dois modos:
+//  - ?productId=X (+ opcionalmente dateFrom/dateTo/status, iguais ao filtro do painel):
+//    investiga UM produto específico — todas as variações (SKUs) dele, não só a
+//    representativa, e marca qual delas é a "representativa" NESSE filtro (a escolhida pra
+//    buscar a foto é sempre a mais vendida dentro do período/status selecionado no painel,
+//    então pode mudar produto a produto e filtro a filtro). Usado quando um produto
+//    específico aparece sem foto no card, tipo "Calça Pantalona Detalhe Vivos".
+//  - sem productId: amostra geral do Top 15 (mesmo agrupamento de produtosMaisVendidos),
+//    respeitando dateFrom/dateTo/status recebidos (o botão do painel manda os mesmos filtros
+//    ativos na aba Vendas).
+app.get("/api/debug/sample-product-image", requireAuth, requireAdmin, handle(async (req) => {
+  const vtexConn = require("./connectors/vtex");
+  const { dateFrom, dateTo } = parseDateRange(req);
+  const statuses = parseStatusFilter(req);
+  const statusParam = Array.isArray(statuses) && statuses.length ? statuses : null;
+  const productId = req.query.productId ? String(req.query.productId).trim() : null;
+
+  if (productId) {
+    const statusSqlProduto = `(($4::text[] IS NULL AND o.status NOT IN ('canceled','cancelled')) OR ($4::text[] IS NOT NULL AND o.status = ANY($4::text[])))`;
+    const { rows } = await pool.query(
+      `SELECT oi.sku, oi.product_name, SUM(oi.quantity) AS unidades_vendidas
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       WHERE oi.product_id = $1
+         AND ($2::timestamptz IS NULL OR o.creation_date >= $2)
+         AND ($3::timestamptz IS NULL OR o.creation_date < $3)
+         AND ${statusSqlProduto}
+       GROUP BY oi.sku, oi.product_name
+       ORDER BY unidades_vendidas DESC`,
+      [productId, dateFrom || null, dateTo || null, statusParam]
+    );
+    if (!rows.length) {
+      return { productId, aviso: "Nenhuma venda desse produto no período/status informado — confira se o productId está certo e se o filtro do painel não está deixando esse produto de fora." };
+    }
+    const skuRepresentativoAtual = rows[0].sku;
+    return Promise.all(
+      rows.map(async (r) => {
+        const resultado = {
+          sku: r.sku,
+          nome: r.product_name,
+          unidadesVendidas: Number(r.unidades_vendidas),
+          ehRepresentativoNesseFiltro: r.sku === skuRepresentativoAtual,
+        };
+        try {
+          resultado.arquivos = await vtexConn.getSkuFiles(r.sku);
+        } catch (err) {
+          resultado.erroArquivos = err.message;
+        }
+        return resultado;
+      })
+    );
   }
-  console.log("========================================================");
-}
 
-async function migrate() {
-  await pool.query(SQL);
-  await migrarEtapas14();
-  await migrarEtapas12();
-  await migrarMesas();
-  await migrarParalela();
-  await migrarFaturamento();
-  await semearCores();
-  await seedAdmin();
-  console.log("Migração concluída.");
-  await pool.end();
-}
+  const statusSqlTop15 = `(($3::text[] IS NULL AND o.status NOT IN ('canceled','cancelled')) OR ($3::text[] IS NOT NULL AND o.status = ANY($3::text[])))`;
+  const { rows } = await pool.query(
+    `SELECT oi.product_id,
+            (array_agg(oi.product_name ORDER BY oi.quantity DESC, oi.id ASC))[1] AS product_name,
+            SUM(oi.quantity) AS unidades_vendidas,
+            (array_agg(oi.sku ORDER BY oi.quantity DESC, oi.id ASC))[1] AS sku_representativo
+     FROM order_items oi
+     JOIN orders o ON o.order_id = oi.order_id
+     WHERE ($1::timestamptz IS NULL OR o.creation_date >= $1)
+       AND ($2::timestamptz IS NULL OR o.creation_date < $2)
+       AND ${statusSqlTop15}
+     GROUP BY oi.product_id
+     ORDER BY unidades_vendidas DESC
+     LIMIT 15`,
+    [dateFrom || null, dateTo || null, statusParam]
+  );
+  return Promise.all(
+    rows.map(async (r) => {
+      const resultado = {
+        productId: r.product_id,
+        produto: r.product_name,
+        unidadesVendidas: Number(r.unidades_vendidas),
+        skuRepresentativo: r.sku_representativo,
+      };
+      try {
+        resultado.arquivos = await vtexConn.getSkuFiles(r.sku_representativo);
+      } catch (err) {
+        resultado.erroArquivos = err.message;
+      }
+      try {
+        const d = await vtexConn.getSkuDetail(r.sku_representativo);
+        resultado.detalheSku = {
+          RefId: d.RefId,
+          ProductRefId: d.ProductRefId,
+          ProductId: d.ProductId,
+          ProductName: d.ProductName,
+          NameComplete: d.NameComplete,
+          SkuName: d.SkuName,
+          IsActive: d.IsActive,
+        };
+      } catch (err) {
+        resultado.erroDetalheSku = err.message;
+      }
+      return resultado;
+    })
+  );
+}));
 
-migrate().catch((err) => {
-  console.error("Erro na migração:", err);
-  process.exit(1);
+// ---- DIAGNÓSTICO TEMPORÁRIO: descobrir por que um produto que TEM estoque de verdade
+// aparece com "0" no painel (coluna Estoque do card "Top produtos mais vendidos"). O valor
+// exibido vem só da tabela `inventory`, que é preenchida pelo job `syncInventory` listando
+// SKUs ATIVOS no catálogo (/api/catalog_system/pvt/sku/stockkeepingunitids) — então um SKU
+// que nunca aparece nessa listagem (por qualquer motivo: IsActive=false, alguma paginação
+// que não cobriu ele, etc.) nunca ganha linha em `inventory` e cai no COALESCE(...,0) do
+// card. Esse diagnóstico busca AO VIVO na Vtex (sem depender do cache) pra cada SKU do
+// produto: (a) o que está cacheado agora em `inventory`, (b) a resposta crua do endpoint de
+// estoque da Vtex (/api/logistics/pvt/inventory/skus/{id} — mostra hasUnlimitedQuantity,
+// totalQuantity, reservedQuantity por depósito, útil pra pegar o caso de "estoque
+// ilimitado" que zera o totalQuantity) e (c) IsActive/IsAvailable do catálogo (mostra se o
+// SKU está marcado inativo, o que o tiraria da sincronização mesmo tendo estoque físico).
+// Aceita productId OU productName (busca parcial, case-insensitive, nos pedidos já
+// sincronizados) — útil quando só se sabe o nome exibido no painel. Só admin autenticado.
+app.get("/api/debug/sample-product-stock", requireAuth, requireAdmin, handle(async (req) => {
+  const vtexConn = require("./connectors/vtex");
+  const productIdParam = req.query.productId ? String(req.query.productId).trim() : null;
+  const productNameParam = req.query.productName ? String(req.query.productName).trim() : null;
+
+  if (!productIdParam && !productNameParam) {
+    return { aviso: "Informe productId ou productName." };
+  }
+
+  let productId = productIdParam;
+
+  if (!productId) {
+    const { rows: candidatos } = await pool.query(
+      `SELECT DISTINCT product_id, (array_agg(product_name))[1] AS product_name
+       FROM order_items
+       WHERE product_name ILIKE '%' || $1 || '%'
+       GROUP BY product_id
+       LIMIT 10`,
+      [productNameParam]
+    );
+    if (!candidatos.length) {
+      return { aviso: "Nenhum produto encontrado com esse nome nos pedidos sincronizados.", productNameBuscado: productNameParam };
+    }
+    if (candidatos.length > 1) {
+      return {
+        aviso: "Mais de um produto bateu com esse nome — chame de novo passando productId com um dos IDs abaixo.",
+        candidatos: candidatos.map((c) => ({ productId: c.product_id, produto: c.product_name })),
+      };
+    }
+    productId = candidatos[0].product_id;
+  }
+
+  const { rows: skuRows } = await pool.query(
+    `SELECT DISTINCT oi.sku, oi.product_name
+     FROM order_items oi
+     WHERE oi.product_id = $1
+     ORDER BY oi.sku`,
+    [productId]
+  );
+  if (!skuRows.length) {
+    return { aviso: "Nenhum SKU encontrado pra esse productId nos pedidos sincronizados.", productId };
+  }
+
+  const { rows: cacheRows } = await pool.query(
+    `SELECT sku, available_quantity, has_unlimited_quantity, date_first_available, synced_at, raw->>'IsActive' AS is_active_cache
+     FROM inventory WHERE sku = ANY($1::text[])`,
+    [skuRows.map((r) => r.sku)]
+  );
+  const cacheBySku = {};
+  cacheRows.forEach((r) => { cacheBySku[r.sku] = r; });
+
+  return Promise.all(
+    skuRows.map(async (r) => {
+      const resultado = {
+        sku: r.sku,
+        nome: r.product_name,
+        cacheInventoryTable: cacheBySku[r.sku]
+          ? {
+              availableQuantity: Number(cacheBySku[r.sku].available_quantity),
+              hasUnlimitedQuantity: cacheBySku[r.sku].has_unlimited_quantity,
+              dateFirstAvailable: cacheBySku[r.sku].date_first_available,
+              syncedAt: cacheBySku[r.sku].synced_at,
+              isActiveNoUltimoSync: cacheBySku[r.sku].is_active_cache,
+            }
+          : "SEM CACHE — esse SKU nunca apareceu em /api/catalog_system/pvt/sku/stockkeepingunitids (a listagem que o syncInventory usa pra saber quais SKUs buscar), então nunca foi gravado em `inventory` e por isso o painel mostra 0.",
+      };
+      try {
+        const inv = await vtexConn.getSkuInventory(r.sku);
+        resultado.estoqueAoVivoNaVtex = inv;
+      } catch (err) {
+        resultado.erroEstoqueAoVivo = err.message;
+      }
+      try {
+        const d = await vtexConn.getSkuDetail(r.sku);
+        resultado.detalheSkuAoVivo = { IsActive: d.IsActive, IsAvailable: d.IsAvailable, RefId: d.RefId, SkuName: d.SkuName };
+      } catch (err) {
+        resultado.erroDetalheAoVivo = err.message;
+      }
+      return resultado;
+    })
+  );
+}));
+
+// ---- Autenticação ----
+app.post("/api/auth/login", handle(async (req) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    const err = new Error("Informe email e senha.");
+    err.status = 400;
+    throw err;
+  }
+  const user = await findUserByEmail(email);
+  if (!user) {
+    const err = new Error("Email ou senha inválidos.");
+    err.status = 401;
+    throw err;
+  }
+  const ok = await bcrypt.compare(password, user.password_hash);
+  if (!ok) {
+    const err = new Error("Email ou senha inválidos.");
+    err.status = 401;
+    throw err;
+  }
+  const token = signToken(user);
+  return { token, user: await loadAccess(user.id) };
+}));
+
+// Perfil sempre lido do banco: se o admin trocar o acesso de alguém, vale na próxima abertura de tela.
+app.get("/api/auth/me", requireAuth, handle(async (req) => {
+  const user = await loadAccess(req.user.sub);
+  if (!user) { const err = new Error("Usuário não encontrado."); err.status = 401; throw err; }
+  return { user };
+}));
+
+app.get("/api/auth/users", requireAuth, requireAdmin, handle(async () => ({ users: await listUsers() })));
+
+app.post("/api/auth/users", requireAuth, requireAdmin, handle(async (req) => {
+  const { email, password, role, nome, modules, cd_perfis } = req.body || {};
+  if (!email || !password) {
+    const err = new Error("Informe email e senha.");
+    err.status = 400;
+    throw err;
+  }
+  const existing = await findUserByEmail(email);
+  if (existing) {
+    const err = new Error("Já existe um usuário com esse email.");
+    err.status = 409;
+    throw err;
+  }
+  const user = await createUser({ email, password, role, nome, modules, cd_perfis });
+  return { user };
+}));
+
+app.put("/api/auth/users/:id/acesso", requireAuth, requireAdmin, handle(async (req) => {
+  const { role, nome, modules, cd_perfis } = req.body || {};
+  if (String(req.user.sub) === String(req.params.id) && role !== "admin") {
+    const err = new Error("Você não pode tirar o próprio acesso de administrador.");
+    err.status = 400;
+    throw err;
+  }
+  const user = await updateUserAccess(req.params.id, { role, nome, modules, cd_perfis });
+  if (!user) { const err = new Error("Usuário não encontrado."); err.status = 404; throw err; }
+  return { user };
+}));
+
+app.delete("/api/auth/users/:id", requireAuth, requireAdmin, handle(async (req) => {
+  if (String(req.user.sub) === String(req.params.id)) {
+    const err = new Error("Você não pode remover o próprio acesso.");
+    err.status = 400;
+    throw err;
+  }
+  await deleteUser(req.params.id);
+  return { ok: true };
+}));
+
+// ---- Vendas ----
+// Painel de vendas: só quem tem o módulo "vendas" (usuários antigos já nascem com ele).
+app.use(["/api/vendas", "/api/logistica", "/api/marketing", "/api/overview"], requireAuth, requireModule("vendas"));
+
+app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo, statuses: parseStatusFilter(req) })));
+app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
+  await vendas.setRevenueGoal({ month: new Date(req.body.month), goalValue: Number(req.body.goalValue) });
+  return { ok: true };
+}));
+app.get("/api/vendas/por-categoria", requireAuth, handle((req) => vendas.vendaPorCategoria({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/por-tipo", requireAuth, handle((req) => vendas.vendaPorTipo({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/venda-diaria", requireAuth, handle((req) => vendas.vendaDiaria({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/novos-recorrentes", requireAuth, handle((req) => vendas.novosRecorrentes({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/cupons", requireAuth, handle((req) => vendas.usoCupons({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/comparativo-cupom", requireAuth, handle((req) => vendas.comparativoCupom({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/sazonalidade", requireAuth, handle((req) => vendas.sazonalidade({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+// Sem parseDateRange: a projeção sempre olha pra "hoje" e pra trás numa janela fixa (ver
+// PROJECAO_LOOKBACK_DIAS em vendas.js), não pro período selecionado no topo do painel.
+app.get("/api/vendas/projecao-fechamento-dia", requireAuth, handle((req) => vendas.projecaoFechamentoDia({ statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/curva-abc", requireAuth, handle((req) => vendas.curvaAbcProdutos({
+  ...parseDateRange(req),
+  categoria: req.query.categoria,
+  metric: req.query.metric,
+  classes: req.query.classes ? String(req.query.classes).split(",").map((c) => c.trim()).filter(Boolean) : undefined,
+  statuses: parseStatusFilter(req),
+})));
+app.get("/api/vendas/categorias", requireAuth, handle(async () => {
+  const { rows } = await pool.query(
+    "SELECT DISTINCT category FROM order_items WHERE category IS NOT NULL ORDER BY category"
+  );
+  return { categorias: rows.map((r) => r.category) };
+}));
+app.get("/api/vendas/meios-pagamento", requireAuth, handle((req) => vendas.meiosDePagamento({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/eficiencia-frete-regiao", requireAuth, handle((req) => vendas.eficienciaFretePorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/receita-por-regiao", requireAuth, handle((req) => vendas.receitaPorRegiao({ ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/ranking-produtos-estoque", requireAuth, handle((req) => vendas.rankingProdutosXEstoque({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/produtos-mais-vendidos", requireAuth, handle((req) => vendas.produtosMaisVendidos({ ...parseDateRange(req), limit: req.query.limit ? Number(req.query.limit) : undefined, statuses: parseStatusFilter(req) })));
+app.get("/api/vendas/produtos-mais-vendidos/:productId/tamanhos", requireAuth, handle((req) => vendas.produtoDetalhePorTamanho({ productId: req.params.productId, ...parseDateRange(req), statuses: parseStatusFilter(req) })));
+
+// ---- Logística ----
+app.get("/api/logistica/sla-entrega", requireAuth, handle((req) => logistica.slaDeEntrega(parseDateRange(req))));
+app.get("/api/logistica/eficiencia-frete-regiao", requireAuth, handle((req) => logistica.eficienciaFretePorRegiao(parseDateRange(req))));
+app.get("/api/logistica/lojas", requireAuth, handle((req) => logistica.desempenhoLojas(parseDateRange(req))));
+app.get("/api/logistica/lojas-regiao", requireAuth, handle((req) => logistica.lojaPorEstadoDestino(parseDateRange(req))));
+// Correção manual do estado (UF) de cada loja/depósito OMNI — a Vtex não retorna
+// endereço pros warehouses dessa conta, então esse é o jeito de informar de qual
+// estado cada loja realmente despacha (ver nota em syncVtex.js extractWarehouseFields).
+app.get("/api/logistica/lojas-estados", requireAuth, handle(() => logistica.listLojaEstados()));
+app.post("/api/logistica/lojas-estados", requireAuth, requireAdmin, handle(async (req) => {
+  const { warehouseId, state } = req.body || {};
+  return logistica.setLojaEstado(warehouseId, state);
+}));
+
+// ---- Marketing ----
+app.get("/api/marketing/sessoes-categoria-produto", requireAuth, handle((req) => marketing.sessoesPorCategoriaEProduto({ dateRanges: parseGa4DateRanges(req) })));
+app.get("/api/marketing/ticket-medio", requireAuth, handle((req) => marketing.ticketMedio(parseDateRange(req))));
+app.get("/api/marketing/conversao-origem", requireAuth, handle((req) => marketing.conversaoPorOrigem({ dateRanges: parseGa4DateRanges(req) })));
+app.get("/api/marketing/receita-categoria-produto", requireAuth, handle((req) => marketing.receitaPorCategoriaEProduto(parseDateRange(req))));
+app.get("/api/marketing/receita-pagamento-regiao", requireAuth, handle((req) => marketing.receitaPorPagamentoERegiao(parseDateRange(req))));
+
+// ---- Overview ----
+app.get("/api/overview/receita-dispositivo", requireAuth, handle((req) => overview.receitaPorDispositivo({ dateRanges: parseGa4DateRanges(req), source: req.query.source })));
+app.get("/api/overview/taxa-rejeicao", requireAuth, handle((req) => overview.taxaDeRejeicao({ dateRanges: parseGa4DateRanges(req), source: req.query.source })));
+app.get("/api/overview/taxa-conversao", requireAuth, handle((req) => overview.taxaDeConversao({ dateRanges: parseGa4DateRanges(req), source: req.query.source })));
+app.get("/api/overview/tracking-pedido", requireAuth, handle((req) => overview.trackingDePedido(parseDateRange(req))));
+app.get("/api/overview/itens-por-pedido", requireAuth, handle((req) => overview.itensPorPedido(parseDateRange(req))));
+app.get("/api/overview/ltv-categoria", requireAuth, handle((req) => overview.ltvPorCategoria(parseDateRange(req))));
+
+// ---- Sync manual (útil para forçar atualização ou popular pela primeira vez) ----
+// Aceita GET também (além de POST) para poder disparar direto pelo navegador.
+// Restrito ao admin: dispara chamadas pesadas na Vtex e reescreve dados sincronizados.
+//
+// IMPORTANTE: todas essas rotas disparam o trabalho pesado em segundo plano
+// (runJobInBackground) e respondem na hora, em vez de esperar o job inteiro
+// terminar. Isso evita "Failed to fetch" no navegador quando a sincronização
+// demora mais que o timeout do proxy/Railway (catálogo grande, período histórico
+// longo etc.) — o job continua rodando no servidor mesmo depois da resposta ter
+// sido enviada. O frontend consulta /api/sync/status pra saber quando terminou.
+app.post("/api/sync/orders", requireAuth, requireAdmin, handle(async (req) => {
+  const { daysBack, dateFrom, dateTo } = req.body || {};
+  return runJobInBackground("orders", () => syncOrders({ daysBack, dateFrom, dateTo }));
+}));
+app.get("/api/sync/orders", requireAuth, requireAdmin, handle(async (req) => {
+  return runJobInBackground("orders", () => syncOrders({
+    daysBack: req.query?.daysBack ? Number(req.query.daysBack) : undefined,
+    dateFrom: req.query?.dateFrom,
+    dateTo: req.query?.dateTo,
+  }));
+}));
+app.post("/api/sync/inventory", requireAuth, requireAdmin, handle(async () => {
+  return runJobInBackground("inventory", () => syncInventory());
+}));
+app.get("/api/sync/inventory", requireAuth, requireAdmin, handle(async () => {
+  return runJobInBackground("inventory", () => syncInventory());
+}));
+// Sincroniza só a lista de lojas/depósitos (warehouses) — já roda sozinho junto com o
+// estoque a cada 6h, mas dá pra disparar na hora sem esperar o próximo ciclo.
+app.post("/api/sync/warehouses", requireAuth, requireAdmin, handle(async () => {
+  return runJobInBackground("warehouses", () => syncWarehouses());
+}));
+app.get("/api/sync/warehouses", requireAuth, requireAdmin, handle(async () => {
+  return runJobInBackground("warehouses", () => syncWarehouses());
+}));
+// Backfill único: recalcula os nomes de categoria e a loja/depósito (warehouse_id) dos
+// itens de todos os pedidos já sincronizados (corrige o bug em que a categoria ficava
+// salva como ID numérico da Vtex, e também popula warehouse_id em pedidos sincronizados
+// antes dessa coluna existir — rode depois de sincronizar as lojas pelo menos uma vez).
+app.get("/api/sync/backfill-categories", requireAuth, requireAdmin, handle(async () => {
+  return runJobInBackground("backfill-categories", () => backfillCategories());
+}));
+// Backfill único: recalcula delivered_at / dias de frete real e prometido de todos os
+// pedidos já sincronizados (corrige o bug em que a entrega não era detectada).
+app.get("/api/sync/backfill-order-fields", requireAuth, requireAdmin, handle(async () => {
+  return runJobInBackground("backfill-order-fields", () => backfillOrderFields());
+}));
+// Consultado pelo frontend depois de disparar um sync/backfill, pra saber quando o job
+// que ficou rodando em segundo plano terminou (e se deu certo ou não).
+// ---- Módulo Recebimento / CD ----
+const cdAuth = [requireAuth, requireModule("cd")];
+const nid = (req) => Number(req.params.id);
+app.get("/api/cd/config", cdAuth, handle(() => cd.configPublica()));
+app.put("/api/cd/config/etapas", cdAuth, requireAdmin, handle((req) => cd.salvarConfigEtapas((req.body || {}).etapas)));
+app.get("/api/cd/usuarios", cdAuth, handle(async () => {
+  const { rows } = await pool.query("SELECT email, nome FROM users WHERE role = 'admin' OR 'cd' = ANY(modules)");
+  const usuarios = {};
+  for (const r of rows) usuarios[r.email] = r.nome || r.email.split("@")[0];
+  return { usuarios };
+}));
+app.get("/api/cd/painel", cdAuth, handle((req) => cd.painel(req.access)));
+app.get("/api/cd/gargalos", cdAuth, handle((req) => cd.gargalos(req.access, { dias: req.query.dias })));
+app.get("/api/cd/cores", cdAuth, handle(() => cd.listarCores()));
+app.post("/api/cd/cores", cdAuth, handle((req) => cd.criarCor(req.access, req.body || {})));
+app.get("/api/cd/fornecedores", cdAuth, handle((req) => cd.fornecedores(req.access, { dias: req.query.dias })));
+app.get("/api/cd/notas", cdAuth, handle((req) => cd.listarNotas(req.access, { status: req.query.status, q: req.query.q, limit: req.query.limit })));
+app.post("/api/cd/notas", cdAuth, handle((req) => cd.criarNota(req.access, req.body || {})));
+app.get("/api/cd/notas/:id", cdAuth, handle((req) => cd.detalheNota(req.access, nid(req))));
+app.post("/api/cd/notas/:id/etapas/:n/iniciar", cdAuth, handle((req) => cd.iniciarEtapa(req.access, nid(req), Number(req.params.n))));
+app.put("/api/cd/notas/:id/etapas/:n/itens", cdAuth, handle((req) => cd.salvarItens(req.access, nid(req), Number(req.params.n), req.body || {})));
+app.post("/api/cd/notas/:id/etapas/:n/conferir", cdAuth, handle((req) => cd.conferirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).dados || {})));
+app.post("/api/cd/notas/:id/etapas/:n/concluir", cdAuth, handle((req) => cd.concluirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).dados || {})));
+app.post("/api/cd/notas/:id/recontagens", cdAuth, handle((req) => cd.registrarRecontagem(req.access, nid(req), req.body || {})));
+app.post("/api/cd/notas/:id/etiquetas", cdAuth, handle((req) => cd.registrarLoteEtiquetas(req.access, nid(req), req.body || {})));
+app.delete("/api/cd/notas/:id/etiquetas/:lid", cdAuth, handle((req) => cd.removerLoteEtiquetas(req.access, nid(req), Number(req.params.lid))));
+app.put("/api/cd/notas/:id/ranking", cdAuth, handle((req) => cd.definirRanking(req.access, nid(req), (req.body || {}).ranking)));
+// ---- Faturamento e trânsito (aba própria: NFs de saída, tabelas das transportadoras, coleta, entrega) ----
+const trn = require("./cd/transito");
+const T = "/api/cd/transito";
+const grande = express.json({ limit: "7mb" });
+const grandeTabela = express.json({ limit: "25mb" });
+app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, uf: req.query.uf })));
+app.get(T + "/resumo", cdAuth, handle((req) => trn.resumo(req.access)));
+app.get(T + "/nfs", cdAuth, handle((req) => trn.listarNfs(req.access, req.query)));
+app.post(T + "/nfs", cdAuth, grande, handle((req) => trn.enviarNf(req.access, req.body || {})));
+app.post(T + "/nfs/transportadora", cdAuth, handle((req) => trn.definirTransportadora(req.access, req.body || {})));
+app.post(T + "/nfs/coleta", cdAuth, handle((req) => trn.marcarColeta(req.access, req.body || {})));
+app.post(T + "/nfs/entrega", cdAuth, handle((req) => trn.marcarEntregue(req.access, req.body || {})));
+app.get(T + "/nfs/:id", cdAuth, handle((req) => trn.detalheNf(req.access, nid(req))));
+app.put(T + "/nfs/:id", cdAuth, handle((req) => trn.editarNf(req.access, nid(req), req.body || {})));
+app.post(T + "/nfs/:id/voltar", cdAuth, handle((req) => trn.voltarStatus(req.access, nid(req), req.body || {})));
+app.delete(T + "/nfs/:id", cdAuth, handle((req) => trn.cancelarNf(req.access, nid(req), req.body || {})));
+app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
+  try {
+    const f = await trn.baixarArquivo(req.access, nid(req));
+    res.set({ "Content-Type": f.tipo === "pdf" ? "application/pdf" : "application/xml", "Content-Disposition": `attachment; filename="${String(f.nome).replace(/[^\w.\- ]/g, "_")}"` });
+    res.send(f.conteudo);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
+app.get(T + "/transportadoras", cdAuth, handle((req) => trn.listarTransportadoras(req.access)));
+app.post(T + "/transportadoras", cdAuth, handle((req) => trn.salvarTransportadora(req.access, null, req.body || {})));
+app.put(T + "/transportadoras/:id", cdAuth, handle((req) => trn.salvarTransportadora(req.access, nid(req), req.body || {})));
+app.post(T + "/transportadoras/:id/tabela", cdAuth, grandeTabela, handle((req) => trn.importarTabela(req.access, nid(req), req.body || {})));
+app.get(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.verTabela(req.access, nid(req), { uf: req.query.uf })));
+app.delete(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.limparTabela(req.access, nid(req))));
+app.post(T + "/simular", cdAuth, handle((req) => trn.simular(req.access, req.body || {})));
+app.post("/api/cd/notas/:id/etapas/:n/reabrir", cdAuth, handle((req) => cd.reabrirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).motivo)));
+app.post("/api/cd/notas/:id/cancelar", cdAuth, handle((req) => cd.cancelarNota(req.access, nid(req), (req.body || {}).motivo)));
+app.post("/api/cd/notas/:id/comentarios", cdAuth, handle((req) => cd.comentar(req.access, nid(req), (req.body || {}).texto, (req.body || {}).etapa)));
+
+app.get("/api/sync/status", requireAuth, requireAdmin, handle(async () => ({ jobs: await getAllJobStatuses() })));
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
+
+// Libera qualquer job que ficou marcado "running" de um processo anterior (deploy/restart no
+// meio de uma sincronização) — sem isso, o botão "Sincronizar agora" ficaria bloqueado pra
+// sempre com "já tem uma sincronização rodando". Ver comentário em jobRunner.js.
+reconcileStaleJobsOnBoot()
+  .then(runPromisedDateBackfillOnce)
+  .catch((err) => console.error("[server] falha ao reconciliar jobs travados:", err.message));
+
+// Roda UMA vez por versão (marcado em sync_state) depois dos deploys que corrigiram campos
+// derivados do pedido (v2: prazo prometido em dias úteis/corridos + data prometida da Vtex;
+// v3: client_id estável em vez do email mascarado da Vtex): reaproveita o `raw` já salvo de
+// cada pedido, sem chamar a Vtex, e regrava esses campos nos pedidos antigos. O status aparece em /api/sync/status como "backfill-order-fields".
+async function runPromisedDateBackfillOnce() {
+  const FLAG = "migr:order_fields_v3";
+  const { rows } = await pool.query("SELECT 1 FROM sync_state WHERE key = $1", [FLAG]);
+  if (rows.length) return;
+  await runJobInBackground("backfill-order-fields", async () => {
+    await backfillOrderFields();
+    await pool.query(
+      `INSERT INTO sync_state (key, value, updated_at) VALUES ($1, 'done', now())
+       ON CONFLICT (key) DO UPDATE SET value = 'done', updated_at = now()`,
+      [FLAG]
+    );
+  });
+}
+
+// Sincroniza pedidos a cada 30 minutos e estoque a cada 6 horas.
+if (process.env.DISABLE_CRON !== "true") {
+  cron.schedule("*/30 * * * *", () => {
+    syncOrders().catch((err) => console.error("[cron] erro ao sincronizar pedidos:", err.response?.data || err.message));
+  });
+  cron.schedule("0 */6 * * *", () => {
+    syncInventory().catch((err) => console.error("[cron] erro ao sincronizar estoque:", err.response?.data || err.message));
+  });
+}
