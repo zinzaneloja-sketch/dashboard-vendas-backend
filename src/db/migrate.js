@@ -379,6 +379,21 @@ CREATE TABLE IF NOT EXISTS cd_fat_nfs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS cd_fat_nfs_chave_uq ON cd_fat_nfs (chave) WHERE chave IS NOT NULL;
 ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS prazo_manual BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS transportadora_cnpj TEXT;
+-- registro das NFs de saída excluídas (a NF some, o rastro fica)
+CREATE TABLE IF NOT EXISTS cd_fat_excluidas (
+  id          BIGSERIAL PRIMARY KEY,
+  nfs_id      BIGINT,
+  numero      TEXT,
+  serie       TEXT,
+  chave       TEXT,
+  destino     TEXT,
+  status      TEXT,
+  arquivo_nome TEXT,
+  motivo      TEXT,
+  excluida_por TEXT NOT NULL,
+  excluida_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE INDEX IF NOT EXISTS cd_fat_nfs_status_idx ON cd_fat_nfs (status, previsao_entrega);
 CREATE TABLE IF NOT EXISTS cd_fat_nfs_arq (
   nfs_id   BIGINT PRIMARY KEY REFERENCES cd_fat_nfs(id) ON DELETE CASCADE,
