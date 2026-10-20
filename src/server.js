@@ -548,7 +548,7 @@ app.put("/api/cd/notas/:id/ranking", cdAuth, handle((req) => cd.definirRanking(r
 // ---- Faturamento e trânsito (aba própria: NFs de saída, tabelas das transportadoras, coleta, entrega) ----
 const trn = require("./cd/transito");
 const T = "/api/cd/transito";
-const grande = express.json({ limit: "7mb" });
+const grande = express.json({ limit: "16mb" }); // até 10 MB de arquivo (o base64 aumenta ~33%)
 const grandeTabela = express.json({ limit: "25mb" });
 app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, uf: req.query.uf })));
 app.get(T + "/resumo", cdAuth, handle((req) => trn.resumo(req.access)));
