@@ -27,7 +27,9 @@ const cd = require("./cd/cd");
 
 const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
-app.use(express.json());
+// o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
+const jsonPadrao = express.json();
+app.use((req, res, next) => (req.method === "POST" && /\/api\/cd\/notas\/\d+\/nfs-saida$/.test(req.path) ? next() : jsonPadrao(req, res, next)));
 
 function parseDateRange(req) {
   const { dateFrom, dateTo } = req.query;
@@ -528,17 +530,32 @@ app.get("/api/cd/usuarios", cdAuth, handle(async () => {
   return { usuarios };
 }));
 app.get("/api/cd/painel", cdAuth, handle((req) => cd.painel(req.access)));
-app.get("/api/cd/gargalos", cdAuth, handle((req) => cd.gargalos({ dias: req.query.dias })));
+app.get("/api/cd/gargalos", cdAuth, handle((req) => cd.gargalos(req.access, { dias: req.query.dias })));
 app.get("/api/cd/cores", cdAuth, handle(() => cd.listarCores()));
 app.post("/api/cd/cores", cdAuth, handle((req) => cd.criarCor(req.access, req.body || {})));
-app.get("/api/cd/fornecedores", cdAuth, handle((req) => cd.fornecedores({ dias: req.query.dias })));
-app.get("/api/cd/notas", cdAuth, handle((req) => cd.listarNotas({ status: req.query.status, q: req.query.q, limit: req.query.limit })));
+app.get("/api/cd/fornecedores", cdAuth, handle((req) => cd.fornecedores(req.access, { dias: req.query.dias })));
+app.get("/api/cd/notas", cdAuth, handle((req) => cd.listarNotas(req.access, { status: req.query.status, q: req.query.q, limit: req.query.limit })));
 app.post("/api/cd/notas", cdAuth, handle((req) => cd.criarNota(req.access, req.body || {})));
 app.get("/api/cd/notas/:id", cdAuth, handle((req) => cd.detalheNota(req.access, nid(req))));
 app.post("/api/cd/notas/:id/etapas/:n/iniciar", cdAuth, handle((req) => cd.iniciarEtapa(req.access, nid(req), Number(req.params.n))));
 app.put("/api/cd/notas/:id/etapas/:n/itens", cdAuth, handle((req) => cd.salvarItens(req.access, nid(req), Number(req.params.n), req.body || {})));
 app.post("/api/cd/notas/:id/etapas/:n/conferir", cdAuth, handle((req) => cd.conferirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).dados || {})));
 app.post("/api/cd/notas/:id/etapas/:n/concluir", cdAuth, handle((req) => cd.concluirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).dados || {})));
+app.post("/api/cd/notas/:id/recontagens", cdAuth, handle((req) => cd.registrarRecontagem(req.access, nid(req), req.body || {})));
+app.post("/api/cd/notas/:id/etiquetas", cdAuth, handle((req) => cd.registrarLoteEtiquetas(req.access, nid(req), req.body || {})));
+app.delete("/api/cd/notas/:id/etiquetas/:lid", cdAuth, handle((req) => cd.removerLoteEtiquetas(req.access, nid(req), Number(req.params.lid))));
+app.put("/api/cd/notas/:id/ranking", cdAuth, handle((req) => cd.definirRanking(req.access, nid(req), (req.body || {}).ranking)));
+// NFs de saída do faturamento: um arquivo por chamada (o navegador envia vários em fila). O corpo leva o arquivo em base64.
+app.post("/api/cd/notas/:id/nfs-saida", cdAuth, express.json({ limit: "7mb" }), handle((req) => cd.enviarNfSaida(req.access, nid(req), req.body || {})));
+app.put("/api/cd/notas/:id/nfs-saida/:sid", cdAuth, handle((req) => cd.editarNfSaida(req.access, nid(req), Number(req.params.sid), req.body || {})));
+app.delete("/api/cd/notas/:id/nfs-saida/:sid", cdAuth, handle((req) => cd.removerNfSaida(req.access, nid(req), Number(req.params.sid))));
+app.get("/api/cd/notas/:id/nfs-saida/:sid/arquivo", cdAuth, async (req, res) => {
+  try {
+    const f = await cd.baixarNfSaida(req.access, nid(req), Number(req.params.sid));
+    res.set({ "Content-Type": f.tipo === "pdf" ? "application/pdf" : "application/xml", "Content-Disposition": `attachment; filename="${String(f.nome).replace(/[^\w.\- ]/g, "_")}"` });
+    res.send(f.conteudo);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
 app.post("/api/cd/notas/:id/etapas/:n/reabrir", cdAuth, handle((req) => cd.reabrirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).motivo)));
 app.post("/api/cd/notas/:id/cancelar", cdAuth, handle((req) => cd.cancelarNota(req.access, nid(req), (req.body || {}).motivo)));
 app.post("/api/cd/notas/:id/comentarios", cdAuth, handle((req) => cd.comentar(req.access, nid(req), (req.body || {}).texto, (req.body || {}).etapa)));
