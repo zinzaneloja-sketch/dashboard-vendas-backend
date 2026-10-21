@@ -552,6 +552,7 @@ const grande = express.json({ limit: "16mb" }); // até 10 MB de arquivo (o base
 const grandeTabela = express.json({ limit: "25mb" });
 app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, uf: req.query.uf, modal: req.query.modal })));
 app.get(T + "/resumo", cdAuth, handle((req) => trn.resumo(req.access)));
+app.get(T + "/pagamentos", cdAuth, handle((req) => trn.fluxoPagamento(req.access, { dias: req.query.dias })));
 app.get(T + "/nfs", cdAuth, handle((req) => trn.listarNfs(req.access, req.query)));
 app.post(T + "/nfs", cdAuth, grande, handle((req) => trn.enviarNf(req.access, req.body || {})));
 app.post(T + "/nfs/excluir", cdAuth, handle((req) => trn.excluirNfs(req.access, req.body || {})));
