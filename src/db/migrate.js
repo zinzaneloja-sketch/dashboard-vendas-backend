@@ -380,6 +380,17 @@ CREATE TABLE IF NOT EXISTS cd_fat_nfs (
 CREATE UNIQUE INDEX IF NOT EXISTS cd_fat_nfs_chave_uq ON cd_fat_nfs (chave) WHERE chave IS NOT NULL;
 ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS prazo_manual BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS transportadora_cnpj TEXT;
+-- prazos de entrega cadastrados por transportadora (por UF ou cidade) + prazo padrão
+ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS prazo_padrao INTEGER;
+CREATE TABLE IF NOT EXISTS cd_transportadora_prazos (
+  id               BIGSERIAL PRIMARY KEY,
+  transportadora_id BIGINT NOT NULL REFERENCES cd_transportadoras(id) ON DELETE CASCADE,
+  uf               TEXT NOT NULL,
+  cidade           TEXT,
+  cidade_norm      TEXT,
+  prazo_dias       INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cd_transportadora_prazos_uq ON cd_transportadora_prazos (transportadora_id, uf, coalesce(cidade_norm, ''));
 -- registro das NFs de saída excluídas (a NF some, o rastro fica)
 CREATE TABLE IF NOT EXISTS cd_fat_excluidas (
   id          BIGSERIAL PRIMARY KEY,
