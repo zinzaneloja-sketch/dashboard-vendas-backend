@@ -391,6 +391,9 @@ function situacao(n, dia = hoje()) {
     const emi = n.emitida_em ? diaLocal(n.emitida_em) : diaLocal(n.enviada_em);
     o.dias_aguardando = diasUteisEntre(emi, dia);
     o.parada = o.dias_aguardando >= 2;
+    // ainda sem coleta: previsão só estimada, contando da emissão; passa a contar da data da coleta quando ela for marcada
+    o.previsao_estimada = n.prazo_dias !== null && n.prazo_dias !== undefined && emi ? addDias(emi, Number(n.prazo_dias), n.prazo_corridos) : null;
+    o.estimada_vencida = !!(o.previsao_estimada && dia > o.previsao_estimada);
   }
   return o;
 }
@@ -520,7 +523,7 @@ async function relatorio(acc, f = {}) {
     gerado_em: new Date().toISOString(), resumo, por_transportadora: porTransp, por_uf: porUf, por_loja: porLoja, serie, por_status: porStatus, economia,
     nfs: nfs.map((n) => ({ id: n.id, numero: n.numero, serie: n.serie, data_ref: n.data_ref, emitida_em: n.emitida_em, loja: n.destino_nome, cnpj: n.destino_cnpj, uf: n.destino_uf, cidade: n.destino_cidade, pecas: n.pecas, volumes: n.volumes, peso_kg: n.peso_kg, valor: n.valor,
       transportadora: n.transportadora || null, transportadora_na_nf: n.transportadora_xml || null, frete_previsto: n.frete_previsto, frete_real: n.frete_real, custo: n.custo, custo_tipo: n.custo_tipo, prazo_dias: n.prazo_dias, status: n.status, situacao: n.situacao,
-      coleta_data: n.coleta_data, previsao_entrega: n.previsao_entrega, entregue_data: n.entregue_data, mais_barata: n.mais_barata ? n.mais_barata.transportadora : null, frete_mais_barata: n.mais_barata ? n.mais_barata.frete : null, economia_possivel: n.economia_possivel || 0 })),
+      coleta_data: n.coleta_data, previsao_entrega: n.previsao_entrega, previsao_estimada: n.previsao_estimada || null, entregue_data: n.entregue_data, mais_barata: n.mais_barata ? n.mais_barata.transportadora : null, frete_mais_barata: n.mais_barata ? n.mais_barata.frete : null, economia_possivel: n.economia_possivel || 0 })),
   };
 }
 
