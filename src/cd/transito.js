@@ -119,6 +119,34 @@ async function linhaDaTabela(db, transportadoraId, uf, cidade, peso) {
   return rows[0] || null;
 }
 
+async function prazoCadastrado(db, tid, uf, cidade) {
+  const { rows } = await db.query(
+    `SELECT prazo_dias, cidade_norm FROM cd_transportadora_prazos WHERE transportadora_id = $1 AND uf = $2 AND (cidade_norm IS NULL OR cidade_norm = $3) ORDER BY (cidade_norm IS NULL) LIMIT 1`, [tid, uf, semAcento(cidade)]);
+  return rows[0] ? { prazo: Number(rows[0].prazo_dias), origem: rows[0].cidade_norm ? "prazo cadastrado (cidade)" : "prazo cadastrado (UF)" } : null;
+}
+
+// escolhe a melhor cotação: "mais_barata", "mais_rapida" ou "equilibrada" (nota ponderada de preço e prazo); prazo_max filtra quem entrega depois
+function escolher(cots, modo, { peso_preco = 50, prazo_max = null } = {}) {
+  let c = cots.filter((x) => x.ok);
+  if (prazo_max !== null && prazo_max !== undefined) c = c.filter((x) => x.prazo_dias !== null && x.prazo_dias <= prazo_max);
+  if (modo === "mais_rapida" || modo === "equilibrada") c = c.filter((x) => x.prazo_dias !== null);
+  if (!c.length) return null;
+  if (modo === "mais_rapida") return c.slice().sort((a, z) => (a.prazo_efetivo - z.prazo_efetivo) || (a.frete - z.frete))[0];
+  if (modo === "equilibrada") {
+    const w = Math.min(Math.max(Number(peso_preco), 0), 100) / 100;
+    const fmin = Math.min(...c.map((x) => x.frete)), fmax = Math.max(...c.map((x) => x.frete)), pmin = Math.min(...c.map((x) => x.prazo_efetivo)), pmax = Math.max(...c.map((x) => x.prazo_efetivo));
+    const nota = (x) => w * (fmax > fmin ? (x.frete - fmin) / (fmax - fmin) : 0) + (1 - w) * (pmax > pmin ? (x.prazo_efetivo - pmin) / (pmax - pmin) : 0);
+    c.forEach((x) => { x.nota = Math.round(nota(x) * 1000) / 1000; });
+    return c.slice().sort((a, z) => (a.nota - z.nota) || (a.frete - z.frete))[0];
+  }
+  return c.slice().sort((a, z) => (a.frete - z.frete) || ((a.prazo_efetivo ?? 999) - (z.prazo_efetivo ?? 999)))[0];
+}
+function opcoesBid(b = {}) {
+  const pp = b.peso_preco === undefined || b.peso_preco === null || b.peso_preco === "" ? 50 : Math.min(Math.max(Number(b.peso_preco) || 0, 0), 100);
+  const pm = b.prazo_max === undefined || b.prazo_max === null || b.prazo_max === "" ? null : Math.max(0, Math.round(Number(b.prazo_max)));
+  return { peso_preco: pp, prazo_max: Number.isFinite(pm) ? pm : null };
+}
+
 async function cotarCom(db, t, nf) {
   // t: transportadora {id,nome,prazo_corridos}
   const base = { transportadora_id: Number(t.id), nome: t.nome, prazo_corridos: t.prazo_corridos };
@@ -127,13 +155,19 @@ async function cotarCom(db, t, nf) {
   const row = await linhaDaTabela(db, t.id, nf.destino_uf, nf.destino_cidade, Number(nf.peso_kg));
   if (!row) return { ...base, ok: false, motivo: `Sem faixa na tabela para ${nf.destino_uf}${nf.destino_cidade ? " / " + nf.destino_cidade : ""} com ${Number(nf.peso_kg)} kg.` };
   const c = calcFrete(row, nf.peso_kg, nf.valor);
-  const out = { ...base, ok: true, frete: c.total, memoria: c, prazo_dias: row.prazo_dias === null ? null : Number(row.prazo_dias), cidade_regra: row.cidade || null };
+  // prazo: o cadastrado por UF/cidade vence o da tabela de frete; sem nenhum dos dois, vale o prazo padrão da transportadora
+  const cad = await prazoCadastrado(db, t.id, nf.destino_uf, nf.destino_cidade);
+  let prazo = null, origem = null;
+  if (cad) { prazo = cad.prazo; origem = cad.origem; }
+  else if (row.prazo_dias !== null && row.prazo_dias !== undefined) { prazo = Number(row.prazo_dias); origem = "tabela de frete"; }
+  else { const pp = t.prazo_padrao !== undefined ? t.prazo_padrao : (await db.query("SELECT prazo_padrao FROM cd_transportadoras WHERE id = $1", [t.id])).rows[0]?.prazo_padrao; if (pp !== null && pp !== undefined) { prazo = Number(pp); origem = "prazo padrão"; } }
+  const out = { ...base, ok: true, frete: c.total, memoria: c, prazo_dias: prazo, prazo_origem: origem, prazo_efetivo: prazo === null ? null : (t.prazo_corridos ? prazo : Math.round(prazo * 1.4 * 10) / 10), cidade_regra: row.cidade || null };
   if (nf.valor === null || nf.valor === undefined) out.aviso = "NF sem valor: ad valorem e GRIS não entraram.";
   return out;
 }
 
-async function cotacoes(db, nf) {
-  const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos FROM cd_transportadoras WHERE ativa ORDER BY nome");
+async function cotacoes(db, nf, opts = {}) {
+  const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE ativa ORDER BY nome");
   const out = [];
   for (const t of ts) {
     const c = await cotarCom(db, t, nf);
@@ -147,7 +181,11 @@ async function cotacoes(db, nf) {
   if (ok.length) {
     const menor = Math.min(...ok.map((x) => x.frete)); ok.forEach((x) => { x.mais_barata = x.frete === menor; });
     const pz = ok.filter((x) => x.prazo_dias !== null);
-    if (pz.length) { const mp = Math.min(...pz.map((x) => x.prazo_dias)); pz.forEach((x) => { x.mais_rapida = x.prazo_dias === mp; }); }
+    if (pz.length) { const mp = Math.min(...pz.map((x) => x.prazo_efetivo)); pz.forEach((x) => { x.mais_rapida = x.prazo_efetivo === mp; }); }
+    const bid = opcoesBid(opts);
+    if (bid.prazo_max !== null) ok.forEach((x) => { x.dentro_prazo = x.prazo_dias !== null && x.prazo_dias <= bid.prazo_max; });
+    const eq = escolher(out, "equilibrada", bid); if (eq) eq.melhor_equilibrio = true;
+    if (bid.prazo_max !== null) { const bn = escolher(out, "mais_barata", bid); if (bn) bn.melhor_no_prazo = true; }
   }
   out.sort((a, b) => (b.ok - a.ok) || ((a.frete ?? 1e12) - (b.frete ?? 1e12)));
   return out;
@@ -157,9 +195,10 @@ async function cotacoes(db, nf) {
 async function listarTransportadoras(acc) {
   exigirFat(acc);
   const { rows } = await pool.query(
-    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
+    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
             (SELECT count(*)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS linhas,
-            (SELECT count(DISTINCT uf)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS ufs
+            (SELECT count(DISTINCT uf)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS ufs,
+            (SELECT count(*)::int FROM cd_transportadora_prazos p WHERE p.transportadora_id = t.id) AS prazos
        FROM cd_transportadoras t ORDER BY t.ativa DESC, lower(t.nome)`);
   return { transportadoras: rows };
 }
@@ -169,14 +208,17 @@ async function salvarTransportadora(acc, id, b = {}) {
   const nome = txt(b.nome).slice(0, 80);
   if (nome.length < 2) throw erro(400, "Informe o nome da transportadora.");
   const corr = b.prazo_corridos === true || b.prazo_corridos === "true";
+  const ppn = b.prazo_padrao === undefined || b.prazo_padrao === null || txt(b.prazo_padrao) === "" ? null : numBR(b.prazo_padrao);
+  if (ppn !== null && (ppn < 0 || ppn > 120 || Math.round(ppn) !== ppn)) throw erro(400, "O prazo padrão deve ser um número inteiro de dias (0 a 120).");
+  const pp = ppn;
   try {
     if (id) {
-      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa) WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa]);
+      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6 WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp]);
       if (!rows[0]) throw erro(404, "Transportadora não encontrada.");
       const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
       return { ok: true, id: Number(id), vinculadas: rl.vinculadas };
     }
-    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos) VALUES ($1,$2,$3) RETURNING id", [nome, opt(txt(b.cnpj)), corr]);
+    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao) VALUES ($1,$2,$3,$4) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp]);
     const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
     return { ok: true, id: Number(rows[0].id), vinculadas: rl.vinculadas };
   } catch (e) {
@@ -245,7 +287,84 @@ async function simular(acc, b = {}) {
   exigirFat(acc);
   const nf = { destino_uf: txt(b.uf).toUpperCase(), destino_cidade: txt(b.cidade), peso_kg: numBR(b.peso), valor: numBR(b.valor) };
   if (!UFS.has(nf.destino_uf)) throw erro(400, "Informe a UF do destino.");
-  return { cotacoes: await cotacoes(pool, nf) };
+  return { cotacoes: await cotacoes(pool, nf, opcoesBid(b)), bid: opcoesBid(b) };
+}
+
+// cotação em lote: várias linhas (UF, cidade, peso, valor) de uma vez contra todas as transportadoras ativas
+async function simularLote(acc, b = {}) {
+  exigirFat(acc);
+  const linhas = Array.isArray(b.rows) ? b.rows : [];
+  if (!linhas.length) throw erro(400, "A planilha veio vazia.");
+  if (linhas.length > 1500) throw erro(413, "Máximo de 1.500 linhas por cotação em lote.");
+  const bid = opcoesBid(b);
+  const { rows: ts } = await pool.query("SELECT id::int AS id, nome, prazo_corridos FROM cd_transportadoras WHERE ativa ORDER BY nome");
+  const cache = new Map();
+  const itens = linhas.map((l, i) => ({ linha: i + 1, ref: txt(l.ref).slice(0, 80), uf: txt(l.uf).toUpperCase(), cidade: txt(l.cidade).slice(0, 120), peso: numBR(l.peso), valor: numBR(l.valor), volumes: l.volumes === undefined || l.volumes === null || l.volumes === "" ? null : numBR(l.volumes) }));
+  async function cota(it) {
+    if (!UFS.has(it.uf)) { it.erro = `UF inválida: "${it.uf || "vazia"}"`; return; }
+    if (!(it.peso > 0)) { it.erro = "Peso inválido ou vazio."; return; }
+    const k = [it.uf, semAcento(it.cidade), it.peso, it.valor ?? ""].join("|");
+    let r = cache.get(k);
+    if (!r) {
+      const cots = await cotacoes(pool, { destino_uf: it.uf, destino_cidade: it.cidade, peso_kg: it.peso, valor: it.valor }, bid);
+      const pick = (x) => (x ? { id: x.transportadora_id, nome: x.nome, frete: x.frete, prazo_dias: x.prazo_dias, prazo_corridos: x.prazo_corridos } : null);
+      r = { cotacoes: cots.map((x) => ({ id: x.transportadora_id, ok: x.ok, frete: x.ok ? x.frete : null, prazo_dias: x.ok ? x.prazo_dias : null, prazo_corridos: x.prazo_corridos, motivo: x.ok ? null : x.motivo, regra: x.cidade_regra || null })),
+        barata: pick(escolher(cots, "mais_barata", { prazo_max: null })), barata_no_prazo: bid.prazo_max !== null ? pick(escolher(cots, "mais_barata", bid)) : null, rapida: pick(escolher(cots, "mais_rapida", { prazo_max: null })), equilibrada: pick(escolher(cots, "equilibrada", bid)) };
+      cache.set(k, r);
+    }
+    Object.assign(it, r);
+  }
+  for (let i = 0; i < itens.length; i += 8) await Promise.all(itens.slice(i, i + 8).map(cota));
+  const comCot = itens.filter((x) => !x.erro && x.cotacoes && x.cotacoes.some((c) => c.ok));
+  const soma = (arr, f) => Math.round(arr.reduce((a, x) => a + (f(x) || 0), 0) * 100) / 100;
+  const resumo = {
+    linhas: itens.length, cotadas: comCot.length, sem_cotacao: itens.length - comCot.length, com_erro: itens.filter((x) => x.erro).length,
+    total_mais_barata: soma(comCot, (x) => x.barata && x.barata.frete), total_equilibrada: soma(comCot.filter((x) => x.equilibrada), (x) => x.equilibrada.frete), total_mais_rapida: soma(comCot.filter((x) => x.rapida), (x) => x.rapida.frete),
+    peso_kg: soma(comCot, (x) => x.peso), valor: soma(comCot, (x) => x.valor),
+    por_transportadora: ts.map((t) => {
+      const cs = comCot.map((x) => x.cotacoes.find((c) => c.id === t.id)).filter((c) => c && c.ok);
+      const pz = cs.filter((c) => c.prazo_dias !== null).map((c) => c.prazo_dias);
+      return { id: t.id, nome: t.nome, atende: cs.length, total_frete: soma(cs, (c) => c.frete), prazo_medio: pz.length ? Math.round(pz.reduce((a, b2) => a + b2, 0) / pz.length * 10) / 10 : null,
+        vezes_mais_barata: comCot.filter((x) => x.barata && x.barata.id === t.id).length, vezes_equilibrada: comCot.filter((x) => x.equilibrada && x.equilibrada.id === t.id).length, vezes_mais_rapida: comCot.filter((x) => x.rapida && x.rapida.id === t.id).length };
+    }),
+  };
+  return { transportadoras: ts, bid, resumo, itens };
+}
+
+// ---------- prazos de entrega cadastrados por transportadora ----------
+async function listarPrazos(acc, id) {
+  exigirFat(acc);
+  const { rows: t } = await pool.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE id = $1", [id]);
+  if (!t[0]) throw erro(404, "Transportadora não encontrada.");
+  const { rows } = await pool.query("SELECT uf, cidade, prazo_dias FROM cd_transportadora_prazos WHERE transportadora_id = $1 ORDER BY uf, (cidade IS NOT NULL), lower(coalesce(cidade,''))", [id]);
+  return { transportadora: t[0], prazos: rows };
+}
+// rows: [{uf, cidade, prazo_dias}]. substituir=true troca tudo; senão grava/atualiza linha a linha (prazo vazio apaga a linha).
+async function salvarPrazos(acc, id, b = {}) {
+  exigirFat(acc);
+  const linhas = Array.isArray(b.rows) ? b.rows : [];
+  if (linhas.length > 20000) throw erro(413, "Máximo de 20.000 linhas.");
+  const { rows: t } = await pool.query("SELECT id FROM cd_transportadoras WHERE id = $1", [id]);
+  if (!t[0]) throw erro(404, "Transportadora não encontrada.");
+  return comTransacao(async (c) => {
+    if (b.substituir) await c.query("DELETE FROM cd_transportadora_prazos WHERE transportadora_id = $1", [id]);
+    let gravados = 0, removidos = 0; const ignoradas = [];
+    for (let i = 0; i < linhas.length; i++) {
+      const l = linhas[i], uf = txt(l.uf).toUpperCase(), cidade = txt(l.cidade).slice(0, 120), cn = cidade ? semAcento(cidade) : null;
+      if (!UFS.has(uf)) { ignoradas.push({ linha: i + 1, motivo: `UF inválida: "${txt(l.uf)}"` }); continue; }
+      const vazio = l.prazo_dias === undefined || l.prazo_dias === null || txt(l.prazo_dias) === "";
+      if (vazio) { const r = await c.query("DELETE FROM cd_transportadora_prazos WHERE transportadora_id = $1 AND uf = $2 AND coalesce(cidade_norm,'') = $3", [id, uf, cn || ""]); removidos += r.rowCount; continue; }
+      const pz = numBR(l.prazo_dias);
+      if (pz === null || pz < 0 || pz > 120 || Math.round(pz) !== pz) { ignoradas.push({ linha: i + 1, motivo: `Prazo inválido: "${txt(l.prazo_dias)}" (use dias inteiros, 0 a 120)` }); continue; }
+      await c.query(`INSERT INTO cd_transportadora_prazos (transportadora_id, uf, cidade, cidade_norm, prazo_dias) VALUES ($1,$2,$3,$4,$5)
+                     ON CONFLICT (transportadora_id, uf, coalesce(cidade_norm, '')) DO UPDATE SET prazo_dias = EXCLUDED.prazo_dias, cidade = EXCLUDED.cidade`, [id, uf, cidade || null, cn, pz]);
+      gravados++;
+    }
+    // NFs ainda não coletadas passam a usar os prazos novos
+    const { rows: nfs } = await c.query("SELECT id FROM cd_fat_nfs WHERE transportadora_id = $1 AND status = 'emitida' AND NOT prazo_manual", [id]);
+    for (const n of nfs) await recalcular(c, Number(n.id)).catch(() => {});
+    return { ok: true, gravados, removidos, ignoradas: ignoradas.slice(0, 50), total_ignoradas: ignoradas.length, nfs_recalculadas: nfs.length };
+  });
 }
 
 // ---------- NFs de saída ----------
@@ -276,6 +395,13 @@ function situacao(n, dia = hoje()) {
   return o;
 }
 
+// data usada pelo filtro de período (no fuso de São Paulo)
+const EXPR_DATA = {
+  emissao: "(coalesce(n.emitida_em, n.enviada_em) AT TIME ZONE 'America/Sao_Paulo')::date",
+  envio: "(n.enviada_em AT TIME ZONE 'America/Sao_Paulo')::date",
+  coleta: "n.coleta_data",
+  entrega: "n.entregue_data",
+};
 function filtrosSql(f, params) {
   const w = [];
   const add = (v) => { params.push(v); return `$${params.length}`; };
@@ -283,6 +409,9 @@ function filtrosSql(f, params) {
   if (f.transportadora_id) w.push(`n.transportadora_id = ${add(Number(f.transportadora_id))}`);
   if (f.sem_transportadora) w.push("n.transportadora_id IS NULL");
   if (f.uf) w.push(`n.destino_uf = ${add(txt(f.uf).toUpperCase())}`);
+  const expr = EXPR_DATA[f.campo] || EXPR_DATA.emissao;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(txt(f.de))) w.push(`${expr} >= ${add(txt(f.de))}::date`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(txt(f.ate))) w.push(`${expr} <= ${add(txt(f.ate))}::date`);
   if (f.q) { const p = add("%" + semAcento(f.q) + "%"); w.push(`(lower(n.numero) LIKE ${p} OR lower(coalesce(n.destino_nome,'')) LIKE ${p} OR n.chave LIKE ${p} OR lower(coalesce(n.destino_cidade,'')) LIKE ${p})`); }
   return w.length ? "WHERE " + w.join(" AND ") : "";
 }
@@ -297,6 +426,102 @@ async function listarNfs(acc, f = {}) {
   let nfs = rows.map((r) => situacao(r, dia));
   if (f.situacao) nfs = nfs.filter((n) => n.situacao === f.situacao);
   return { nfs };
+}
+
+// ---------- relatório de custos e envios ----------
+const r2 = (x) => Math.round(x * 100) / 100;
+function somar(list) {
+  const o = { nfs: list.length, pecas: 0, volumes: 0, peso_kg: 0, valor: 0, frete: 0, frete_previsto: 0, frete_real: 0, com_frete: 0, com_frete_real: 0, valor_com_frete: 0, peso_com_frete: 0, sem_frete: 0 };
+  for (const n of list) {
+    o.pecas += Number(n.pecas) || 0; o.volumes += Number(n.volumes) || 0; o.peso_kg += Number(n.peso_kg) || 0; o.valor += Number(n.valor) || 0;
+    if (n.custo !== null) { o.com_frete++; o.frete += n.custo; o.valor_com_frete += Number(n.valor) || 0; o.peso_com_frete += Number(n.peso_kg) || 0; } else o.sem_frete++;
+    if (n.frete_previsto !== null && n.frete_previsto !== undefined) o.frete_previsto += Number(n.frete_previsto);
+    if (n.frete_real !== null && n.frete_real !== undefined) { o.frete_real += Number(n.frete_real); o.com_frete_real++; }
+  }
+  o.frete_por_kg = o.peso_com_frete > 0 ? r2(o.frete / o.peso_com_frete) : null;
+  o.frete_por_nf = o.com_frete > 0 ? r2(o.frete / o.com_frete) : null;
+  o.frete_pct_valor = o.valor_com_frete > 0 ? Math.round(o.frete / o.valor_com_frete * 10000) / 100 : null;
+  for (const k of ["peso_kg", "valor", "frete", "frete_previsto", "frete_real", "valor_com_frete", "peso_com_frete"]) o[k] = r2(o[k]);
+  return o;
+}
+function agrupar(nfs, chaveFn, rotuloFn) {
+  const m = new Map();
+  for (const n of nfs) { const k = chaveFn(n); if (!m.has(k)) m.set(k, []); m.get(k).push(n); }
+  return [...m.entries()].map(([k, list]) => {
+    const e = list.filter((n) => n.status === "entregue");
+    const comPrev = e.filter((n) => n.previsao_entrega);
+    const reais = e.filter((n) => n.coleta_data && n.entregue_data).map((n) => difDias(n.coleta_data, n.entregue_data));
+    const prom = list.filter((n) => n.prazo_dias !== null && n.prazo_dias !== undefined).map((n) => Number(n.prazo_dias));
+    const med = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : null);
+    return { chave: k, rotulo: rotuloFn ? rotuloFn(k, list) : k, ...somar(list), entregues: e.length, no_prazo_pct: comPrev.length ? Math.round(comPrev.filter((n) => n.situacao === "entregue").length / comPrev.length * 100) : null,
+      atrasadas: list.filter((n) => n.situacao === "atrasada" || n.situacao === "entregue_atrasada").length, prazo_prometido_medio: med(prom), prazo_real_medio: med(reais) };
+  });
+}
+function segunda(d) { const t = new Date(d + "T12:00:00Z"); const dow = (t.getUTCDay() + 6) % 7; t.setUTCDate(t.getUTCDate() - dow); return t.toISOString().slice(0, 10); }
+
+async function relatorio(acc, f = {}) {
+  exigirFat(acc);
+  const params = [];
+  const ff = { ...f, status: f.status && f.status !== "ativas" ? f.status : "todas" };
+  const where = filtrosSql(ff, params);
+  const { rows } = await pool.query(`SELECT ${COLS_LISTA} FROM cd_fat_nfs n LEFT JOIN cd_transportadoras t ON t.id = n.transportadora_id ${where} ORDER BY n.id LIMIT 20000`, params);
+  const dia = hoje();
+  const campo = EXPR_DATA[f.campo] ? f.campo : "emissao";
+  const dataDe = (n) => (campo === "coleta" ? n.coleta_data : campo === "entrega" ? n.entregue_data : campo === "envio" ? diaLocal(n.enviada_em) : (n.emitida_em ? diaLocal(n.emitida_em) : diaLocal(n.enviada_em)));
+  let nfs = rows.map((r) => situacao(r, dia)).map((n) => ({ ...n, data_ref: dataDe(n) || null, custo: n.frete_real !== null && n.frete_real !== undefined ? n.frete_real : (n.frete_previsto !== null && n.frete_previsto !== undefined ? n.frete_previsto : null),
+    custo_tipo: n.frete_real !== null && n.frete_real !== undefined ? "real" : (n.frete_previsto !== null && n.frete_previsto !== undefined ? "previsto" : null) }));
+  if (f.situacao) nfs = nfs.filter((n) => n.situacao === f.situacao);
+  if (f.status === "ativas") nfs = nfs.filter((n) => n.status !== "entregue");
+
+  // quanto se teria gasto usando a tabela mais barata para cada NF (só com até 1500 NFs, para não pesar)
+  let economia = null;
+  const alvo = nfs.filter((n) => n.custo !== null && n.destino_uf && Number(n.peso_kg) > 0);
+  if (alvo.length && alvo.length <= 1500) {
+    const cache = new Map();
+    const key = (n) => [n.destino_uf, semAcento(n.destino_cidade || ""), n.peso_kg, n.valor].join("|");
+    let ganho = 0, qtd = 0; const porTransp = {};
+    for (let i = 0; i < alvo.length; i += 8) {
+      await Promise.all(alvo.slice(i, i + 8).map(async (n) => {
+        const k = key(n); let m = cache.get(k);
+        if (!m) { m = (await cotacoes(pool, n)).filter((c) => c.ok).sort((a, b) => a.frete - b.frete)[0] || null; cache.set(k, m); }
+        n.mais_barata = m ? { transportadora: m.nome, frete: m.frete } : null;
+        if (m && m.frete < n.custo - 0.004) {
+          n.economia_possivel = r2(n.custo - m.frete); ganho += n.economia_possivel; qtd++;
+          const nome = n.transportadora || "(sem transportadora)"; porTransp[nome] = (porTransp[nome] || 0) + n.economia_possivel;
+        }
+      }));
+    }
+    economia = { total: r2(ganho), nfs: qtd, de: alvo.length, por_transportadora: Object.entries(porTransp).map(([nome, v]) => ({ nome, valor: r2(v) })).sort((a, b) => b.valor - a.valor) };
+  }
+
+  const resumo = somar(nfs);
+  const stat = (st) => nfs.filter((n) => n.status === st).length;
+  resumo.aguardando = stat("emitida"); resumo.em_transito = stat("em_transito"); resumo.entregues = stat("entregue");
+  resumo.atrasadas = nfs.filter((n) => n.situacao === "atrasada" || n.situacao === "entregue_atrasada").length;
+  const e = nfs.filter((n) => n.status === "entregue"), cp = e.filter((n) => n.previsao_entrega);
+  resumo.no_prazo_pct = cp.length ? Math.round(cp.filter((n) => n.situacao === "entregue").length / cp.length * 100) : null;
+  const reais = e.filter((n) => n.coleta_data && n.entregue_data).map((n) => difDias(n.coleta_data, n.entregue_data));
+  resumo.prazo_real_medio = reais.length ? Math.round(reais.reduce((a, b) => a + b, 0) / reais.length * 10) / 10 : null;
+  resumo.lojas = new Set(nfs.map((n) => n.destino_cnpj || n.destino_nome).filter(Boolean)).size;
+  resumo.ufs = new Set(nfs.map((n) => n.destino_uf).filter(Boolean)).size;
+
+  const porTransp = agrupar(nfs, (n) => n.transportadora || "(sem transportadora)").sort((a, b) => b.frete - a.frete || b.nfs - a.nfs);
+  const porUf = agrupar(nfs, (n) => n.destino_uf || "?").sort((a, b) => b.frete - a.frete || b.nfs - a.nfs);
+  const porLoja = agrupar(nfs, (n) => n.destino_cnpj || [n.destino_nome, n.destino_cidade].join("|") || "?", (k, list) => { const n = list[0]; return (n.destino_nome || "(sem loja)") + (n.destino_cidade ? " - " + n.destino_cidade + (n.destino_uf ? "/" + n.destino_uf : "") : n.destino_uf ? " - " + n.destino_uf : ""); }).sort((a, b) => b.frete - a.frete || b.nfs - a.nfs).slice(0, 15);
+  // série no tempo: dia (até ~45 dias), semana (até ~200) ou mês
+  const datas = nfs.map((n) => n.data_ref).filter(Boolean).sort();
+  let gran = "dia";
+  if (datas.length) { const span = difDias(datas[0], datas[datas.length - 1]); gran = span <= 45 ? "dia" : span <= 200 ? "semana" : "mes"; }
+  const kk = (d) => (gran === "dia" ? d : gran === "semana" ? segunda(d) : d.slice(0, 7));
+  const serie = agrupar(nfs.filter((n) => n.data_ref), (n) => kk(n.data_ref)).sort((a, b) => (a.chave < b.chave ? -1 : 1)).map((x) => ({ chave: x.chave, nfs: x.nfs, peso_kg: x.peso_kg, valor: x.valor, frete: x.frete, pecas: x.pecas }));
+  const porStatus = [["emitida", "Aguardando coleta"], ["em_transito", "Em trânsito"], ["entregue", "Entregue"]].map(([k, r]) => ({ chave: k, rotulo: r, nfs: stat(k) }));
+  return {
+    periodo: { campo, de: /^\d{4}-\d{2}-\d{2}$/.test(txt(f.de)) ? f.de : null, ate: /^\d{4}-\d{2}-\d{2}$/.test(txt(f.ate)) ? f.ate : null, primeira: datas[0] || null, ultima: datas[datas.length - 1] || null, granularidade: gran },
+    gerado_em: new Date().toISOString(), resumo, por_transportadora: porTransp, por_uf: porUf, por_loja: porLoja, serie, por_status: porStatus, economia,
+    nfs: nfs.map((n) => ({ id: n.id, numero: n.numero, serie: n.serie, data_ref: n.data_ref, emitida_em: n.emitida_em, loja: n.destino_nome, cnpj: n.destino_cnpj, uf: n.destino_uf, cidade: n.destino_cidade, pecas: n.pecas, volumes: n.volumes, peso_kg: n.peso_kg, valor: n.valor,
+      transportadora: n.transportadora || null, transportadora_na_nf: n.transportadora_xml || null, frete_previsto: n.frete_previsto, frete_real: n.frete_real, custo: n.custo, custo_tipo: n.custo_tipo, prazo_dias: n.prazo_dias, status: n.status, situacao: n.situacao,
+      coleta_data: n.coleta_data, previsao_entrega: n.previsao_entrega, entregue_data: n.entregue_data, mais_barata: n.mais_barata ? n.mais_barata.transportadora : null, frete_mais_barata: n.mais_barata ? n.mais_barata.frete : null, economia_possivel: n.economia_possivel || 0 })),
+  };
 }
 
 async function detalheNf(acc, id) {
@@ -319,7 +544,7 @@ async function recalcular(db, id) {
   const n = rows[0]; if (!n) return null;
   let frete = null, prazo = n.prazo_manual ? n.prazo_dias : null, aviso = null;
   if (n.transportadora_id) {
-    const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
+    const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
     const c = await cotarCom(db, ts[0], n);
     if (c.ok) { frete = c.frete; if (!n.prazo_manual) prazo = c.prazo_dias; if (prazo === null || prazo === undefined) aviso = "A tabela não traz prazo para essa faixa (informe o prazo à mão)."; }
     else { aviso = c.motivo; }
@@ -528,7 +753,8 @@ async function definirTransportadora(acc, b = {}) {
   const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Boolean))];
   if (!ids.length) throw erro(400, "Selecione ao menos uma NF.");
   if (ids.length > 500) throw erro(400, "Selecione no máximo 500 NFs por vez.");
-  const modo = b.modo === "mais_barata" || b.modo === "mais_rapida" ? b.modo : null;
+  const modo = ["mais_barata", "mais_rapida", "equilibrada"].includes(b.modo) ? b.modo : null;
+  const bid = opcoesBid(b);
   const tid = b.transportadora_id ? Number(b.transportadora_id) : null;
   if (!modo && !tid) throw erro(400, "Escolha a transportadora (ou o modo automático).");
   return comTransacao(async (c) => {
@@ -542,14 +768,13 @@ async function definirTransportadora(acc, b = {}) {
       if (modo) {
         const cot = (await cotacoes(c, n)).filter((x) => x.ok);
         if (!cot.length) { res.push({ id, numero: n.numero, ok: false, motivo: "Nenhuma tabela atende essa NF (confira UF, peso e tabelas)." }); continue; }
-        const pool2 = modo === "mais_rapida" ? cot.filter((x) => x.prazo_dias !== null) : cot;
-        if (!pool2.length) { res.push({ id, numero: n.numero, ok: false, motivo: "As tabelas não trazem prazo." }); continue; }
-        pool2.sort((a, z) => modo === "mais_rapida" ? (a.prazo_dias - z.prazo_dias) || (a.frete - z.frete) : (a.frete - z.frete) || ((a.prazo_dias ?? 999) - (z.prazo_dias ?? 999)));
-        alvo = pool2[0].transportadora_id;
+        const esc = escolher(cot, modo, bid);
+        if (!esc) { res.push({ id, numero: n.numero, ok: false, motivo: bid.prazo_max !== null ? `Nenhuma transportadora entrega em até ${bid.prazo_max} dia(s) para essa NF.` : "As transportadoras não têm prazo cadastrado para esse destino." }); continue; }
+        alvo = esc.transportadora_id;
       }
       await c.query("UPDATE cd_fat_nfs SET transportadora_id = $2, prazo_dias = NULL, prazo_manual = false WHERE id = $1", [id, alvo]);
       const calc = await recalcular(c, id);
-      await evento(c, id, "transportadora", acc.email, { de: n.transportadora_id, para: alvo, modo: modo || "manual", frete: calc.frete_previsto, prazo_dias: calc.prazo_dias });
+      await evento(c, id, "transportadora", acc.email, { de: n.transportadora_id, para: alvo, modo: modo || "manual", ...(modo === "equilibrada" ? { peso_preco: bid.peso_preco } : {}), ...(bid.prazo_max !== null && modo ? { prazo_max: bid.prazo_max } : {}), frete: calc.frete_previsto, prazo_dias: calc.prazo_dias });
       res.push({ id, numero: n.numero, ok: true, transportadora_id: alvo, frete_previsto: calc.frete_previsto, prazo_dias: calc.prazo_dias, aviso: calc.aviso });
     }
     return { ok: true, resultados: res, definidas: res.filter((x) => x.ok).length };
@@ -717,5 +942,5 @@ async function resumo(acc) {
 module.exports = {
   lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
-  listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
+  listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
 };
