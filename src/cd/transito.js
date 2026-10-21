@@ -110,12 +110,20 @@ function calcFrete(row, peso, valor) {
   return { frete_peso: arred(base), ad_valorem: arred(adv), gris: arred(gris), taxa_fixa: arred(taxa), minimo_aplicado: minAplicado, total: arred(base + adv + gris + taxa) };
 }
 
+// modal do frete: cada tabela de frete é rodoviária ou aérea (a transportadora pode ter uma de cada)
+const MODAIS = ["rodoviario", "aereo"];
+function normModal(x) { const t = semAcento(x); if (/^a[ée]?r|aere|aviao|air/.test(t)) return "aereo"; return "rodoviario"; }
+async function modaisDaTransp(db, tid) {
+  const { rows } = await db.query("SELECT DISTINCT modal FROM cd_frete_tabela WHERE transportadora_id = $1 ORDER BY modal", [tid]);
+  return rows.map((r) => r.modal);
+}
+
 // linha da tabela da transportadora que atende UF/cidade/peso (cidade específica vence a regra geral da UF)
-async function linhaDaTabela(db, transportadoraId, uf, cidade, peso) {
+async function linhaDaTabela(db, transportadoraId, uf, cidade, peso, modal = "rodoviario") {
   const { rows } = await db.query(
-    `SELECT * FROM cd_frete_tabela WHERE transportadora_id = $1 AND uf = $2 AND peso_de <= $3 AND (peso_ate IS NULL OR peso_ate >= $3)
+    `SELECT * FROM cd_frete_tabela WHERE transportadora_id = $1 AND uf = $2 AND modal = $5 AND peso_de <= $3 AND (peso_ate IS NULL OR peso_ate >= $3)
         AND (cidade_norm IS NULL OR cidade_norm = $4)
-      ORDER BY (cidade_norm IS NULL), peso_de DESC LIMIT 1`, [transportadoraId, uf, peso, semAcento(cidade)]);
+      ORDER BY (cidade_norm IS NULL), peso_de DESC LIMIT 1`, [transportadoraId, uf, peso, semAcento(cidade), modal]);
   return rows[0] || null;
 }
 
@@ -147,20 +155,20 @@ function opcoesBid(b = {}) {
   return { peso_preco: pp, prazo_max: Number.isFinite(pm) ? pm : null };
 }
 
-async function cotarCom(db, t, nf) {
+async function cotarCom(db, t, nf, modal = "rodoviario") {
   // t: transportadora {id,nome,prazo_corridos}
-  const base = { transportadora_id: Number(t.id), nome: t.nome, prazo_corridos: t.prazo_corridos };
+  const base = { transportadora_id: Number(t.id), nome: t.nome, prazo_corridos: t.prazo_corridos, modal };
   if (!nf.destino_uf) return { ...base, ok: false, motivo: "Informe a UF do destino." };
   if (nf.peso_kg === null || nf.peso_kg === undefined || Number(nf.peso_kg) <= 0) return { ...base, ok: false, motivo: "Informe o peso da NF." };
-  const row = await linhaDaTabela(db, t.id, nf.destino_uf, nf.destino_cidade, Number(nf.peso_kg));
-  if (!row) return { ...base, ok: false, motivo: `Sem faixa na tabela para ${nf.destino_uf}${nf.destino_cidade ? " / " + nf.destino_cidade : ""} com ${Number(nf.peso_kg)} kg.` };
+  const row = await linhaDaTabela(db, t.id, nf.destino_uf, nf.destino_cidade, Number(nf.peso_kg), modal);
+  if (!row) return { ...base, ok: false, motivo: `Sem faixa na tabela${modal === "aereo" ? " aérea" : ""} para ${nf.destino_uf}${nf.destino_cidade ? " / " + nf.destino_cidade : ""} com ${Number(nf.peso_kg)} kg.` };
   const c = calcFrete(row, nf.peso_kg, nf.valor);
   // prazo: o cadastrado por UF/cidade vence o da tabela de frete; sem nenhum dos dois, vale o prazo padrão da transportadora
-  const cad = await prazoCadastrado(db, t.id, nf.destino_uf, nf.destino_cidade);
+  const cad = modal === "rodoviario" ? await prazoCadastrado(db, t.id, nf.destino_uf, nf.destino_cidade) : null; // os prazos cadastrados por UF/cidade valem para o rodoviário
   let prazo = null, origem = null;
   if (cad) { prazo = cad.prazo; origem = cad.origem; }
   else if (row.prazo_dias !== null && row.prazo_dias !== undefined) { prazo = Number(row.prazo_dias); origem = "tabela de frete"; }
-  else { const pp = t.prazo_padrao !== undefined ? t.prazo_padrao : (await db.query("SELECT prazo_padrao FROM cd_transportadoras WHERE id = $1", [t.id])).rows[0]?.prazo_padrao; if (pp !== null && pp !== undefined) { prazo = Number(pp); origem = "prazo padrão"; } }
+  else if (modal === "rodoviario") { const pp = t.prazo_padrao !== undefined ? t.prazo_padrao : (await db.query("SELECT prazo_padrao FROM cd_transportadoras WHERE id = $1", [t.id])).rows[0]?.prazo_padrao; if (pp !== null && pp !== undefined) { prazo = Number(pp); origem = "prazo padrão"; } }
   const out = { ...base, ok: true, frete: c.total, memoria: c, prazo_dias: prazo, prazo_origem: origem, prazo_efetivo: prazo === null ? null : (t.prazo_corridos ? prazo : Math.round(prazo * 1.4 * 10) / 10), cidade_regra: row.cidade || null };
   if (nf.valor === null || nf.valor === undefined) out.aviso = "NF sem valor: ad valorem e GRIS não entraram.";
   return out;
@@ -170,12 +178,19 @@ async function cotacoes(db, nf, opts = {}) {
   const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE ativa ORDER BY nome");
   const out = [];
   for (const t of ts) {
-    const c = await cotarCom(db, t, nf);
-    if (c.ok) {
-      const ini = hoje();
-      c.previsao_se_coletar_hoje = c.prazo_dias === null ? null : addDias(ini, c.prazo_dias, t.prazo_corridos);
+    const modais = await modaisDaTransp(db, t.id);
+    const cs = [];
+    for (const m of (modais.length ? modais : ["rodoviario"])) {
+      const c = await cotarCom(db, t, nf, m);
+      if (c.ok) {
+        const ini = hoje();
+        c.previsao_se_coletar_hoje = c.prazo_dias === null ? null : addDias(ini, c.prazo_dias, t.prazo_corridos);
+      }
+      cs.push(c);
     }
-    out.push(c);
+    // se algum modal atende, os que não atendem não entram (evita ruído); senão mostra o motivo do primeiro
+    const oks = cs.filter((x) => x.ok);
+    if (oks.length) out.push(...oks); else out.push(cs[0]);
   }
   const ok = out.filter((x) => x.ok);
   if (ok.length) {
@@ -198,7 +213,8 @@ async function listarTransportadoras(acc) {
     `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
             (SELECT count(*)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS linhas,
             (SELECT count(DISTINCT uf)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS ufs,
-            (SELECT count(*)::int FROM cd_transportadora_prazos p WHERE p.transportadora_id = t.id) AS prazos
+            (SELECT count(*)::int FROM cd_transportadora_prazos p WHERE p.transportadora_id = t.id) AS prazos,
+            (SELECT coalesce(json_agg(x ORDER BY x.modal), '[]'::json) FROM (SELECT f.modal, count(*)::int AS linhas, count(DISTINCT f.uf)::int AS ufs FROM cd_frete_tabela f WHERE f.transportadora_id = t.id GROUP BY f.modal) x) AS modais
        FROM cd_transportadoras t ORDER BY t.ativa DESC, lower(t.nome)`);
   return { transportadoras: rows };
 }
@@ -229,19 +245,20 @@ async function salvarTransportadora(acc, id, b = {}) {
 
 const UFS = new Set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split(" "));
 // rows: [{uf, cidade, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias, [transportadora]}]
-// A importação SUBSTITUI toda a tabela da transportadora (a nova tabela vira a vigente).
+// A importação SUBSTITUI a tabela do(s) modal(is) importado(s) (rodoviário e aéreo são tabelas separadas; a nova vira a vigente).
 async function importarTabela(acc, transportadoraId, b = {}) {
   exigirFat(acc);
   const linhas = Array.isArray(b.rows) ? b.rows : [];
   if (!linhas.length) throw erro(400, "A tabela veio vazia.");
   if (linhas.length > 60000) throw erro(413, "Tabela grande demais (máximo 60.000 linhas por transportadora).");
   const ok = [], ignoradas = [];
+  const modalPadrao = normModal(b.modal || "rodoviario");
   linhas.forEach((r, i) => {
     const uf = txt(r.uf).toUpperCase();
     if (!UFS.has(uf)) { ignoradas.push({ linha: i + 1, motivo: `UF inválida: "${txt(r.uf)}"` }); return; }
     const peso_de = numBR(r.peso_de) ?? 0, peso_ate = numBR(r.peso_ate);
     if (peso_ate !== null && peso_ate < peso_de) { ignoradas.push({ linha: i + 1, motivo: "Peso final menor que o inicial." }); return; }
-    const o = { uf, cidade: txt(r.cidade) || null, cidade_norm: semAcento(r.cidade) || null, peso_de, peso_ate, frete: numBR(r.frete), frete_kg: numBR(r.frete_kg), excedente_kg: numBR(r.excedente_kg), adv_pct: numBR(r.adv_pct), gris_pct: numBR(r.gris_pct), taxa_fixa: numBR(r.taxa_fixa), frete_minimo: numBR(r.frete_minimo), prazo_dias: numBR(r.prazo_dias) };
+    const o = { modal: r.modal !== undefined && txt(r.modal) !== "" ? normModal(r.modal) : modalPadrao, uf, cidade: txt(r.cidade) || null, cidade_norm: semAcento(r.cidade) || null, peso_de, peso_ate, frete: numBR(r.frete), frete_kg: numBR(r.frete_kg), excedente_kg: numBR(r.excedente_kg), adv_pct: numBR(r.adv_pct), gris_pct: numBR(r.gris_pct), taxa_fixa: numBR(r.taxa_fixa), frete_minimo: numBR(r.frete_minimo), prazo_dias: numBR(r.prazo_dias) };
     if ([o.frete, o.frete_kg, o.excedente_kg, o.frete_minimo].every((x) => x === null)) { ignoradas.push({ linha: i + 1, motivo: "Linha sem nenhum valor de frete (frete, R$/kg, excedente ou mínimo)." }); return; }
     if (o.prazo_dias !== null) o.prazo_dias = Math.round(o.prazo_dias);
     ok.push(o);
@@ -250,36 +267,40 @@ async function importarTabela(acc, transportadoraId, b = {}) {
   return comTransacao(async (c) => {
     const { rows: t } = await c.query("SELECT id, nome FROM cd_transportadoras WHERE id = $1 FOR UPDATE", [transportadoraId]);
     if (!t[0]) throw erro(404, "Transportadora não encontrada.");
-    await c.query("DELETE FROM cd_frete_tabela WHERE transportadora_id = $1", [transportadoraId]);
+    const modaisNovos = [...new Set(ok.map((x) => x.modal))];
+    await c.query("DELETE FROM cd_frete_tabela WHERE transportadora_id = $1 AND modal = ANY($2::text[])", [transportadoraId, modaisNovos]);
     const CH = 2000;
     for (let i = 0; i < ok.length; i += CH) {
       const p = ok.slice(i, i + CH), col = (k) => p.map((x) => x[k]);
       await c.query(
-        `INSERT INTO cd_frete_tabela (transportadora_id, uf, cidade, cidade_norm, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias)
-         SELECT $1, uf, cidade, cidade_norm, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias
-           FROM unnest($2::text[], $3::text[], $4::text[], $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[], $9::numeric[], $10::numeric[], $11::numeric[], $12::numeric[], $13::numeric[], $14::int[])
-             AS u(uf, cidade, cidade_norm, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias)`,
-        [transportadoraId, col("uf"), col("cidade"), col("cidade_norm"), col("peso_de"), col("peso_ate"), col("frete"), col("frete_kg"), col("excedente_kg"), col("adv_pct"), col("gris_pct"), col("taxa_fixa"), col("frete_minimo"), col("prazo_dias")]);
+        `INSERT INTO cd_frete_tabela (transportadora_id, modal, uf, cidade, cidade_norm, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias)
+         SELECT $1, modal, uf, cidade, cidade_norm, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias
+           FROM unnest($15::text[], $2::text[], $3::text[], $4::text[], $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[], $9::numeric[], $10::numeric[], $11::numeric[], $12::numeric[], $13::numeric[], $14::int[])
+             AS u(modal, uf, cidade, cidade_norm, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias)`,
+        [transportadoraId, col("uf"), col("cidade"), col("cidade_norm"), col("peso_de"), col("peso_ate"), col("frete"), col("frete_kg"), col("excedente_kg"), col("adv_pct"), col("gris_pct"), col("taxa_fixa"), col("frete_minimo"), col("prazo_dias"), col("modal")]);
     }
     await c.query("UPDATE cd_transportadoras SET tabela_importada_em = now(), tabela_importada_por = $2 WHERE id = $1", [transportadoraId, acc.email]);
-    return { ok: true, transportadora: t[0].nome, linhas: ok.length, ignoradas: ignoradas.length, detalhe_ignoradas: ignoradas.slice(0, 30) };
+    return { ok: true, transportadora: t[0].nome, modais: modaisNovos, linhas: ok.length, ignoradas: ignoradas.length, detalhe_ignoradas: ignoradas.slice(0, 30) };
   });
 }
 
-async function verTabela(acc, transportadoraId, { uf } = {}) {
+async function verTabela(acc, transportadoraId, { uf, modal } = {}) {
   exigirFat(acc);
-  const { rows: porUf } = await pool.query("SELECT uf, count(*)::int AS linhas, min(prazo_dias) AS prazo_min, max(prazo_dias) AS prazo_max FROM cd_frete_tabela WHERE transportadora_id = $1 GROUP BY uf ORDER BY uf", [transportadoraId]);
+  const modais = await modaisDaTransp(pool, transportadoraId);
+  const md = modal ? normModal(modal) : (modais.includes("rodoviario") ? "rodoviario" : (modais[0] || "rodoviario"));
+  const { rows: porUf } = await pool.query("SELECT uf, count(*)::int AS linhas, min(prazo_dias) AS prazo_min, max(prazo_dias) AS prazo_max FROM cd_frete_tabela WHERE transportadora_id = $1 AND modal = $2 GROUP BY uf ORDER BY uf", [transportadoraId, md]);
   const filtro = txt(uf).toUpperCase() || (porUf[0] && porUf[0].uf) || null;
   const { rows } = filtro
-    ? await pool.query("SELECT uf, cidade, peso_de::float, peso_ate::float, frete::float, frete_kg::float, excedente_kg::float, adv_pct::float, gris_pct::float, taxa_fixa::float, frete_minimo::float, prazo_dias FROM cd_frete_tabela WHERE transportadora_id = $1 AND uf = $2 ORDER BY cidade NULLS FIRST, peso_de LIMIT 500", [transportadoraId, filtro])
+    ? await pool.query("SELECT uf, cidade, peso_de::float, peso_ate::float, frete::float, frete_kg::float, excedente_kg::float, adv_pct::float, gris_pct::float, taxa_fixa::float, frete_minimo::float, prazo_dias FROM cd_frete_tabela WHERE transportadora_id = $1 AND uf = $2 AND modal = $3 ORDER BY cidade NULLS FIRST, peso_de LIMIT 500", [transportadoraId, filtro, md])
     : { rows: [] };
-  return { por_uf: porUf, uf: filtro, linhas: rows };
+  return { modais, modal: md, por_uf: porUf, uf: filtro, linhas: rows };
 }
 
-async function limparTabela(acc, transportadoraId) {
+async function limparTabela(acc, transportadoraId, { modal } = {}) {
   exigirGestor(acc);
-  await pool.query("DELETE FROM cd_frete_tabela WHERE transportadora_id = $1", [transportadoraId]);
-  await pool.query("UPDATE cd_transportadoras SET tabela_importada_em = NULL, tabela_importada_por = NULL WHERE id = $1", [transportadoraId]);
+  if (modal) await pool.query("DELETE FROM cd_frete_tabela WHERE transportadora_id = $1 AND modal = $2", [transportadoraId, normModal(modal)]);
+  else await pool.query("DELETE FROM cd_frete_tabela WHERE transportadora_id = $1", [transportadoraId]);
+  if (!(await modaisDaTransp(pool, transportadoraId)).length) await pool.query("UPDATE cd_transportadoras SET tabela_importada_em = NULL, tabela_importada_por = NULL WHERE id = $1", [transportadoraId]);
   return { ok: true };
 }
 
@@ -307,8 +328,10 @@ async function simularLote(acc, b = {}) {
     let r = cache.get(k);
     if (!r) {
       const cots = await cotacoes(pool, { destino_uf: it.uf, destino_cidade: it.cidade, peso_kg: it.peso, valor: it.valor }, bid);
-      const pick = (x) => (x ? { id: x.transportadora_id, nome: x.nome, frete: x.frete, prazo_dias: x.prazo_dias, prazo_corridos: x.prazo_corridos } : null);
-      r = { cotacoes: cots.map((x) => ({ id: x.transportadora_id, ok: x.ok, frete: x.ok ? x.frete : null, prazo_dias: x.ok ? x.prazo_dias : null, prazo_corridos: x.prazo_corridos, motivo: x.ok ? null : x.motivo, regra: x.cidade_regra || null })),
+      const pick = (x) => (x ? { id: x.transportadora_id, nome: x.nome, modal: x.modal, frete: x.frete, prazo_dias: x.prazo_dias, prazo_corridos: x.prazo_corridos } : null);
+      const umaPorTransp = []; const vistos = new Set();
+      cots.slice().sort((a, z) => (z.ok - a.ok) || ((a.frete ?? 1e12) - (z.frete ?? 1e12))).forEach((x) => { if (!vistos.has(x.transportadora_id)) { vistos.add(x.transportadora_id); umaPorTransp.push(x); } });
+      r = { cotacoes: umaPorTransp.map((x) => ({ id: x.transportadora_id, modal: x.modal, ok: x.ok, frete: x.ok ? x.frete : null, prazo_dias: x.ok ? x.prazo_dias : null, prazo_corridos: x.prazo_corridos, motivo: x.ok ? null : x.motivo, regra: x.cidade_regra || null })),
         barata: pick(escolher(cots, "mais_barata", { prazo_max: null })), barata_no_prazo: bid.prazo_max !== null ? pick(escolher(cots, "mais_barata", bid)) : null, rapida: pick(escolher(cots, "mais_rapida", { prazo_max: null })), equilibrada: pick(escolher(cots, "equilibrada", bid)) };
       cache.set(k, r);
     }
@@ -370,7 +393,7 @@ async function salvarPrazos(acc, id, b = {}) {
 // ---------- NFs de saída ----------
 const COLS_LISTA = `n.id::int AS id, n.tipo, n.arquivo_nome, n.numero, n.serie, n.chave, n.emitida_em, n.destino_nome, n.destino_cnpj, n.destino_uf, n.destino_cidade, n.destino_cep,
   n.volumes, n.peso_kg::float AS peso_kg, n.valor::float AS valor, n.pecas, n.transportadora_xml, n.transportadora_cnpj, n.transportadora_id::int AS transportadora_id, t.nome AS transportadora, t.prazo_corridos,
-  n.frete_previsto::float AS frete_previsto, n.frete_real::float AS frete_real, n.prazo_dias, n.prazo_manual, n.status, n.coleta_data, n.previsao_entrega, n.entregue_data, n.entregue_por, n.recebido_por, n.obs, n.enviada_por, n.enviada_em`;
+  n.frete_previsto::float AS frete_previsto, n.frete_real::float AS frete_real, n.prazo_dias, n.prazo_manual, n.modal, n.status, n.coleta_data, n.previsao_entrega, n.entregue_data, n.entregue_por, n.recebido_por, n.obs, n.enviada_por, n.enviada_em`;
 
 // situação calculada: aguardando coleta, no prazo, vence hoje, atrasada, entregue (no prazo ou atrasada)
 function situacao(n, dia = hoje()) {
@@ -545,16 +568,19 @@ async function evento(db, id, tipo, usuario, detalhe = {}) {
 async function recalcular(db, id) {
   const { rows } = await db.query("SELECT n.*, t.prazo_corridos FROM cd_fat_nfs n LEFT JOIN cd_transportadoras t ON t.id = n.transportadora_id WHERE n.id = $1", [id]);
   const n = rows[0]; if (!n) return null;
-  let frete = null, prazo = n.prazo_manual ? n.prazo_dias : null, aviso = null;
+  let frete = null, prazo = n.prazo_manual ? n.prazo_dias : null, aviso = null, modal = n.modal || "rodoviario";
   if (n.transportadora_id) {
     const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
-    const c = await cotarCom(db, ts[0], n);
+    // a transportadora não tem tabela desse modal: usa o rodoviário (ou o único que ela tem)
+    const mds = await modaisDaTransp(db, n.transportadora_id);
+    if (mds.length && !mds.includes(modal)) modal = mds.includes("rodoviario") ? "rodoviario" : mds[0];
+    const c = await cotarCom(db, ts[0], n, modal);
     if (c.ok) { frete = c.frete; if (!n.prazo_manual) prazo = c.prazo_dias; if (prazo === null || prazo === undefined) aviso = "A tabela não traz prazo para essa faixa (informe o prazo à mão)."; }
     else { aviso = c.motivo; }
   }
   const prev = n.coleta_data && prazo !== null && prazo !== undefined ? addDias(dstr(n.coleta_data), prazo, n.prazo_corridos) : null;
-  await db.query("UPDATE cd_fat_nfs SET frete_previsto = $2, prazo_dias = $3, previsao_entrega = $4, atualizada_em = now() WHERE id = $1", [id, frete, prazo, prev]);
-  return { frete_previsto: frete, prazo_dias: prazo, previsao_entrega: prev, aviso };
+  await db.query("UPDATE cd_fat_nfs SET frete_previsto = $2, prazo_dias = $3, previsao_entrega = $4, modal = $5, atualizada_em = now() WHERE id = $1", [id, frete, prazo, prev, modal]);
+  return { frete_previsto: frete, prazo_dias: prazo, previsao_entrega: prev, modal, aviso };
 }
 
 async function acharTransportadoraXml(db, nome, cnpj) {
@@ -737,8 +763,13 @@ async function editarNf(acc, id, b = {}) {
       if ((cur.transportadora_id ? Number(cur.transportadora_id) : null) !== tid) {
         vals.push(tid); sets.push(`transportadora_id = $${vals.length}`);
         sets.push("prazo_manual = false"); sets.push("prazo_dias = NULL");
+        if (b.modal === undefined) sets.push("modal = 'rodoviario'");
         mud.push({ campo: "transportadora_id", de: cur.transportadora_id, para: tid }); recalc = true;
       }
+    }
+    if (b.modal !== undefined) {
+      const md = normModal(b.modal);
+      if (md !== (cur.modal || "rodoviario")) { vals.push(md); sets.push(`modal = $${vals.length}`); sets.push("prazo_manual = false"); sets.push("prazo_dias = NULL"); mud.push({ campo: "modal", de: cur.modal, para: md }); recalc = true; }
     }
     if (b.prazo_dias !== undefined && b.transportadora_id === undefined && mud.some((m) => m.campo === "prazo_dias")) sets.push("prazo_manual = true");
     if (!sets.length) return { ok: true, mudancas: 0 };
@@ -767,18 +798,19 @@ async function definirTransportadora(acc, b = {}) {
       const n = rows[0];
       if (!n || n.status === "cancelada") { res.push({ id, ok: false, motivo: "NF não encontrada." }); continue; }
       if (n.status === "entregue") { res.push({ id, numero: n.numero, ok: false, motivo: "Já foi entregue." }); continue; }
-      let alvo = tid;
+      let alvo = tid, modalAlvo = "rodoviario";
       if (modo) {
         const cot = (await cotacoes(c, n)).filter((x) => x.ok);
         if (!cot.length) { res.push({ id, numero: n.numero, ok: false, motivo: "Nenhuma tabela atende essa NF (confira UF, peso e tabelas)." }); continue; }
         const esc = escolher(cot, modo, bid);
         if (!esc) { res.push({ id, numero: n.numero, ok: false, motivo: bid.prazo_max !== null ? `Nenhuma transportadora entrega em até ${bid.prazo_max} dia(s) para essa NF.` : "As transportadoras não têm prazo cadastrado para esse destino." }); continue; }
-        alvo = esc.transportadora_id;
+        alvo = esc.transportadora_id; modalAlvo = esc.modal || "rodoviario";
       }
-      await c.query("UPDATE cd_fat_nfs SET transportadora_id = $2, prazo_dias = NULL, prazo_manual = false WHERE id = $1", [id, alvo]);
+      else modalAlvo = b.modal ? normModal(b.modal) : (alvo === (n.transportadora_id ? Number(n.transportadora_id) : null) ? (n.modal || "rodoviario") : "rodoviario");
+      await c.query("UPDATE cd_fat_nfs SET transportadora_id = $2, modal = $3, prazo_dias = NULL, prazo_manual = false WHERE id = $1", [id, alvo, modalAlvo]);
       const calc = await recalcular(c, id);
-      await evento(c, id, "transportadora", acc.email, { de: n.transportadora_id, para: alvo, modo: modo || "manual", ...(modo === "equilibrada" ? { peso_preco: bid.peso_preco } : {}), ...(bid.prazo_max !== null && modo ? { prazo_max: bid.prazo_max } : {}), frete: calc.frete_previsto, prazo_dias: calc.prazo_dias });
-      res.push({ id, numero: n.numero, ok: true, transportadora_id: alvo, frete_previsto: calc.frete_previsto, prazo_dias: calc.prazo_dias, aviso: calc.aviso });
+      await evento(c, id, "transportadora", acc.email, { de: n.transportadora_id, para: alvo, modal: calc.modal, modo: modo || "manual", ...(modo === "equilibrada" ? { peso_preco: bid.peso_preco } : {}), ...(bid.prazo_max !== null && modo ? { prazo_max: bid.prazo_max } : {}), frete: calc.frete_previsto, prazo_dias: calc.prazo_dias });
+      res.push({ id, numero: n.numero, ok: true, transportadora_id: alvo, modal: calc.modal, frete_previsto: calc.frete_previsto, prazo_dias: calc.prazo_dias, aviso: calc.aviso });
     }
     return { ok: true, resultados: res, definidas: res.filter((x) => x.ok).length };
   });
@@ -803,7 +835,7 @@ async function marcarColeta(acc, b = {}) {
       if (!alvo) { res.push({ id, numero: n.numero, ok: false, motivo: "Defina a transportadora antes da coleta." }); continue; }
       const emi = n.emitida_em ? diaLocal(n.emitida_em) : null;
       if (emi && data < emi) { res.push({ id, numero: n.numero, ok: false, motivo: `A coleta (${data}) é anterior à emissão da NF (${emi}).` }); continue; }
-      if (alvo !== (n.transportadora_id ? Number(n.transportadora_id) : null)) await c.query("UPDATE cd_fat_nfs SET transportadora_id = $2, prazo_dias = NULL, prazo_manual = false WHERE id = $1", [id, alvo]);
+      if (alvo !== (n.transportadora_id ? Number(n.transportadora_id) : null)) await c.query("UPDATE cd_fat_nfs SET transportadora_id = $2, modal = 'rodoviario', prazo_dias = NULL, prazo_manual = false WHERE id = $1", [id, alvo]);
       await c.query("UPDATE cd_fat_nfs SET status = 'em_transito', coleta_data = $2, atualizada_em = now() WHERE id = $1", [id, data]);
       const calc = await recalcular(c, id);
       await evento(c, id, "coleta", acc.email, { data, transportadora_id: alvo, previsao_entrega: calc.previsao_entrega, frete: calc.frete_previsto });
@@ -878,7 +910,7 @@ async function baixarArquivo(acc, id) {
 }
 
 // ---------- quadro de trânsito ----------
-async function quadro(acc, { dias = 30, transportadora_id, uf } = {}) {
+async function quadro(acc, { dias = 30, transportadora_id, uf, modal } = {}) {
   exigirFat(acc);
   const d = Math.min(Math.max(Number(dias) || 30, 1), 365);
   const dia = hoje();
@@ -887,6 +919,7 @@ async function quadro(acc, { dias = 30, transportadora_id, uf } = {}) {
   let extra = "";
   if (transportadora_id) { params.push(Number(transportadora_id)); extra += ` AND n.transportadora_id = $${params.length}`; }
   if (uf) { params.push(txt(uf).toUpperCase()); extra += ` AND n.destino_uf = $${params.length}`; }
+  if (modal && MODAIS.includes(normModal(modal))) { params.push(normModal(modal)); extra += ` AND n.transportadora_id IS NOT NULL AND n.modal = $${params.length}`; }
   const { rows } = await pool.query(
     `SELECT ${COLS_LISTA} FROM cd_fat_nfs n LEFT JOIN cd_transportadoras t ON t.id = n.transportadora_id
       WHERE n.status <> 'cancelada' AND (n.status <> 'entregue' OR n.entregue_data >= ($1::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date) ${extra}
@@ -929,6 +962,7 @@ async function quadro(acc, { dias = 30, transportadora_id, uf } = {}) {
       entregues: entregues.length, no_prazo_pct: comPrev.length ? Math.round(noPrazo / comPrev.length * 100) : null,
       frete_previsto_aberto: soma(abertas, "frete_previsto"), valor_aberto: soma(abertas, "valor"), pecas_abertas: soma(abertas, "pecas"),
       atraso_medio_dias: media(ordem.atrasadas.map((n) => n.dias_atraso)),
+      aereo_abertas: abertas.filter((n) => n.transportadora_id && n.modal === "aereo").length, rodoviario_abertas: abertas.filter((n) => n.transportadora_id && n.modal !== "aereo").length,
     },
     transportadoras: porTransp, ufs: Object.values(porUf).sort((a, b) => b.atrasadas - a.atrasadas || b.abertas - a.abertas),
     colunas: Object.fromEntries(Object.entries(ordem).map(([k, v]) => [k, { total: v.length, nfs: corta(v, 150) }])),
@@ -945,5 +979,5 @@ async function resumo(acc) {
 module.exports = {
   lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
-  listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
+  normModal, listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
 };
