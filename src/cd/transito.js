@@ -210,7 +210,7 @@ async function cotacoes(db, nf, opts = {}) {
 async function listarTransportadoras(acc) {
   exigirFat(acc);
   const { rows } = await pool.query(
-    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
+    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.pag_ciclo, t.pag_base, t.pag_fecha_dow, t.pag_dias, t.pag_dia_fixo, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
             (SELECT count(*)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS linhas,
             (SELECT count(DISTINCT uf)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS ufs,
             (SELECT count(*)::int FROM cd_transportadora_prazos p WHERE p.transportadora_id = t.id) AS prazos,
@@ -219,6 +219,40 @@ async function listarTransportadoras(acc) {
   return { transportadoras: rows };
 }
 
+// ---------- prazo de pagamento da transportadora ----------
+// ciclo: "nenhum" (cada NF vence na data-base + dias) | "semanal" (fecha num dia da semana) | "quinzenal" (fecha dia 15 e último do mês) | "mensal" (fecha no último dia)
+// base: data que entra no ciclo ("emissao", "coleta" ou "entrega"). Vencimento = fechamento + dias corridos, ou o próximo "dia fixo" do mês depois do fechamento.
+function lerPagamento(b = {}) {
+  const ciclo = ["nenhum", "semanal", "quinzenal", "mensal"].includes(b.pag_ciclo) ? b.pag_ciclo : "nenhum";
+  const base = ["emissao", "coleta", "entrega"].includes(b.pag_base) ? b.pag_base : "emissao";
+  const n = (v) => (v === undefined || v === null || txt(v) === "" ? null : numBR(v));
+  let dow = n(b.pag_fecha_dow), dias = n(b.pag_dias), fixo = n(b.pag_dia_fixo);
+  if (dias === null) dias = 0;
+  if (!Number.isInteger(dias) || dias < 0 || dias > 365) throw erro(400, "O prazo de pagamento deve ser um número inteiro de dias (0 a 365).");
+  if (fixo !== null && (!Number.isInteger(fixo) || fixo < 1 || fixo > 31)) throw erro(400, "O dia fixo de pagamento deve estar entre 1 e 31.");
+  if (ciclo === "semanal") { if (dow === null) dow = 5; if (!Number.isInteger(dow) || dow < 0 || dow > 6) throw erro(400, "Dia de fechamento da semana inválido."); } else dow = null;
+  if (fixo !== null) dias = 0;
+  return { ciclo, base, dow, dias, dia_fixo: fixo };
+}
+const ymd = (d) => d.toISOString().slice(0, 10);
+function somaCorridos(dataStr, n) { const d = new Date(dataStr + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return ymd(d); }
+function ultimoDiaMes(y, m) { return new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); }
+// fechamento do ciclo que contém a data-base (a própria data, se ela cair no dia de fechamento)
+function fechamento(t, base) {
+  const d = new Date(base + "T00:00:00Z"), y = d.getUTCFullYear(), m = d.getUTCMonth(), dia = d.getUTCDate();
+  if (t.pag_ciclo === "semanal") { const dow = t.pag_fecha_dow === null || t.pag_fecha_dow === undefined ? 5 : Number(t.pag_fecha_dow); return somaCorridos(base, (dow - d.getUTCDay() + 7) % 7); }
+  if (t.pag_ciclo === "quinzenal") return dia <= 15 ? ymd(new Date(Date.UTC(y, m, 15))) : ymd(new Date(Date.UTC(y, m, ultimoDiaMes(y, m))));
+  if (t.pag_ciclo === "mensal") return ymd(new Date(Date.UTC(y, m, ultimoDiaMes(y, m))));
+  return base;
+}
+function vencimento(t, base) {
+  const f = fechamento(t, base);
+  if (t.pag_dia_fixo) {
+    const d = new Date(f + "T00:00:00Z"); let y = d.getUTCFullYear(), m = d.getUTCMonth();
+    for (let i = 0; i < 3; i++) { const alvo = ymd(new Date(Date.UTC(y, m, Math.min(Number(t.pag_dia_fixo), ultimoDiaMes(y, m))))); if (alvo > f) return { fechamento: f, vencimento: alvo }; m++; if (m > 11) { m = 0; y++; } }
+  }
+  return { fechamento: f, vencimento: somaCorridos(f, Number(t.pag_dias) || 0) };
+}
 async function salvarTransportadora(acc, id, b = {}) {
   exigirFat(acc);
   const nome = txt(b.nome).slice(0, 80);
@@ -227,14 +261,19 @@ async function salvarTransportadora(acc, id, b = {}) {
   const ppn = b.prazo_padrao === undefined || b.prazo_padrao === null || txt(b.prazo_padrao) === "" ? null : numBR(b.prazo_padrao);
   if (ppn !== null && (ppn < 0 || ppn > 120 || Math.round(ppn) !== ppn)) throw erro(400, "O prazo padrão deve ser um número inteiro de dias (0 a 120).");
   const pp = ppn;
+  let pg = lerPagamento(b);
+  if (id && !["pag_ciclo", "pag_base", "pag_fecha_dow", "pag_dias", "pag_dia_fixo"].some((k) => b[k] !== undefined)) { // chamada antiga, sem os campos: mantém o que já está salvo
+    const { rows: at } = await pool.query("SELECT pag_ciclo, pag_base, pag_fecha_dow AS dow, pag_dias AS dias, pag_dia_fixo AS dia_fixo FROM cd_transportadoras WHERE id = $1", [id]);
+    if (at[0]) pg = { ciclo: at[0].pag_ciclo, base: at[0].pag_base, dow: at[0].dow, dias: at[0].dias, dia_fixo: at[0].dia_fixo };
+  }
   try {
     if (id) {
-      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6 WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp]);
+      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6, pag_ciclo = $7, pag_base = $8, pag_fecha_dow = $9, pag_dias = $10, pag_dia_fixo = $11 WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo]);
       if (!rows[0]) throw erro(404, "Transportadora não encontrada.");
       const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
       return { ok: true, id: Number(id), vinculadas: rl.vinculadas };
     }
-    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao) VALUES ($1,$2,$3,$4) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp]);
+    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao, pag_ciclo, pag_base, pag_fecha_dow, pag_dias, pag_dia_fixo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo]);
     const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
     return { ok: true, id: Number(rows[0].id), vinculadas: rl.vinculadas };
   } catch (e) {
@@ -969,6 +1008,56 @@ async function quadro(acc, { dias = 30, transportadora_id, uf, modal } = {}) {
   };
 }
 
+// fluxo de pagamento às transportadoras (consolidado): frete (real, senão previsto) de cada NF + regra de pagamento da transportadora
+async function fluxoPagamento(acc, { dias = 90 } = {}) {
+  exigirGestor(acc);
+  const d = Math.min(Math.max(Number(dias) || 90, 7), 365), dia = hoje();
+  const corte = new Date(Date.now() - d * 86400000).toISOString();
+  const { rows } = await pool.query(
+    `SELECT n.id::int AS id, n.numero, n.status, n.emitida_em, n.enviada_em, n.coleta_data, n.entregue_data, n.previsao_entrega, COALESCE(n.frete_real, n.frete_previsto)::float AS frete,
+            t.id::int AS tid, t.nome, t.pag_ciclo, t.pag_base, t.pag_fecha_dow, t.pag_dias, t.pag_dia_fixo
+       FROM cd_fat_nfs n JOIN cd_transportadoras t ON t.id = n.transportadora_id
+      WHERE n.status <> 'cancelada' AND COALESCE(n.frete_real, n.frete_previsto) IS NOT NULL AND COALESCE(n.emitida_em, n.enviada_em) >= $1::timestamptz`, [corte]);
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const seg = (ds) => { const x = new Date(ds + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return ymd(x); }; // segunda-feira da semana
+  const porT = new Map(), semanas = new Map(), prox = new Map();
+  const k = { total: 0, vencido: 0, em_7: 0, em_30: 0, depois: 0, sem_data: 0, estimado: 0 };
+  const iniSem = seg(dia), NSEM = 8;
+  rows.forEach((n) => {
+    const t = porT.get(n.tid) || { id: n.tid, nome: n.nome, ciclo: n.pag_ciclo, base: n.pag_base, fecha_dow: n.pag_fecha_dow, dias: n.pag_dias, dia_fixo: n.pag_dia_fixo, configurada: !!(n.pag_ciclo !== "nenhum" || n.pag_dias || n.pag_dia_fixo), nfs: 0, total: 0, vencido: 0, em_7: 0, em_30: 0, depois: 0, sem_data: 0, soma_prazo: 0, soma_val: 0 };
+    porT.set(n.tid, t);
+    t.nfs++; t.total += n.frete;
+    let base = null, estimada = false;
+    if (n.pag_base === "entrega") { if (n.entregue_data) base = dstr(n.entregue_data); else if (n.previsao_entrega) { base = dstr(n.previsao_entrega); estimada = true; } }
+    else if (n.pag_base === "coleta") base = n.coleta_data ? dstr(n.coleta_data) : null;
+    else base = diaLocal(n.emitida_em || n.enviada_em);
+    if (!base) { t.sem_data += n.frete; k.sem_data += n.frete; k.total += n.frete; return; }
+    const v = vencimento(n, base).vencimento, dd = difDias(dia, v);
+    k.total += n.frete; if (estimada) k.estimado += n.frete;
+    t.soma_prazo += difDias(base, v) * n.frete; t.soma_val += n.frete;
+    if (dd < 0) { t.vencido += n.frete; k.vencido += n.frete; }
+    else if (dd <= 7) { t.em_7 += n.frete; k.em_7 += n.frete; t.em_30 += n.frete; k.em_30 += n.frete; }
+    else if (dd <= 30) { t.em_30 += n.frete; k.em_30 += n.frete; }
+    else { t.depois += n.frete; k.depois += n.frete; }
+    if (dd >= 0) {
+      const wk = difDias(iniSem, seg(v)) / 7;
+      const chave = wk >= NSEM ? "depois" : String(wk);
+      const w = semanas.get(chave) || { chave, inicio: wk >= NSEM ? null : somaCorridos(iniSem, wk * 7), total: 0, por: {} };
+      w.total += n.frete; w.por[n.nome] = (w.por[n.nome] || 0) + n.frete; semanas.set(chave, w);
+      const pk = v + "|" + n.tid; const p = prox.get(pk) || { vencimento: v, transportadora: n.nome, valor: 0, nfs: 0, estimado: false }; p.valor += n.frete; p.nfs++; if (estimada) p.estimado = true; prox.set(pk, p);
+    }
+    if (dd < 0) { const w = semanas.get("vencido") || { chave: "vencido", inicio: null, total: 0, por: {} }; w.total += n.frete; w.por[n.nome] = (w.por[n.nome] || 0) + n.frete; semanas.set("vencido", w); }
+  });
+  const ordem = ["vencido", ...Array.from({ length: NSEM }, (_, i) => String(i)), "depois"];
+  const sem = ordem.map((c) => semanas.get(c) || { chave: c, inicio: c === "vencido" || c === "depois" ? null : somaCorridos(iniSem, Number(c) * 7), total: 0, por: {} })
+    .map((w) => ({ ...w, total: r2(w.total), por: Object.fromEntries(Object.entries(w.por).map(([a, b]) => [a, r2(b)])) }));
+  const tr = [...porT.values()].map((t) => ({ id: t.id, nome: t.nome, ciclo: t.ciclo, base: t.base, fecha_dow: t.fecha_dow, dias: t.dias, dia_fixo: t.dia_fixo, configurada: t.configurada, nfs: t.nfs, total: r2(t.total), vencido: r2(t.vencido), em_7: r2(t.em_7), em_30: r2(t.em_30), depois: r2(t.depois), sem_data: r2(t.sem_data), prazo_medio_dias: t.soma_val ? Math.round(t.soma_prazo / t.soma_val * 10) / 10 : null }))
+    .sort((a, b) => b.total - a.total);
+  // transportadoras ativas ainda sem regra de pagamento (aparecem como alerta)
+  const { rows: sem_regra } = await pool.query("SELECT id::int AS id, nome FROM cd_transportadoras WHERE ativa AND pag_ciclo = 'nenhum' AND pag_dias = 0 AND pag_dia_fixo IS NULL ORDER BY nome");
+  return { hoje: dia, janela_dias: d, semana_inicio: iniSem, kpis: Object.fromEntries(Object.entries(k).map(([a, b]) => [a, r2(b)])), semanas: sem, transportadoras: tr, proximos: [...prox.values()].map((p) => ({ ...p, valor: r2(p.valor) })).sort((a, b) => a.vencimento.localeCompare(b.vencimento) || b.valor - a.valor).slice(0, 40), sem_regra };
+}
+
 // resumo para o painel do consolidado
 async function resumo(acc) {
   exigirFat(acc);
@@ -979,5 +1068,5 @@ async function resumo(acc) {
 module.exports = {
   lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
-  normModal, listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
+  normModal, fluxoPagamento, vencimento, listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
 };
