@@ -29,7 +29,7 @@ const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 const jsonPadrao = express.json();
-app.use((req, res, next) => (req.method === "POST" && /^\/api\/cd\/transito\/(nfs|transportadoras\/\d+\/tabela)$/.test(req.path) ? next() : jsonPadrao(req, res, next)));
+app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
 function parseDateRange(req) {
   const { dateFrom, dateTo } = req.query;
@@ -555,6 +555,7 @@ app.get(T + "/resumo", cdAuth, handle((req) => trn.resumo(req.access)));
 app.get(T + "/nfs", cdAuth, handle((req) => trn.listarNfs(req.access, req.query)));
 app.post(T + "/nfs", cdAuth, grande, handle((req) => trn.enviarNf(req.access, req.body || {})));
 app.post(T + "/nfs/excluir", cdAuth, handle((req) => trn.excluirNfs(req.access, req.body || {})));
+app.get(T + "/nfs/relatorio", cdAuth, handle((req) => trn.relatorio(req.access, req.query)));
 app.get(T + "/nfs/lidas", cdAuth, handle((req) => trn.transportadorasLidas(req.access)));
 app.post(T + "/nfs/vincular-lidas", cdAuth, handle((req) => trn.vincularLidas(req.access, req.body || {})));
 app.post(T + "/nfs/transportadora", cdAuth, handle((req) => trn.definirTransportadora(req.access, req.body || {})));
@@ -577,6 +578,9 @@ app.put(T + "/transportadoras/:id", cdAuth, handle((req) => trn.salvarTransporta
 app.post(T + "/transportadoras/:id/tabela", cdAuth, grandeTabela, handle((req) => trn.importarTabela(req.access, nid(req), req.body || {})));
 app.get(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.verTabela(req.access, nid(req), { uf: req.query.uf })));
 app.delete(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.limparTabela(req.access, nid(req))));
+app.post(T + "/simular/lote", cdAuth, grande, handle((req) => trn.simularLote(req.access, req.body || {})));
+app.get(T + "/transportadoras/:id/prazos", cdAuth, handle((req) => trn.listarPrazos(req.access, nid(req))));
+app.put(T + "/transportadoras/:id/prazos", cdAuth, grandeTabela, handle((req) => trn.salvarPrazos(req.access, nid(req), req.body || {})));
 app.post(T + "/simular", cdAuth, handle((req) => trn.simular(req.access, req.body || {})));
 app.post("/api/cd/notas/:id/etapas/:n/reabrir", cdAuth, handle((req) => cd.reabrirEtapa(req.access, nid(req), Number(req.params.n), (req.body || {}).motivo)));
 app.post("/api/cd/notas/:id/cancelar", cdAuth, handle((req) => cd.cancelarNota(req.access, nid(req), (req.body || {}).motivo)));
