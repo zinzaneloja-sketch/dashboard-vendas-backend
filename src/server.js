@@ -520,7 +520,11 @@ app.get("/api/sync/backfill-order-fields", requireAuth, requireAdmin, handle(asy
 // que ficou rodando em segundo plano terminou (e se deu certo ou não).
 // ---- Módulo Recebimento / CD ----
 const cdAuth = [requireAuth, requireModule("cd")];
-const nid = (req) => Number(req.params.id);
+const nid = (req) => {
+  const n = Number(req.params.id);
+  if (!Number.isInteger(n) || n <= 0) { const e = new Error("Endereço não reconhecido pelo servidor (\"" + String(req.params.id).slice(0, 40) + "\"). Provavelmente o servidor está com uma versão antiga: publique src/server.js e src/cd/transito.js."); e.status = 404; throw e; }
+  return n;
+};
 app.get("/api/cd/config", cdAuth, handle(() => cd.configPublica()));
 app.put("/api/cd/config/etapas", cdAuth, requireAdmin, handle((req) => cd.salvarConfigEtapas((req.body || {}).etapas)));
 app.get("/api/cd/usuarios", cdAuth, handle(async () => {
@@ -548,6 +552,8 @@ app.put("/api/cd/notas/:id/ranking", cdAuth, handle((req) => cd.definirRanking(r
 // ---- Faturamento e trânsito (aba própria: NFs de saída, tabelas das transportadoras, coleta, entrega) ----
 const trn = require("./cd/transito");
 const T = "/api/cd/transito";
+// diagnóstico: abra /api/cd/versao no navegador para ver se o servidor está com a versão nova do módulo (sem dados sensíveis)
+app.get("/api/cd/versao", (req, res) => res.json({ transito: trn.VERSAO || "antiga", recursos: { relatorio: typeof trn.relatorio === "function", modal: typeof trn.normModal === "function", pagamentos: typeof trn.fluxoPagamento === "function", prazos: typeof trn.listarPrazos === "function", lote: typeof trn.simularLote === "function" }, servidor_iniciado_em: PROCESS_STARTED_AT }));
 const grande = express.json({ limit: "16mb" }); // até 10 MB de arquivo (o base64 aumenta ~33%)
 const grandeTabela = express.json({ limit: "25mb" });
 app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, uf: req.query.uf, modal: req.query.modal })));
