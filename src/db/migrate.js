@@ -382,6 +382,10 @@ ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS prazo_manual BOOLEAN NOT NULL DE
 ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS transportadora_cnpj TEXT;
 -- prazos de entrega cadastrados por transportadora (por UF ou cidade) + prazo padrão
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS prazo_padrao INTEGER;
+-- modal do frete: cada tabela é rodoviária ou aérea; a NF guarda o modal usado
+ALTER TABLE cd_frete_tabela ADD COLUMN IF NOT EXISTS modal TEXT NOT NULL DEFAULT 'rodoviario';
+ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS modal TEXT NOT NULL DEFAULT 'rodoviario';
+CREATE INDEX IF NOT EXISTS cd_frete_tabela_modal_idx ON cd_frete_tabela (transportadora_id, modal, uf);
 CREATE TABLE IF NOT EXISTS cd_transportadora_prazos (
   id               BIGSERIAL PRIMARY KEY,
   transportadora_id BIGINT NOT NULL REFERENCES cd_transportadoras(id) ON DELETE CASCADE,
