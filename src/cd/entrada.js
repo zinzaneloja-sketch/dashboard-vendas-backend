@@ -447,4 +447,34 @@ async function quadro(acc, { dias = 30, transportadora_id, fornecedor } = {}) {
   };
 }
 
-module.exports = { criarEnvio, editarEnvio, marcarColeta, voltarStatus, cancelarEnvio, vincularManual, desvincular, vincularNaDoca, semEnvio, opcoes, listarEnvios, detalheEnvio, envioDaNota, quadro, situacao };
+// ---- leitura de código de barras (coletor USB): a chave de 44 dígitos já traz CNPJ do emitente, nº e série ----
+function dvChave(c43) { let w = 2, s = 0; for (let i = 42; i >= 0; i--) { s += Number(c43[i]) * w; w = w === 9 ? 2 : w + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; }
+const MODELOS = { "55": "NF-e", "65": "NFC-e (cupom)", "57": "CT-e (conhecimento de transporte)", "67": "CT-e OS", "58": "MDF-e (manifesto)" };
+function dadosChave(c) {
+  return { uf_cod: c.slice(0, 2), emissao_ano_mes: "20" + c.slice(2, 4) + "-" + c.slice(4, 6), cnpj: c.slice(6, 20), modelo: c.slice(20, 22), serie: String(parseInt(c.slice(22, 25), 10)), numero: String(parseInt(c.slice(25, 34), 10)) };
+}
+// confere a chave (dígito verificador, modelo) e diz o que já existe no sistema com ela: nota na doca, envio, fornecedor conhecido pelo CNPJ
+async function consultaChave(acc, raw) {
+  const s = txt(raw).replace(/\s+/g, "");
+  const m = s.match(/\d{44}/);
+  const c = m ? m[0] : (s.replace(/\D/g, "").length === 44 ? s.replace(/\D/g, "") : "");
+  if (!c) throw erro(400, "A chave da NF-e tem 44 números.");
+  const d = dadosChave(c);
+  const out = { chave: c, valida: dvChave(c.slice(0, 43)) === Number(c[43]), ...d, tipo_documento: MODELOS[d.modelo] || "documento modelo " + d.modelo, e_nfe: d.modelo === "55", fornecedor_sugerido: null, nota: null, envio: null, envio_provavel: null };
+  if (!out.valida) return out;
+  const { rows: n } = await pool.query("SELECT id::int AS id, numero_nf, serie, fornecedor, etapa_atual, status FROM cd_notas WHERE chave_nf = $1 AND status <> 'cancelada' LIMIT 1", [c]);
+  if (n[0]) out.nota = n[0];
+  const { rows: e } = await pool.query("SELECT e.id::int AS id, e.fornecedor, e.status, e.numero_nf, t.nome AS transportadora FROM cd_ent_envios e LEFT JOIN cd_transportadoras t ON t.id = e.transportadora_id WHERE e.chave_nf = $1 AND e.status <> 'cancelada' LIMIT 1", [c]);
+  if (e[0]) out.envio = e[0];
+  const { rows: f } = await pool.query(
+    `SELECT fornecedor FROM (SELECT fornecedor, criada_em AS t FROM cd_notas WHERE chave_nf IS NOT NULL AND substr(chave_nf, 7, 14) = $1
+       UNION ALL SELECT fornecedor, criado_em AS t FROM cd_ent_envios WHERE chave_nf IS NOT NULL AND substr(chave_nf, 7, 14) = $1) x ORDER BY t DESC LIMIT 1`, [d.cnpj]);
+  if (f[0]) out.fornecedor_sugerido = f[0].fornecedor;
+  if (!out.envio && !out.nota) {
+    const p = await achaEnvio(pool, { chave_nf: c, numero_nf: d.numero, serie: d.serie, fornecedor: out.fornecedor_sugerido || "" });
+    if (p) { const { rows: pe } = await pool.query("SELECT e.id::int AS id, e.fornecedor, e.status, e.numero_nf, t.nome AS transportadora FROM cd_ent_envios e LEFT JOIN cd_transportadoras t ON t.id = e.transportadora_id WHERE e.id = $1", [p.id]); out.envio_provavel = pe[0] || null; }
+  }
+  return out;
+}
+
+module.exports = { consultaChave, dadosChave, criarEnvio, editarEnvio, marcarColeta, voltarStatus, cancelarEnvio, vincularManual, desvincular, vincularNaDoca, semEnvio, opcoes, listarEnvios, detalheEnvio, envioDaNota, quadro, situacao };
