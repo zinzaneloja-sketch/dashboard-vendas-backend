@@ -553,7 +553,7 @@ app.put("/api/cd/notas/:id/ranking", cdAuth, handle((req) => cd.definirRanking(r
 const trn = require("./cd/transito");
 const T = "/api/cd/transito";
 // diagnóstico: abra /api/cd/versao no navegador para ver se o servidor está com a versão nova do módulo (sem dados sensíveis)
-app.get("/api/cd/versao", (req, res) => res.json({ transito: trn.VERSAO || "antiga", recursos: { relatorio: typeof trn.relatorio === "function", modal: typeof trn.normModal === "function", pagamentos: typeof trn.fluxoPagamento === "function", prazos: typeof trn.listarPrazos === "function", lote: typeof trn.simularLote === "function" }, servidor_iniciado_em: PROCESS_STARTED_AT }));
+app.get("/api/cd/versao", (req, res) => res.json({ transito: trn.VERSAO || "antiga", recursos: { relatorio: typeof trn.relatorio === "function", modal: typeof trn.normModal === "function", pagamentos: typeof trn.fluxoPagamento === "function", prazos: typeof trn.listarPrazos === "function", lote: typeof trn.simularLote === "function", entrada: typeof ent !== "undefined" && typeof ent.quadro === "function" }, servidor_iniciado_em: PROCESS_STARTED_AT }));
 const grande = express.json({ limit: "16mb" }); // até 10 MB de arquivo (o base64 aumenta ~33%)
 const grandeTabela = express.json({ limit: "25mb" });
 app.get(T + "/quadro", cdAuth, handle((req) => trn.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, uf: req.query.uf, modal: req.query.modal })));
@@ -579,6 +579,20 @@ app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
     res.send(f.conteudo);
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
+// ---- Trânsito de entrada (fornecedor -> Zinzane), ligado ao recebimento na doca ----
+const ent = require("./cd/entrada");
+app.get(T + "/entrada/quadro", cdAuth, handle((req) => ent.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, fornecedor: req.query.fornecedor })));
+app.get(T + "/entrada/envios", cdAuth, handle((req) => ent.listarEnvios(req.access, req.query)));
+app.post(T + "/entrada/envios", cdAuth, handle((req) => ent.criarEnvio(req.access, req.body || {})));
+app.get(T + "/entrada/opcoes", cdAuth, handle((req) => ent.opcoes(req.access)));
+app.get(T + "/entrada/sem-envio", cdAuth, handle((req) => ent.semEnvio(req.access)));
+app.post(T + "/entrada/envios/coleta", cdAuth, handle((req) => ent.marcarColeta(req.access, req.body || {})));
+app.get(T + "/entrada/envios/:id", cdAuth, handle((req) => ent.detalheEnvio(req.access, nid(req))));
+app.put(T + "/entrada/envios/:id", cdAuth, handle((req) => ent.editarEnvio(req.access, nid(req), req.body || {})));
+app.post(T + "/entrada/envios/:id/voltar", cdAuth, handle((req) => ent.voltarStatus(req.access, nid(req))));
+app.post(T + "/entrada/envios/:id/cancelar", cdAuth, handle((req) => ent.cancelarEnvio(req.access, nid(req), (req.body || {}).motivo)));
+app.post(T + "/entrada/envios/:id/vincular", cdAuth, handle((req) => ent.vincularManual(req.access, nid(req), req.body || {})));
+app.post(T + "/entrada/envios/:id/desvincular", cdAuth, handle((req) => ent.desvincular(req.access, nid(req))));
 app.get(T + "/transportadoras", cdAuth, handle((req) => trn.listarTransportadoras(req.access)));
 app.post(T + "/transportadoras", cdAuth, handle((req) => trn.salvarTransportadora(req.access, null, req.body || {})));
 app.put(T + "/transportadoras/:id", cdAuth, handle((req) => trn.salvarTransportadora(req.access, nid(req), req.body || {})));
