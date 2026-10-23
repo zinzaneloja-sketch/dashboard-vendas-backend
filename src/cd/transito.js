@@ -1065,7 +1065,7 @@ async function resumo(acc) {
   return { kpis: q.kpis };
 }
 
-const VERSAO = "2026-10-21.4";
+const VERSAO = "2026-10-22.1";
 module.exports = {
   VERSAO, lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
