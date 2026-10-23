@@ -466,6 +466,47 @@ CREATE TABLE IF NOT EXISTS cd_nfs_saida_arq (
   nfs_id          BIGINT PRIMARY KEY REFERENCES cd_nfs_saida(id) ON DELETE CASCADE,
   conteudo        BYTEA NOT NULL
 );
+-- Trânsito de entrada: envios do fornecedor até a Zinzane (frete por nossa conta), ligados à NF recebida na doca
+CREATE TABLE IF NOT EXISTS cd_ent_envios (
+  id                BIGSERIAL PRIMARY KEY,
+  fornecedor        TEXT NOT NULL,
+  numero_nf         TEXT,
+  serie             TEXT,
+  chave_nf          TEXT,
+  volumes           INTEGER,
+  peso_kg           NUMERIC(12,3),
+  pecas             INTEGER,
+  valor             NUMERIC(14,2),
+  origem_uf         TEXT,
+  origem_cidade     TEXT,
+  transportadora_id BIGINT REFERENCES cd_transportadoras(id) ON DELETE SET NULL,
+  status            TEXT NOT NULL DEFAULT 'solicitada', -- solicitada | em_transito | recebida | cancelada
+  coleta_agendada   DATE,
+  coleta_data       DATE,
+  prazo_dias        INTEGER,
+  prazo_manual      BOOLEAN NOT NULL DEFAULT false,
+  previsao_chegada  DATE,
+  recebida_em       TIMESTAMPTZ,
+  nota_id           BIGINT REFERENCES cd_notas(id) ON DELETE SET NULL,
+  vinculo           TEXT, -- automatico | manual
+  obs               TEXT,
+  criado_por        TEXT NOT NULL,
+  criado_em         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_ent_envios_status_idx ON cd_ent_envios (status, criado_em DESC);
+CREATE INDEX IF NOT EXISTS cd_ent_envios_nota_idx ON cd_ent_envios (nota_id);
+CREATE UNIQUE INDEX IF NOT EXISTS cd_ent_envios_nota_uq ON cd_ent_envios (nota_id) WHERE nota_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS cd_ent_envios_chave_uq ON cd_ent_envios (chave_nf) WHERE chave_nf IS NOT NULL AND status <> 'cancelada';
+CREATE TABLE IF NOT EXISTS cd_ent_eventos (
+  id        BIGSERIAL PRIMARY KEY,
+  envio_id  BIGINT NOT NULL REFERENCES cd_ent_envios(id) ON DELETE CASCADE,
+  tipo      TEXT NOT NULL,
+  usuario   TEXT NOT NULL,
+  detalhe   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cd_ent_eventos_idx ON cd_ent_eventos (envio_id, id);
 `;
 
 // Migracao unica: o processo tinha 15 etapas (2 = abertura dos fardos, 3 = separacao). Como as duas
