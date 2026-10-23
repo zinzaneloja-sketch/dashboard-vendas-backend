@@ -584,6 +584,7 @@ const ent = require("./cd/entrada");
 app.get(T + "/entrada/quadro", cdAuth, handle((req) => ent.quadro(req.access, { dias: req.query.dias, transportadora_id: req.query.transportadora_id, fornecedor: req.query.fornecedor })));
 app.get(T + "/entrada/envios", cdAuth, handle((req) => ent.listarEnvios(req.access, req.query)));
 app.post(T + "/entrada/envios", cdAuth, handle((req) => ent.criarEnvio(req.access, req.body || {})));
+app.get("/api/cd/chave/:chave", cdAuth, handle((req) => ent.consultaChave(req.access, req.params.chave)));
 app.get(T + "/entrada/opcoes", cdAuth, handle((req) => ent.opcoes(req.access)));
 app.get(T + "/entrada/sem-envio", cdAuth, handle((req) => ent.semEnvio(req.access)));
 app.post(T + "/entrada/envios/coleta", cdAuth, handle((req) => ent.marcarColeta(req.access, req.body || {})));
