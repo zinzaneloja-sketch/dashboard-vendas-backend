@@ -1,6 +1,7 @@
 const { pool } = require("../db");
 const { PERFIS, FRENTE, ETAPAS, TRAVAS, ITEM_CAMPOS, TAMANHOS, TAMANHOS_INFO, tamanhoCanonico, etapaPorNumero, numeroDe } = require("./etapas");
 const { minutosUteis, diaLocal, expediente } = require("./tempo");
+const entrada = require("./entrada"); // liga o envio do fornecedor (trânsito de entrada) à NF recebida na doca
 
 const TOTAL_ETAPAS = ETAPAS.length;
 // Rótulo de uma linha de produto: produto / referência do fornecedor / cor / tamanho
@@ -191,7 +192,9 @@ async function criarNota(acc, b) {
       numero_nf, serie: txt(b.serie) || null, fornecedor, total_pecas_nf: total, volumes_nf: volNf, volumes_recebidos: volRec,
       prioridade, ...(ranking ? { ranking } : {}), ...(diverge ? { divergencia: { tipo: "volumes", esperado: volNf, obtido: volRec, justificativa } } : {}),
     });
-    return { id: nota.id };
+    // trânsito de entrada: se havia um envio desse fornecedor/NF a caminho, marca como recebido agora (não derruba o recebimento se falhar)
+    const envioId = await entrada.vincularNaDoca(c, nota, acc.email);
+    return { id: nota.id, ...(envioId ? { envio_vinculado: envioId } : {}) };
   });
 }
 
@@ -874,8 +877,9 @@ async function detalheNota(acc, notaId) {
   const verEtiq = gestor || acc.cd_perfis.includes("etiquetas");
   const disponivelEtiq = Math.max(0, st.itens.filter((i) => i.qtd_contada !== null && txt(i.ref_zinzane)).reduce((a, i) => a + i.qtd_contada, 0) - ext.lotes.total);
   const ativas = etapas.filter((e) => e.ativa).map((e) => e.n);
+  const transporte = await entrada.envioDaNota(pool, notaId);
   return {
-    nota: notaOut, etapas, itens, itens_nf: nfItens, eventos, conferencia: conferencias[nota.etapa_atual] || null, conferencias,
+    nota: notaOut, transporte, etapas, itens, itens_nf: nfItens, eventos, conferencia: conferencias[nota.etapa_atual] || null, conferencias,
     recontagens: verRecont ? ext.recontagens : [],
     etiquetas: verEtiq ? { lotes: ext.lotes.itens, total: ext.lotes.total, disponivel: disponivelEtiq, contado_com_ref: st.itens.filter((i) => i.qtd_contada !== null && txt(i.ref_zinzane)).reduce((a, i) => a + i.qtd_contada, 0) } : null,
     tempo_total_min: minutosUteis(nota.criada_em, nota.concluida_em || agora),
