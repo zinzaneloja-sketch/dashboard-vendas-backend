@@ -987,6 +987,77 @@ CREATE INDEX IF NOT EXISTS ch_chamados_dep_idx ON ch_chamados (departamento_id, 
   if (novas) console.log("[chamados] " + novas + " loja(s) cadastrada(s) a partir da relação oficial (cadastre o e-mail de cada uma em Cadastros > Lojas).");
 }
 
+
+// ---------- Admissão e Rescisão ----------
+// nome, descrição, área, prazo (minutos úteis; 600 = 1 dia útil)
+const SEED_ETAPAS_ADM = {
+  admissao: [
+    ["Solicitação recebida e validada", "Vaga aprovada e dados do candidato, cargo, local, horário e data de início confirmados.", "Gestor / DP", 300],
+    ["Documentos do candidato recebidos e conferidos", "Documentos pessoais, dados bancários, dependentes e demais documentos exigidos.", "DP", 1800],
+    ["Exame admissional (ASO)", "Exame agendado, realizado e atestado de saúde ocupacional recebido.", "Saúde ocupacional", 1800],
+    ["Cadastro na folha e registro no eSocial", "Cadastro do colaborador na folha e envio do registro ao eSocial antes do início das atividades.", "DP", 600],
+    ["Contrato e documentos assinados", "Contrato de trabalho e termos assinados pelo colaborador.", "DP", 600],
+    ["Benefícios e ponto", "Vale-transporte, vale-alimentação ou refeição, plano de saúde e cadastro no ponto.", "DP", 600],
+    ["Integração, uniforme e acessos", "Integração, entrega de uniforme e liberação de acessos e sistemas.", "Loja / DP", 600],
+  ],
+  rescisao: [
+    ["Comunicação recebida e motivo validado", "Pedido de demissão ou dispensa, tipo de rescisão, aviso prévio e data do término do contrato.", "Gestor / DP", 300],
+    ["Exame demissional (ASO)", "Exame demissional agendado e realizado.", "Saúde ocupacional", 1200],
+    ["Baixa em benefícios, ponto e acessos", "Cancelamento de vale-transporte, vale-alimentação ou refeição, plano de saúde, ponto e acessos.", "DP / Loja", 600],
+    ["Cálculo das verbas rescisórias", "Cálculo do TRCT: saldo de salário, férias, 13º, aviso prévio, FGTS e descontos.", "DP / Contabilidade", 1200],
+    ["Conferência e aprovação do cálculo", "Gestor confere e aprova o cálculo antes do pagamento.", "Gestor", 300],
+    ["Pagamento e entrega dos documentos", "Pagamento das verbas e entrega do TRCT, guias do FGTS e do seguro-desemprego.", "Financeiro / DP", 900],
+    ["Baixa na carteira, eSocial e arquivo", "Baixa na CTPS digital, envio do desligamento ao eSocial e arquivo do dossiê.", "DP", 600],
+  ],
+};
+async function migrarAdmissao() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS adm_equipe (
+      id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL, nome TEXT, papel TEXT NOT NULL DEFAULT 'analista' CHECK (papel IN ('analista','gestor')),
+      ativo BOOLEAN NOT NULL DEFAULT true, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS adm_equipe_email_uq ON adm_equipe (lower(email));
+    CREATE TABLE IF NOT EXISTS adm_etapas_modelo (
+      id BIGSERIAL PRIMARY KEY, tipo TEXT NOT NULL CHECK (tipo IN ('admissao','rescisao')), nome TEXT NOT NULL, descricao TEXT, area TEXT,
+      prazo_min INT NOT NULL CHECK (prazo_min > 0), ordem INT NOT NULL DEFAULT 0, ativo BOOLEAN NOT NULL DEFAULT true);
+    CREATE UNIQUE INDEX IF NOT EXISTS adm_etapas_modelo_uq ON adm_etapas_modelo (tipo, lower(nome));
+    CREATE TABLE IF NOT EXISTS adm_config (chave TEXT PRIMARY KEY, valor TEXT);
+    CREATE SEQUENCE IF NOT EXISTS adm_proto_seq;
+    CREATE TABLE IF NOT EXISTS adm_processos (
+      id BIGSERIAL PRIMARY KEY, protocolo TEXT NOT NULL UNIQUE, tipo TEXT NOT NULL CHECK (tipo IN ('admissao','rescisao')),
+      colaborador TEXT NOT NULL, cpf TEXT, cargo TEXT, loja_id BIGINT REFERENCES ch_lojas(id), unidade TEXT NOT NULL, subtipo TEXT,
+      data_prevista DATE NOT NULL, observacao TEXT, responsavel TEXT,
+      status TEXT NOT NULL DEFAULT 'em_andamento' CHECK (status IN ('em_andamento','pausado','concluido','cancelado')),
+      sla_total_min INT NOT NULL CHECK (sla_total_min > 0), criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      concluido_em TIMESTAMPTZ, cancelado_motivo TEXT, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS adm_processos_status_idx ON adm_processos (status, criado_em DESC);
+    CREATE INDEX IF NOT EXISTS adm_processos_cpf_idx ON adm_processos (cpf) WHERE cpf IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS adm_proc_etapas (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE, modelo_id BIGINT,
+      nome TEXT NOT NULL, descricao TEXT, area TEXT, ordem INT NOT NULL, prazo_min INT NOT NULL CHECK (prazo_min > 0),
+      status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente','concluida','dispensada')),
+      concluida_em TIMESTAMPTZ, concluida_por TEXT, obs TEXT);
+    CREATE INDEX IF NOT EXISTS adm_proc_etapas_proc_idx ON adm_proc_etapas (processo_id, ordem);
+    CREATE TABLE IF NOT EXISTS adm_pausas (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE,
+      inicio TIMESTAMPTZ NOT NULL DEFAULT now(), fim TIMESTAMPTZ, motivo TEXT, usuario TEXT);
+    CREATE INDEX IF NOT EXISTS adm_pausas_proc_idx ON adm_pausas (processo_id);
+    CREATE TABLE IF NOT EXISTS adm_eventos (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE,
+      tipo TEXT NOT NULL, usuario TEXT, detalhe JSONB, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS adm_eventos_proc_idx ON adm_eventos (processo_id, criado_em);
+  `);
+  // etapas sugeridas: só entram quando o tipo ainda não tem nenhuma (depois o gestor edita à vontade)
+  for (const tipo of Object.keys(SEED_ETAPAS_ADM)) {
+    const { rows } = await pool.query("SELECT count(*)::int AS n FROM adm_etapas_modelo WHERE tipo = $1", [tipo]);
+    if (rows[0].n) continue;
+    let ordem = 0;
+    for (const [nome, desc, area, prazo] of SEED_ETAPAS_ADM[tipo]) {
+      await pool.query("INSERT INTO adm_etapas_modelo (tipo, nome, descricao, area, prazo_min, ordem) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING", [tipo, nome, desc, area, prazo, ++ordem]);
+    }
+    console.log("[admissao] Etapas iniciais de " + tipo + " criadas (edite os prazos no painel).");
+  }
+}
+
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
@@ -995,6 +1066,7 @@ async function migrate() {
   await migrarParalela();
   await migrarFaturamento();
   await migrarChamados();
+  await migrarAdmissao();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
