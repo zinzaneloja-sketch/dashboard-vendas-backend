@@ -745,6 +745,31 @@ const SEED_ASSUNTOS = [
 // Lojas da relação oficial (planilha Lojas): nome, responsável regional, região, UF, cidade, endereço, CEP.
 const SEED_LOJAS = [["PARK MACEIO","Dimy","Nordeste","AL","Maceio","AV COMENDADOR GUSTAVO PAIVA, 5945, LOJA 1066","57038-000"],["MANAUARA","Dimy","Norte","AM","Manaus","AV MARIO YPIRANGA, 1300, ANDAR TACUMA LJ 78","69057-002"],["SUMAUMA","Dimy","Norte","AM","Manaus","AV NOEL NUTELS, 1762, LOJA 3040 3041 E 3042","69095-000"],["PONTA NEGRA","Dimy","Norte","AM","Manaus","AV CORONEL TEIXEIRA, 5705, LOJA L43.2","69037-000"],["OUTLET SALVADOR","Silvia","Nordeste","BA","Camacari","ESTRADA DO COCO, SN, KM 125 OUTLET PREM SALVADOR LOJA","42840-971"],["PARQUE SHOPPING BAHIA","Silvia","Nordeste","BA","Lauro de Freitas","AV SANTOS DUMONT, 4360, LOJA 1032 E 1033","42702-400"],["SALVADOR SHOPPING","Silvia","Nordeste","BA","Salvador","AV TANCREDO NEVES, 2915, LOJA 2005","41820-021"],["SHOPPING BARRA SALVADOR","Silvia","Nordeste","BA","Salvador","AVENIDA CENTENARIO, 2992, LOJA 254","41140-400"],["BELA VISTA","Silvia","Nordeste","BA","Salvador","ALAMEDA EUVALDO LUZ, 92, LJ 57 PISO 1","41098-020"],["SHOPPING PARALELA BAHIA","Silvia","Nordeste","BA","Salvador","AV LUIS VIANA FILHO, 8544, A107 PISO L1","41730-101"],["IGUATEMI SALVADOR","Silvia","Nordeste","BA","Salvador","AVENIDA TANCREDO NEVES, 148, QUADRA A","41820-908"],["OUTLET FORTALEZA","Duda","Nordeste","CE","Caucaia","AV VEREADOR FRANCISCO PESSOA DE LIMA, 445, LOJA 35,36 E 37","61663-020"],["SH IGUATEMI FORTALEZA","Duda","Nordeste","CE","Fortaleza","AV WASHINGTON SOARES, 85, LOJA 96 E 97","60811-341"],["PARK SHOPPING BSB","Silvia","Centro-Oeste","DF","Brasilia","SRIA SMAS TR 1, SN, LOTE A LOJA 218","71219-900"],["TAGUATINGA","Silvia","Centro-Oeste","DF","Brasilia","QS  R 210 LOTE 40, 01, LOJAS 3056/3057/30","71950-904"],["BRASILIA SH","Silvia","Centro-Oeste","DF","Brasilia","SCN QUADRA, 05, BLOCO A LOJA 44C 48C","70715-900"],["CNB","Silvia","Centro-Oeste","DF","Brasilia","SD N CONJUNTO A LOJAS, 2064","70077-900"],["TERRACO SHOPPING BSB","Silvia","Centro-Oeste","DF","Brasilia","SHC AOS EA 02 08 5, SN, LOJA 205","70660-900"],["PATIO DF","Silvia","Centro-Oeste","DF","Brasilia","USUARIO PATIO BRASIL SHOPPING, SN, LOJA 2P 2 PAVIMENTO PARTE LOJA P228","70307-902"],["VENANCIO","Silvia","Centro-Oeste","DF","Brasilia","SCS QD 08 BL0CO B, 60, LOJAS 92 E 93","70333-900"],["JK BRASILIA","Silvia","Centro-Oeste","DF","Brasilia","QUADRA QNM 34  AREA ESPECIAL 1, SN","72145-450"],["ALAMEDA","Silvia","Centro-Oeste","DF","Brasilia","Q CSB 02 LOTES 1 A 4, SN, LOJA T08 - 08A TERREO","72015-901"],["BOULEVARD BRASILIA","Silvia","Centro-Oeste","DF","Brasilia","SETOR STN, SN, CONJUNTO J LOJA T 63 TERREO","70770-100"],["VILA VELHA 2","Duda","Sudeste","ES","Vila Velha","RUA LUCIANO DAS NEVES  SH VILA VELHA, 2418, LOJA 2008 PAV 03","29107-900"],["PRAIA DA COSTA","Duda","Sudeste","ES","Vila Velha","AV OLIVIO LIRA DR, 353, LJ 104 AB L1","29101-950"],["OUTLET PREMIUM","Silvia","Centro-Oeste","GO","Alexania","RODOVIA BR 060, SN, KM 22 OUTLET PREMIUN BRASILIA  LJ 1034","72930-000"],["SHOPPING ILHA","Dimy","Nordeste","MA","Sao Luis","AV DANIEL DE LA TOUCHE, 987, LOJA 211 I PISO L2","65074-115"],["BH SHOPPING","Renata","Sudeste","MG","Belo Horizonte","ROD BR TREZENTOS E CINQUENTA E SEIS, 3049, LOJA BH 21 E 22","30320-900"],["MINAS SHOPPING","Renata","Sudeste","MG","Belo Horizonte","AVENIDA CRISTIANO MACHADO, 4000, LOJA 254 E 255 2 PISO","31910-900"],["DEL REY","Renata","Sudeste","MG","Belo Horizonte","AVENIDA PRESIDENTE CARLOS LUZ, 3001, LOJA 2075","31250-900"],["OUTLET SO MARCAS CONTAGEM","Renata","Sudeste","MG","Contagem","AV CARDEAL EUGENIO PACELLI, 1336, LUC 409","32210-002"],["ITAU POWER","Renata","Sudeste","MG","Contagem","AVENIDA GENERAL DAVID SARNOFF, 5160, LOJA 106","32210-901"],["SERRASUL SHOPPING","Duda","Sudeste","MG","Pouso Alegre","RODOVIA JK BR 459, SN, PISO 1 LJ 92 A 95 106 A 109","37556-140"],["CAMPO GRANDE","Renata","Centro-Oeste","MS","Campo Grande","AVENIDA AFONSO PENA, 4909, L301","79040-010"],["PANTANAL","Renata","Centro-Oeste","MT","Cuiaba","AVENIDA HISTORIADOR RUBENS DE MENDONCA, 3300, ESC N 2097 2098  2 PISO","78050-250"],["METROPOLE ANANINDEUA","Dimy","Norte","PA","Ananindeua","ROD BR-316, 4500, KM 04 207 GH L2","67015-220"],["PATIO BELEM","Dimy","Norte","PA","Belem","TV PADRE EUTIQUIO, 1078, LOJA 132","66023-710"],["BOULEVARD BELEM","Dimy","Norte","PA","Belem","AV VISCONDE DE SOUZA FRANCO, 776, LOJA 222","66053-000"],["MANAIRA","Dimy","Nordeste","PB","Joao Pessoa","R MANOEL ARRUDA CAVALCANTI, 805, SALA T0110 T0111 T0112","58038-680"],["SHOPPING RIO MAR","Dimy","Nordeste","PE","Recife","AVENIDA REPÚBLICA DO LÍBANO, 251, SALAO COMERCIAL N1154 PISO LI","51110-160"],["OUTLET CAMPO LARGO","Tati","Sul","PR","Campo Largo","RODOVIA BR-277, KM 122, 1005 E 1006","83604-175"],["SH PARK SHOPPING BARIGUI","Tati","Sul","PR","Curitiba","R PROFESSOR PEDRO VIRIATO P. SOUZA, 600, LUC 288","81200-100"],["PALLADIUM CURITIBA","Tati","Sul","PR","Curitiba","AV PRESIDENTE KENNEDY, 4121, LOJA 1005","80610-905"],["JOCKEY PLAZA","Tati","Sul","PR","Curitiba","AVENIDA VICTOR FERREIRA DO AMA, 2633, - DE 2361/2362 AO FIM","82810-350"],["PARK SHOPPING JPA","Beth","Sudeste","RJ","Rio de Janeiro","EST DE JACAREPAGUA, 6069, LUC 220 B","22753-033"],["PARK CAMPO GRANDE","Renata","Sudeste","RJ","Rio de Janeiro","ESTRADA DO MONTEIRO, 1200, LOJA 101 C/E/F","23045-830"],["PLAZA NITEROI","Dimy","Sudeste","RJ","Niteroi","R QUINZE DE NOVEMBRO, 8, LOJA 345 E 346","24020-125"],["OUTLET CATARINA","Luciane","Sudeste","SP","Sao Roque","RUA RAFAEL DIAS COSTA, 140, SUC L41 E L42","18132-852"],["SHOPPING TIJUCA 2","Tati","Sudeste","RJ","Rio de Janeiro","AV MARACANA, 987, LOJA 1031 1032 1033","20511-000"],["BARRA SH","Silvia","Sudeste","RJ","Rio de Janeiro","AV DAS AMERICAS, 4666, LOJA 219 C","22640-102"],["LEBLON","Silvia","Sudeste","RJ","Rio de Janeiro","R JOSE LINHARES, 85, LOJA A","22430-220"],["TAUBATE VIA VALE","Bianca","Sudeste","SP","Taubate","AVENIDA DOM PEDRO I, 7181, LOJA 28 - 29 PISO L1","12091-000"],["MOREIRA CESAR","Dimy","Sudeste","RJ","Niteroi","R CORONEL MOREIRA CESAR, 261, LOJA 101 BS","24230-052"],["CABO FRIO","Dimy","Sudeste","RJ","Cabo Frio","RUA HENRIQUE TERRA, 1700","28911-320"],["OUTLET PREMIUM CAXIAS","Bianca","Sudeste","RJ","Duque de Caxias","AV DONA TEREZA CRISTINA, 2000, LOJA 1027 CHACARA RIO PETROPOLIS","25230-480"],["WEST SHOPPING","Renata","Sudeste","RJ","Rio de Janeiro","EST DO MENDANHA, 555, LOJA 184","23087-283"],["OUTLET PREMIUM SAO PAULO","Renata","Sudeste","SP","Itupeva","EST JOAQUIM BUENO NETO, SN, 33 A","13295-000"],["IBIRAPUERA 2","Luciane","Sudeste","SP","Sao Paulo","AVENIDA IBIRAPUERA, 3103, LUC 009 PVMT IBIRAPUERA","04029-902"],["SH RIO SUL","Tati","Sudeste","RJ","Rio de Janeiro","AV LAURO SODRE, 445, LOJA 301 PARTE C LOJA 33 C D","22290-070"],["PARK SHOPPING SAO CAETANO","Luciane","Sudeste","SP","Sao Caetano do Sul","ALAMEDA TERRACOTA, 545, LOJA 1085 E 1086.","09531-190"],["NOVA AMERICA","Bianca","Sudeste","RJ","Rio de Janeiro","AV PASTOR MARTIN LUTHER KING JR, 126, LOJA O BLOCO 1","20765-000"],["MADUREIRA","Bianca","Sudeste","RJ","Rio de Janeiro","ESTRADA DO PORTELA, 222, - ATÉ 279 - LADO ÍMPAR","21351-050"],["SH SP MARKET","Luciane","Sudeste","SP","Sao Paulo","AV DAS NACOES UNIDAS, 22540, UNIDADE A6 10A","04795-921"],["MOOCA","Luciane","Sudeste","SP","Sao Paulo","RUA CAPITAO PACHECO E CHAVES, 313, LOJA 2055 SMO02053","03126-000"],["RIBEIRAO PRETO SHOPPING","Duda","Sudeste","SP","Ribeirao Preto","AV CORONEL FERNANDO FERREIRA LEITE, 1540, LJ LUC 115 E 116","14026-900"],["SH METROPOLITANO","Dimy","Sudeste","RJ","Rio de Janeiro","AV NS PAA10292 PAL38883, 135, LOJA 1096 LOJA 1095B","22775-027"],["RIO DESIGN BARRA","Silvia","Sudeste","RJ","Rio de Janeiro","AV DAS AMERICAS, 7777, LUC 223 A","22793-081"],["VOGUE","Duda","Sudeste","RJ","Rio de Janeiro","AV DAS AMERICAS, 8585, LOJAS 111 112 132 133","22793-081"],["ANALIA FRANCO","Luciane","Sudeste","SP","Sao Paulo","AVENIDA REGENTE FEIJO, 1739, LJ LUC OQ 67 E 68","03342-900"],["DOM PEDRO","Renata","Sudeste","SP","Campinas","AVENIDA GUILHERME CAMPOS, 500, GLEBA 030 QUARTEIRAO 30013 EUC20 PISO TERREO","13087-901"],["SH JUNDIAI SHOPPING","Renata","Sudeste","SP","Jundiai","AV NOVE DE JULHO, 3333, LUC 118 A 121 L1","13208-056"],["BUZIOS","Dimy","Sudeste","RJ","Armacao dos Buzios","",""],["SAARA","Beth","Sudeste","RJ","Rio de Janeiro","R GONCALVES LEDO, 101","20060-020"],["PARK SUL VOLTA REDONDA","Bianca","Sudeste","RJ","Volta Redonda","ROD TANCREDO NEVES, 1189, LOJA 95 96 E 97","27253-005"],["MIDWAY","Dimy","Nordeste","RN","Natal","AV BERNARDO VIEIRA, 3775, BLOCO UNICO LOJA 357A LOJA 358 LOJA 358A BLOCO L3","59015-900"],["PATIO RORAIMA","Dimy","Norte","RR","Boa Vista","AVENIDA JOAO ALENCAR, 2181, LOJA 204 RST","69311-137"],["SH PARK SHOPPING CANOAS","Tati","Sul","RS","Canoas","AV FARROUPILHA, 4545, LUC 2057 B2 B3 D1 A D4 L2","92020-475"],["SH BARRA SHOPPING SUL","Tati","Sul","RS","Porto Alegre","AV DIARIO DE NOTICIAS, 300, LUC 1015 E 1016","90810-080"],["FLORIPA","Tati","Sul","SC","Florianopolis","ROD VIRGILIO VARZEA, 587, AREA 2 LOJA 237 L2","88032-000"],["IGUATEMI","Tati","Sudeste","RJ","Rio de Janeiro","R BARAO DE SAO FRANCISCO, 236, LOJA 1 017 1 PISO","20560-032"],["COPACABANA 897","Duda","Sudeste","RJ","Rio de Janeiro","AV NOSSA SENHORA DE COPACABANA, 897, LOJA A","22050-002"],["SULACAP T","Beth","Sudeste","RJ","Rio de Janeiro","AV MARECHAL FONTENELE, 3545, LOTE 1 LJ 223, 224, 225 E 226","21750-000"],["TOP SHOPPING","Bianca","Sudeste","RJ","Nova Iguacu","AV GOVERNADOR ROBERTO SILVEIRA, 540, LOJA 316","26210-210"],["GRAND PLAZA","Luciane","Sudeste","SP","Santo Andre","AV INDUSTRIAL, 600, LOJA 531 532","09080-500"],["SANTA URSULA RIBEIRAO","Duda","Sudeste","SP","Ribeirao Preto","R SAO JOSE, 933, LOJA 45 E 46","14010-160"],["AMERICAS SHOPPING","Renata","Sudeste","RJ","Rio de Janeiro","AV DAS AMERICAS, 15500, LOJA 139 LOJA 140","22790-702"],["RECREIO","Renata","Sudeste","RJ","Rio de Janeiro","AV DAS AMERICAS, 19019, LOJA 109A21","22790-703"],["SH GOLDEN SQUARE","Luciane","Sudeste","SP","Sao Bernardo do Campo","AV KENNEDY, 700, LOJA 134A 134B","09726-253"],["SH TAQUARA PLAZA","Tati","Sudeste","RJ","Rio de Janeiro","EST RODRIGUES CALDAS, 127, SUC 201B PISO 2","22713-372"],["SH MOGI SHOPPING","Renata","Sudeste","SP","Mogi das Cruzes","AV VEREADOR NARCISO YAGUE GUIMARAES, 1001, LUC 328","08780-910"],["CAXIAS","Renata","Sudeste","RJ","Duque de Caxias","ROD WASHINGTON LUIZ, 2895, LOJA 203 A","25085-008"],["ILHA PLAZA","Beth","Sudeste","RJ","Rio de Janeiro","AV MAESTRO PAULO SILVA, 400, LOJA C PAV L3 ESP COM 35","21920-445"],["SH VILA OLIMPIA","Luciane","Sudeste","SP","Sao Paulo","R OLIMPIADAS, 360, LUC 238 A 241 PISO 1","04551-000"],["OUTLET PREMIUM ITAQUA","Renata","Sudeste","SP","Itaquaquecetuba","EST SAO BENTO, 9550, LT GL H LOJA 102","08599-450"],["PURPOSE AEROTOWN","Duda","Sudeste","RJ","Rio de Janeiro","AV AYRTON SENNA, 2541, BLC A1 LOJAS 24 E 25","22775-002"],["AEROTOWN","Duda","Sudeste","RJ","Rio de Janeiro","AV AYRTON SENNA, 2541, BLC A1 LOJAS 24 E 25","22775-002"]];
 
+// Departamentos que atendem as lojas (cada um com equipe, assuntos e e-mail próprios).
+const SEED_DEPARTAMENTOS = [["dp", "DP", 1], ["logistica", "Logística", 2], ["manutencao", "Manutenção", 3]];
+const SEED_ASSUNTOS_LOGISTICA = [
+  // nome, categoria, descricao, SLA 1ª resposta (min úteis), SLA resolução (min úteis; 600 = 1 dia útil), exige colaborador
+  ["Falta ou divergência no recebimento", "Recebimento", "Mercadoria recebida diferente da nota ou do romaneio: faltou peça, sobrou peça ou veio item errado.", 240, 1200, false],
+  ["Reposição de produtos (ressuprimento)", "Reposição", "Pedido de reposição de grade, tamanho ou cor em falta na loja.", 240, 1800, false],
+  ["Avaria ou extravio no transporte", "Transporte", "Caixa danificada, peça avariada ou volume extraviado na entrega.", 240, 1800, false],
+  ["Devolução de mercadoria ao CD", "Devolução", "Solicitação de coleta e devolução de mercadoria ao Centro de Distribuição.", 240, 1800, false],
+  ["Transferência entre lojas", "Transferência", "Envio ou recebimento de peças entre lojas.", 240, 1800, false],
+  ["Atraso ou rastreio de entrega", "Transporte", "Acompanhamento e previsão de chegada de mercadoria em trânsito.", 120, 600, false],
+  ["Etiquetas, cabides e embalagens", "Materiais", "Falta de etiquetas, cabides, sacolas ou outros materiais de embalagem.", 240, 1800, false],
+  ["Outros assuntos de Logística", "Geral", "Qualquer outro assunto de Logística.", 480, 2400, false],
+];
+const SEED_ASSUNTOS_MANUTENCAO = [
+  ["Ar-condicionado", "Climatização", "Não gela, vazamento, barulho ou limpeza do ar-condicionado.", 120, 1200, false],
+  ["Iluminação e parte elétrica", "Elétrica", "Lâmpadas, spots, trilhos, tomadas e quadro de energia.", 120, 1200, false],
+  ["Hidráulica e vazamentos", "Hidráulica", "Vazamento, infiltração, vaso, pia, torneira ou ralo entupido.", 120, 900, false],
+  ["Vitrine, mobiliário e araras", "Mobiliário", "Reparo de araras, prateleiras, balcão, provador, espelhos e vitrine.", 240, 1800, false],
+  ["Fachada, letreiro e comunicação visual", "Fachada", "Letreiro apagado ou danificado, adesivos e placas.", 240, 2400, false],
+  ["Pintura, piso e pequenas reformas", "Reformas", "Pintura, piso, forro e pequenos reparos de obra.", 480, 3000, false],
+  ["Segurança, alarme, câmeras e fechaduras", "Segurança", "Alarme, CFTV, porta de aço, fechaduras e chaves.", 120, 1200, false],
+  ["Limpeza e controle de pragas", "Limpeza", "Limpeza pesada, dedetização e controle de pragas.", 240, 1200, false],
+  ["Outros assuntos de Manutenção", "Geral", "Qualquer outro assunto de Manutenção.", 480, 2400, false],
+];
+
 async function migrarChamados() {
   await pool.query(`
 CREATE TABLE IF NOT EXISTS ch_assuntos (
@@ -759,7 +784,6 @@ CREATE TABLE IF NOT EXISTS ch_assuntos (
   ordem              INTEGER NOT NULL DEFAULT 0,
   criado_em          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ch_assuntos_nome_uq ON ch_assuntos (lower(nome));
 CREATE TABLE IF NOT EXISTS ch_lojas (
   id            BIGSERIAL PRIMARY KEY,
   nome          TEXT NOT NULL,
@@ -883,14 +907,49 @@ CREATE TABLE IF NOT EXISTS ch_emails (
 );
 CREATE INDEX IF NOT EXISTS ch_emails_chamado_idx ON ch_emails (chamado_id);
 `);
-  const { rows } = await pool.query("SELECT count(*)::int AS n FROM ch_assuntos");
-  if (!rows[0].n) {
+  // ---- Departamentos (DP, Logística, Manutenção): colunas, preenchimento dos dados que já existiam (tudo era do DP) e índices ----
+  await pool.query(`
+CREATE TABLE IF NOT EXISTS ch_departamentos (
+  id      BIGSERIAL PRIMARY KEY,
+  codigo  TEXT NOT NULL,
+  nome    TEXT NOT NULL,
+  emails  TEXT NOT NULL DEFAULT '',
+  ativo   BOOLEAN NOT NULL DEFAULT true,
+  ordem   INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ch_departamentos_codigo_uq ON ch_departamentos (codigo);
+`);
+  for (const [codigo, nome, ordem] of SEED_DEPARTAMENTOS) await pool.query("INSERT INTO ch_departamentos (codigo, nome, ordem) VALUES ($1,$2,$3) ON CONFLICT (codigo) DO NOTHING", [codigo, nome, ordem]);
+  await pool.query(`
+ALTER TABLE ch_assuntos  ADD COLUMN IF NOT EXISTS departamento_id BIGINT REFERENCES ch_departamentos(id);
+ALTER TABLE ch_equipe    ADD COLUMN IF NOT EXISTS departamento_id BIGINT REFERENCES ch_departamentos(id);
+ALTER TABLE ch_chamados  ADD COLUMN IF NOT EXISTS departamento_id BIGINT REFERENCES ch_departamentos(id);
+UPDATE ch_assuntos SET departamento_id = (SELECT id FROM ch_departamentos WHERE codigo = 'dp') WHERE departamento_id IS NULL;
+UPDATE ch_equipe   SET departamento_id = (SELECT id FROM ch_departamentos WHERE codigo = 'dp') WHERE departamento_id IS NULL;
+UPDATE ch_chamados SET departamento_id = (SELECT id FROM ch_departamentos WHERE codigo = 'dp') WHERE departamento_id IS NULL;
+ALTER TABLE ch_assuntos ALTER COLUMN departamento_id SET NOT NULL;
+ALTER TABLE ch_equipe   ALTER COLUMN departamento_id SET NOT NULL;
+ALTER TABLE ch_chamados ALTER COLUMN departamento_id SET NOT NULL;
+DROP INDEX IF EXISTS ch_assuntos_nome_uq;
+CREATE UNIQUE INDEX IF NOT EXISTS ch_assuntos_dep_nome_uq ON ch_assuntos (departamento_id, lower(nome));
+CREATE INDEX IF NOT EXISTS ch_chamados_dep_idx ON ch_chamados (departamento_id, status);
+`);
+  // e-mails de aviso que já estavam cadastrados para o DP passam para o departamento DP
+  await pool.query(`UPDATE ch_departamentos d SET emails = c.valor FROM ch_config c WHERE c.chave = 'dp_emails' AND d.codigo = 'dp' AND d.emails = '' AND coalesce(c.valor,'') <> ''`);
+  const { rows: dps } = await pool.query("SELECT id::int AS id, codigo FROM ch_departamentos");
+  const depId = Object.fromEntries(dps.map((d) => [d.codigo, d.id]));
+  const semearAssuntos = async (codigo, lista) => {
+    const { rows: n } = await pool.query("SELECT count(*)::int AS n FROM ch_assuntos WHERE departamento_id = $1", [depId[codigo]]);
+    if (n[0].n) return false;
     let ordem = 0;
-    for (const [nome, cat, desc, r, s, ex] of SEED_ASSUNTOS) {
-      await pool.query("INSERT INTO ch_assuntos (nome, categoria, descricao, sla_resposta_min, sla_resolucao_min, exige_colaborador, ordem) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING", [nome, cat, desc, r, s, ex, ++ordem]);
+    for (const [nome, cat, desc, r, s, ex] of lista) {
+      await pool.query("INSERT INTO ch_assuntos (nome, categoria, descricao, sla_resposta_min, sla_resolucao_min, exige_colaborador, ordem, departamento_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING", [nome, cat, desc, r, s, ex, ++ordem, depId[codigo]]);
     }
-    console.log("[chamados] Assuntos iniciais criados (edite os prazos no painel).");
-  }
+    return true;
+  };
+  if (await semearAssuntos("dp", SEED_ASSUNTOS)) console.log("[chamados] Assuntos iniciais do DP criados (edite os prazos no painel).");
+  if (await semearAssuntos("logistica", SEED_ASSUNTOS_LOGISTICA)) console.log("[chamados] Assuntos iniciais de Logística criados.");
+  if (await semearAssuntos("manutencao", SEED_ASSUNTOS_MANUTENCAO)) console.log("[chamados] Assuntos iniciais de Manutenção criados.");
   // Lojas: insere as que ainda não existem (pelo nome) e completa os dados de cadastro das que já existem.
   let novas = 0;
   for (const [nome, regional, regiao, uf, cidade, endereco, cep] of SEED_LOJAS) {
