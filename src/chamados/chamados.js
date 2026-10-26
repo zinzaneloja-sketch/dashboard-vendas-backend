@@ -171,6 +171,8 @@ async function listarAssuntos(acc, { todos, departamento_id } = {}) {
   else if (Number(departamento_id)) { v.push(Number(departamento_id)); w.push(`a.departamento_id = $${v.length}`); }
   const { rows } = await pool.query(`SELECT a.id::int AS id, a.nome, a.categoria, a.descricao, a.sla_resposta_min, a.sla_resolucao_min, a.exige_colaborador, a.ativo, a.ordem,
       a.departamento_id::int AS departamento_id, d.nome AS departamento_nome FROM ch_assuntos a JOIN ch_departamentos d ON d.id = a.departamento_id ${w.length ? "WHERE " + w.join(" AND ") : ""} ORDER BY d.ordem, a.ordem, a.nome`, v);
+  // a loja nunca recebe os prazos (SLA): é informação interna dos departamentos
+  if (!ehDp(p)) rows.forEach((r) => { delete r.sla_resposta_min; delete r.sla_resolucao_min; });
   return { assuntos: rows };
 }
 async function salvarAssunto(acc, id, b = {}) {
@@ -495,8 +497,13 @@ async function listar(acc, f = {}) {
   const limite = Math.min(Number(f.limite) || 300, 500);
   const contagem = {};
   lista.forEach((x) => { contagem[x.status] = (contagem[x.status] || 0) + 1; });
-  return { chamados: lista.slice(0, limite), total: lista.length, contagem };
+  const saida = lista.slice(0, limite);
+  if (!ehDp(p)) saida.forEach(semSla);
+  return { chamados: saida, total: lista.length, contagem };
 }
+
+// Remove da resposta tudo o que revela prazos (SLA) — a loja não deve vê-los.
+function semSla(c) { ["sla", "relogio", "sla_resposta_min", "sla_resolucao_min", "pausado_desde"].forEach((k) => { delete c[k]; }); return c; }
 
 async function detalhe(acc, id) {
   const p = await papelDe(acc);
@@ -508,6 +515,7 @@ async function detalhe(acc, id) {
   const { rows: ans } = await pool.query(`SELECT a.id::int AS id, a.mensagem_id::int AS mensagem_id, a.nome, a.tipo, a.tamanho FROM ch_anexos a LEFT JOIN ch_mensagens m ON m.id = a.mensagem_id WHERE a.chamado_id = $1 ${dp ? "" : "AND (m.id IS NULL OR NOT m.interno)"} ORDER BY a.id`, [id]);
   const out = { chamado: formata(ch, new Date()), mensagens: msgs.map((m) => ({ ...m, anexos: ans.filter((a) => a.mensagem_id === m.id) })) };
   out.chamado.loja_email = undefined; out.chamado.emails_copia = undefined;
+  if (!dp) semSla(out.chamado);
   if (dp) {
     const { rows: ev } = await pool.query("SELECT tipo, usuario, detalhe, criado_em FROM ch_eventos WHERE chamado_id = $1 ORDER BY criado_em, id", [id]);
     const { rows: ems } = await pool.query("SELECT id::int AS id, tipo, destino, status, erro, tentativas, criado_em FROM ch_emails WHERE chamado_id = $1 ORDER BY id", [id]);
