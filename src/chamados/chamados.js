@@ -138,7 +138,7 @@ function dispara(fn) { setImmediate(() => { fn().catch((e) => console.error("[ch
 async function eu(acc) {
   const p = await papelDe(acc);
   return { papel: p.papel, nome: p.nome, email: p.email, loja: p.loja ? { id: Number(p.loja.id), nome: p.loja.nome, codigo: p.loja.codigo } : null,
-    expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, reabertura_dias: REABRE_DIAS, email_configurado: !!(process.env.RESEND_API_KEY && process.env.CHAMADOS_EMAIL_FROM), trocar_senha: !!acc.trocar_senha, pode_cancelar: ehMaster(acc) };
+    expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, reabertura_dias: REABRE_DIAS, email_configurado: !!(process.env.RESEND_API_KEY && process.env.CHAMADOS_EMAIL_FROM), trocar_senha: !!acc.trocar_senha, pode_cancelar: ehMaster(acc), pode_excluir: ehMaster(acc) };
 }
 
 async function listarAssuntos(acc, { todos } = {}) {
@@ -529,23 +529,28 @@ async function assumir(acc, id, b = {}) {
   });
 }
 
-async function cancelar(acc, id, b = {}) {
-  if (!ehMaster(acc)) { await audit(acc, "cancelar_negado", { chamado_id: id }); throw erro(403, "Só o usuário master pode cancelar chamados."); }
-  const p = await papelDe(acc);
-  const motivo = txt(b.motivo).slice(0, 400);
-  if (!motivo) throw erro(400, "Diga o motivo do cancelamento.");
-  // confere a senha do master (limite de tentativas, igual ao login)
-  const ip = acc.ip || "", chave = "cancelar:" + emailMaster();
+// Ações exclusivas do master (cancelar/excluir): só o e-mail master, e a senha dele é conferida a cada vez (limite de tentativas como no login).
+async function confirmarMaster(acc, id, b, acao) {
+  if (!ehMaster(acc)) { await audit(acc, acao + "_negado", { chamado_id: id }); throw erro(403, "Só o usuário master pode fazer isso."); }
+  const ip = acc.ip || "", chave = "master:" + emailMaster();
   const espera = seguranca.esperaLogin(ip, chave);
   if (espera) throw seguranca.erroBloqueio(espera);
   const { rows: us } = await pool.query("SELECT password_hash FROM users WHERE lower(email) = $1", [emailMaster()]);
   const certa = us[0] && b.senha && (await bcrypt.compare(String(b.senha), us[0].password_hash));
   if (!certa) {
     const bloqueou = seguranca.falhaLogin(ip, chave);
-    await audit(acc, "cancelar_senha_errada", { chamado_id: id, detalhe: bloqueou ? "bloqueado por tentativas" : null });
-    throw erro(403, "Senha incorreta.", { codigo: "senha_cancelamento" });
+    await audit(acc, acao + "_senha_errada", { chamado_id: id, detalhe: bloqueou ? "bloqueado por tentativas" : null });
+    throw erro(403, "Senha incorreta.", { codigo: "senha_master" });
   }
   seguranca.sucessoLogin(ip, chave);
+}
+
+async function cancelar(acc, id, b = {}) {
+  if (!ehMaster(acc)) { await audit(acc, "cancelar_negado", { chamado_id: id }); throw erro(403, "Só o usuário master pode cancelar chamados."); }
+  const p = await papelDe(acc);
+  const motivo = txt(b.motivo).slice(0, 400);
+  if (!motivo) throw erro(400, "Diga o motivo do cancelamento.");
+  await confirmarMaster(acc, id, b, "cancelar");
   const ch = await comTransacao(async (c) => {
     const ch = await carregar(c, id, true);
     if (!podeVer(p, ch)) throw erro(403, "Esse chamado é de outra loja.");
@@ -556,6 +561,37 @@ async function cancelar(acc, id, b = {}) {
     return carregar(c, id, false);
   });
   dispara(async () => { await mail.enviar(ch.id, "cancelamento", [...destinosLoja(ch), ...(await mail.destinosDp())], mail.montar("cancelamento", ch, { motivo })); });
+  return { ok: true };
+}
+
+async function excluir(acc, id, b = {}) {
+  if (!ehMaster(acc)) { await audit(acc, "excluir_negado", { chamado_id: id }); throw erro(403, "Só o usuário master pode excluir chamados."); }
+  const motivo = txt(b.motivo).slice(0, 400);
+  if (!motivo) throw erro(400, "Diga o motivo da exclusão.");
+  await confirmarMaster(acc, id, b, "excluir");
+  const { rows } = await pool.query("SELECT c.protocolo, c.status, l.nome AS loja_nome FROM ch_chamados c JOIN ch_lojas l ON l.id = c.loja_id WHERE c.id = $1", [id]);
+  if (!rows[0]) throw erro(404, "Chamado não encontrado.");
+  // mensagens, anexos, eventos e e-mails saem junto (cascata). A auditoria guarda só quem excluiu, quando, o protocolo e o motivo.
+  await pool.query("DELETE FROM ch_chamados WHERE id = $1", [id]);
+  await audit(acc, "chamado_excluido", { chamado_id: id, detalhe: rows[0].protocolo + " · " + rows[0].loja_nome + " · " + rows[0].status + " · motivo: " + motivo });
+  return { ok: true };
+}
+
+// Ajuste dos prazos (SLA) de UM chamado, em minutos úteis. O prazo padrão por assunto continua em Cadastros → Assuntos e SLA.
+async function editarSla(acc, id, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const r = Math.round(Number(b.sla_resposta_min)), s = Math.round(Number(b.sla_resolucao_min));
+  const motivo = txt(b.motivo).slice(0, 400);
+  if (!(r > 0) || !(s > 0)) throw erro(400, "Informe os prazos maiores que zero.");
+  if (r > 60 * 600 || s > 60 * 600) throw erro(400, "Prazo grande demais (máximo de 60 dias úteis).");
+  if (s < r) throw erro(400, "O prazo de resolução não pode ser menor que o da 1ª resposta.");
+  if (!motivo) throw erro(400, "Diga o motivo do ajuste.");
+  await comTransacao(async (c) => {
+    const ch = await carregar(c, id, true);
+    await c.query("UPDATE ch_chamados SET sla_resposta_min = $2, sla_resolucao_min = $3, atualizado_em = now() WHERE id = $1", [id, r, s]);
+    await evento(c, id, "sla_alterado", p.email, { de: { resposta: ch.sla_resposta_min, resolucao: ch.sla_resolucao_min }, para: { resposta: r, resolucao: s }, motivo });
+    await audit(acc, "sla_alterado", { chamado_id: id, detalhe: ch.protocolo + " · resposta " + ch.sla_resposta_min + "→" + r + " min · resolução " + ch.sla_resolucao_min + "→" + s + " min · " + motivo });
+  });
   return { ok: true };
 }
 
@@ -570,7 +606,7 @@ async function baixarAnexo(acc, id) {
 }
 
 const ACOES_AUDIT = { login: "Entrou", login_falhou: "Login com senha errada", login_bloqueado: "Login bloqueado (tentativas)", senha_alterada: "Trocou a própria senha", senha_redefinida: "Senha redefinida pelo gestor",
-  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo", exportar_indicadores: "Exportou relatório", chamado_cancelado: "Cancelou chamado", cancelar_negado: "Tentou cancelar (sem permissão)", cancelar_senha_errada: "Senha errada ao cancelar" };
+  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo", exportar_indicadores: "Exportou relatório", chamado_cancelado: "Cancelou chamado", cancelar_negado: "Tentou cancelar (sem permissão)", cancelar_senha_errada: "Senha errada ao cancelar", chamado_excluido: "Excluiu chamado", excluir_negado: "Tentou excluir (sem permissão)", excluir_senha_errada: "Senha errada ao excluir", sla_alterado: "Alterou o SLA de um chamado" };
 async function listarAuditoria(acc, f = {}) {
   const p = await papelDe(acc); exigirGestor(p);
   const w = [], v = []; const add = (x) => { v.push(x); return "$" + v.length; };
@@ -668,4 +704,4 @@ async function indicadores(acc, f = {}) {
       .map((x) => ({ id: x.id, protocolo: x.protocolo, loja_nome: x.loja_nome, assunto_nome: x.assunto_nome, status: x.status, relogio: x.relogio })) };
 }
 
-module.exports = { eu, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAuditoria, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
+module.exports = { eu, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAuditoria, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, excluir, editarSla, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
