@@ -553,7 +553,7 @@ async function baixarAnexo(acc, id) {
 }
 
 const ACOES_AUDIT = { login: "Entrou", login_falhou: "Login com senha errada", login_bloqueado: "Login bloqueado (tentativas)", senha_alterada: "Trocou a própria senha", senha_redefinida: "Senha redefinida pelo gestor",
-  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo" };
+  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo", exportar_indicadores: "Exportou relatório" };
 async function listarAuditoria(acc, f = {}) {
   const p = await papelDe(acc); exigirGestor(p);
   const w = [], v = []; const add = (x) => { v.push(x); return "$" + v.length; };
@@ -636,7 +636,17 @@ async function indicadores(acc, f = {}) {
   porAtendente.forEach((x) => { x.rotulo = nomes[em(x.chave)] || x.chave; });
   const porStatus = STATUS.map((s) => ({ status: s, total: noPeriodo.filter((x) => x.status === s).length }));
   const porPrioridade = ["urgente", "normal"].map((s) => ({ prioridade: s, total: validos.filter((x) => x.prioridade === s).length }));
-  return { periodo: { de, ate }, kpis, serie, por_assunto: porAssunto, por_loja: porLoja, por_atendente: porAtendente, por_status: porStatus, por_prioridade: porPrioridade,
+  const exp = f.exportar === "xlsx" || f.exportar === "pdf" ? f.exportar : null;
+  let linhasExp = null;
+  if (exp === "xlsx" && f.detalhe === "1") {
+    // linhas do período para a planilha (sem descrição, colaborador nem e-mails: só o que o relatório precisa)
+    linhasExp = noPeriodo.slice(0, 5000).sort((a, b) => String(a.protocolo).localeCompare(String(b.protocolo))).map((x) => ({
+      protocolo: x.protocolo, loja: x.loja_nome, assunto: x.assunto_nome, prioridade: x.prioridade, status: x.status, aberto_em: x.criado_em, primeira_resposta_em: x.primeira_resposta_em, resolvido_em: x.resolvido_em,
+      atendente: x.atribuido_a, reaberturas: x.reaberturas, tempo_resposta_min: x.sla.resposta.decorrido, meta_resposta_min: x.sla_resposta_min, sla_resposta: x.sla.resposta.situacao,
+      tempo_resolucao_min: x.sla.resolucao.decorrido, meta_resolucao_min: x.sla_resolucao_min, sla_resolucao: x.sla.resolucao.situacao }));
+  }
+  if (exp) audit(acc, "exportar_indicadores", { papel: p.papel, detalhe: `${exp.toUpperCase()} · ${de} a ${ate}` + (linhasExp ? ` · ${linhasExp.length} chamados` : "") });
+  return { lista: linhasExp, periodo: { de, ate }, kpis, serie, por_assunto: porAssunto, por_loja: porLoja, por_atendente: porAtendente, por_status: porStatus, por_prioridade: porPrioridade,
     mais_urgentes: abertos.filter((x) => x.relogio && ["estourado", "risco"].includes(x.relogio.situacao)).sort((a, b) => a.relogio.restante - b.relogio.restante).slice(0, 10)
       .map((x) => ({ id: x.id, protocolo: x.protocolo, loja_nome: x.loja_nome, assunto_nome: x.assunto_nome, status: x.status, relogio: x.relogio })) };
 }
