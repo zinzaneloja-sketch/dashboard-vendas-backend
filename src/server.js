@@ -28,6 +28,7 @@ const cd = require("./cd/cd");
 const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
+app.use("/api/chamados", express.json({ limit: "16mb" })); // anexos em base64
 const jsonPadrao = express.json();
 app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
@@ -576,6 +577,38 @@ app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
   try {
     const f = await trn.baixarArquivo(req.access, nid(req));
     res.set({ "Content-Type": f.tipo === "pdf" ? "application/pdf" : "application/xml", "Content-Disposition": `attachment; filename="${String(f.nome).replace(/[^\w.\- ]/g, "_")}"` });
+    res.send(f.conteudo);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+const chamadosAuth = [requireAuth, requireModule("chamados")];
+// ---- Chamados das lojas para o DP ----
+const chamados = require("./chamados/chamados");
+const CH = "/api/chamados";
+app.get(CH + "/eu", chamadosAuth, handle((req) => chamados.eu(req.access)));
+app.get(CH + "/assuntos", chamadosAuth, handle((req) => chamados.listarAssuntos(req.access, { todos: req.query.todos === "1" })));
+app.post(CH + "/assuntos", chamadosAuth, handle((req) => chamados.salvarAssunto(req.access, null, req.body || {})));
+app.put(CH + "/assuntos/:id", chamadosAuth, handle((req) => chamados.salvarAssunto(req.access, nid(req), req.body || {})));
+app.get(CH + "/lojas", chamadosAuth, handle((req) => chamados.listarLojas(req.access)));
+app.post(CH + "/lojas", chamadosAuth, handle((req) => chamados.salvarLoja(req.access, null, req.body || {})));
+app.put(CH + "/lojas/:id", chamadosAuth, handle((req) => chamados.salvarLoja(req.access, nid(req), req.body || {})));
+app.get(CH + "/equipe", chamadosAuth, handle((req) => chamados.listarEquipe(req.access)));
+app.post(CH + "/equipe", chamadosAuth, handle((req) => chamados.salvarEquipe(req.access, null, req.body || {})));
+app.put(CH + "/equipe/:id", chamadosAuth, handle((req) => chamados.salvarEquipe(req.access, nid(req), req.body || {})));
+app.get(CH + "/config", chamadosAuth, handle((req) => chamados.config(req.access)));
+app.put(CH + "/config", chamadosAuth, handle((req) => chamados.salvarConfig(req.access, req.body || {})));
+app.get(CH + "/indicadores", chamadosAuth, handle((req) => chamados.indicadores(req.access, req.query)));
+app.get(CH + "/emails/falhas", chamadosAuth, handle((req) => chamados.emailsFalhos(req.access)));
+app.post(CH + "/emails/:id/reenviar", chamadosAuth, handle((req) => chamados.reenviarEmail(req.access, nid(req))));
+app.get(CH + "/chamados", chamadosAuth, handle((req) => chamados.listar(req.access, req.query)));
+app.post(CH + "/chamados", chamadosAuth, handle((req) => chamados.abrir(req.access, req.body || {})));
+app.get(CH + "/chamados/:id", chamadosAuth, handle((req) => chamados.detalhe(req.access, nid(req))));
+app.post(CH + "/chamados/:id/mensagens", chamadosAuth, handle((req) => chamados.responder(req.access, nid(req), req.body || {})));
+app.post(CH + "/chamados/:id/assumir", chamadosAuth, handle((req) => chamados.assumir(req.access, nid(req), req.body || {})));
+app.post(CH + "/chamados/:id/cancelar", chamadosAuth, handle((req) => chamados.cancelar(req.access, nid(req), req.body || {})));
+app.get(CH + "/anexos/:id", chamadosAuth, async (req, res) => {
+  try {
+    const f = await chamados.baixarAnexo(req.access, nid(req));
+    res.set({ "Content-Type": f.tipo || "application/octet-stream", "Content-Disposition": `attachment; filename="${String(f.nome).replace(/[^\w.\- ]/g, "_")}"`, "X-Content-Type-Options": "nosniff" });
     res.send(f.conteudo);
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
