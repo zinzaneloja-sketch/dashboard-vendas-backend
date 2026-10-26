@@ -5,6 +5,8 @@ const bcrypt = require("bcryptjs");
 const { pool } = require("../db");
 const { minutosUteis, diaLocal, expediente } = require("../cd/tempo");
 const mail = require("./email");
+const auditoria = require("../auditoria");
+const audit = (acc, acao, o = {}) => auditoria.registrar({ usuario: acc && acc.email, papel: acc && (acc.role === "admin" ? "admin" : acc.papel), acao, ip: acc && acc.ip, ...o });
 
 function erro(status, message, extra) { const e = new Error(message); e.status = status; if (extra) e.extra = extra; return e; }
 const txt = (v) => (v === undefined || v === null ? "" : String(v).trim());
@@ -132,7 +134,7 @@ function dispara(fn) { setImmediate(() => { fn().catch((e) => console.error("[ch
 async function eu(acc) {
   const p = await papelDe(acc);
   return { papel: p.papel, nome: p.nome, email: p.email, loja: p.loja ? { id: Number(p.loja.id), nome: p.loja.nome, codigo: p.loja.codigo } : null,
-    expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, reabertura_dias: REABRE_DIAS, email_configurado: !!(process.env.RESEND_API_KEY && process.env.CHAMADOS_EMAIL_FROM) };
+    expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, reabertura_dias: REABRE_DIAS, email_configurado: !!(process.env.RESEND_API_KEY && process.env.CHAMADOS_EMAIL_FROM), trocar_senha: !!acc.trocar_senha };
 }
 
 async function listarAssuntos(acc, { todos } = {}) {
@@ -167,12 +169,16 @@ async function garantirAcesso(email, nome, senha) {
   const { rows } = await pool.query("SELECT id, modules FROM users WHERE lower(email) = $1", [e]);
   if (rows[0]) {
     await pool.query("UPDATE users SET modules = (SELECT array_agg(DISTINCT x) FROM unnest(modules || ARRAY['chamados']) x), nome = COALESCE(nome, $2) WHERE id = $1", [rows[0].id, nome || null]);
-    if (senha) { if (String(senha).length < 8) throw erro(400, "A senha precisa de pelo menos 8 caracteres."); await pool.query("UPDATE users SET password_hash = $2 WHERE id = $1", [rows[0].id, await bcrypt.hash(String(senha), 10)]); }
+    if (senha) {
+      if (String(senha).length < 8) throw erro(400, "A senha precisa de pelo menos 8 caracteres.");
+      // senha definida pelo gestor é provisória: a pessoa troca no próximo acesso e as sessões antigas caem
+      await pool.query("UPDATE users SET password_hash = $2, trocar_senha = true, token_version = token_version + 1 WHERE id = $1", [rows[0].id, await bcrypt.hash(String(senha), 10)]);
+    }
     return { criado: false };
   }
   if (!senha) throw erro(400, "Esse e-mail ainda não tem usuário no sistema: informe uma senha inicial (mínimo 8 caracteres).");
   if (String(senha).length < 8) throw erro(400, "A senha precisa de pelo menos 8 caracteres.");
-  await pool.query("INSERT INTO users (email, password_hash, role, nome, modules, cd_perfis) VALUES ($1,$2,'viewer',$3,ARRAY['chamados'],'{}')", [e, await bcrypt.hash(String(senha), 10), nome || null]);
+  await pool.query("INSERT INTO users (email, password_hash, role, nome, modules, cd_perfis, trocar_senha) VALUES ($1,$2,'viewer',$3,ARRAY['chamados'],'{}', true)", [e, await bcrypt.hash(String(senha), 10), nome || null]);
   return { criado: true };
 }
 function listaEmails(v) {
@@ -299,6 +305,7 @@ async function criarAcesso(acc, b = {}) {
     if (eqp[0]) throw erro(409, "Esse e-mail já é da equipe do DP.");
     const ac = await garantirAcesso(email, nome || lj[0].nome, senha || undefined);
     await pool.query("UPDATE ch_lojas SET email = $2 WHERE id = $1", [lj[0].id, email]);
+    audit(acc, ac.criado ? "acesso_criado" : "acesso_liberado", { papel: p.papel, alvo: email, detalhe: "loja " + lj[0].nome });
     return { ok: true, acesso_criado: ac.criado, perfil, loja: lj[0].nome };
   }
   const { rows: dona } = await pool.query("SELECT nome FROM ch_lojas WHERE lower(email) = $1", [email]);
@@ -306,6 +313,7 @@ async function criarAcesso(acc, b = {}) {
   const ac = await garantirAcesso(email, nome, senha || undefined);
   await pool.query(`INSERT INTO ch_equipe (email, nome, papel, ativo) VALUES ($1,$2,$3,true)
     ON CONFLICT (lower(email)) DO UPDATE SET papel = EXCLUDED.papel, ativo = true, nome = COALESCE(EXCLUDED.nome, ch_equipe.nome)`, [email, nome, perfil === "gestor" ? "gestor" : "dp"]);
+  audit(acc, ac.criado ? "acesso_criado" : "acesso_liberado", { papel: p.papel, alvo: email, detalhe: perfil === "gestor" ? "gestor do DP" : "atendente do DP" });
   return { ok: true, acesso_criado: ac.criado, perfil };
 }
 async function redefinirSenhaAcesso(acc, b = {}) {
@@ -316,8 +324,10 @@ async function redefinirSenhaAcesso(acc, b = {}) {
   if (!rows[0]) throw erro(404, "Usuário não encontrado.");
   if (rows[0].role === "admin" && em(acc.email) !== email) throw erro(403, "A senha de um administrador só ele mesmo redefine.");
   if (!(rows[0].modules || []).includes("chamados") && rows[0].role !== "admin") throw erro(403, "Esse usuário não tem acesso aos chamados.");
-  await pool.query("UPDATE users SET password_hash = $2 WHERE id = $1", [rows[0].id, await bcrypt.hash(senha, 10)]);
-  return { ok: true };
+  const propria = em(acc.email) === email; // a própria pessoa redefinindo a sua não precisa trocar de novo
+  await pool.query("UPDATE users SET password_hash = $2, trocar_senha = $3, token_version = token_version + 1, senha_alterada_em = now() WHERE id = $1", [rows[0].id, await bcrypt.hash(senha, 10), !propria]);
+  audit(acc, "senha_redefinida", { papel: p.papel, alvo: email });
+  return { ok: true, trocar_senha: !propria };
 }
 // Bloqueia o acesso aos chamados (não apaga o usuário nem o histórico; criar o acesso de novo reativa).
 async function removerAcesso(acc, b = {}) {
@@ -327,8 +337,9 @@ async function removerAcesso(acc, b = {}) {
   const { rows } = await pool.query("SELECT id, role FROM users WHERE lower(email) = $1", [email]);
   if (!rows[0]) throw erro(404, "Usuário não encontrado.");
   if (rows[0].role === "admin") throw erro(403, "Administradores têm acesso a tudo; não dá para bloqueá-los por aqui.");
-  await pool.query("UPDATE users SET modules = array_remove(modules, 'chamados') WHERE id = $1", [rows[0].id]);
+  await pool.query("UPDATE users SET modules = array_remove(modules, 'chamados'), token_version = token_version + 1 WHERE id = $1", [rows[0].id]);
   await pool.query("UPDATE ch_equipe SET ativo = false WHERE lower(email) = $1", [email]);
+  audit(acc, "acesso_bloqueado", { papel: p.papel, alvo: email });
   return { ok: true };
 }
 async function config(acc) {
@@ -429,6 +440,7 @@ async function detalhe(acc, id) {
   const ch = await carregar(pool, id, false);
   if (!podeVer(p, ch)) throw erro(403, "Esse chamado é de outra loja.");
   const dp = ehDp(p);
+  if (dp) audit(acc, "ver_chamado", { papel: p.papel, chamado_id: id, detalhe: ch.protocolo + " · " + ch.loja_nome }); // quem do DP leu (LGPD)
   const { rows: msgs } = await pool.query(`SELECT id::int AS id, autor_email, autor_nome, autor_tipo, texto, interno, criado_em FROM ch_mensagens WHERE chamado_id = $1 ${dp ? "" : "AND NOT interno"} ORDER BY criado_em, id`, [id]);
   const { rows: ans } = await pool.query(`SELECT a.id::int AS id, a.mensagem_id::int AS mensagem_id, a.nome, a.tipo, a.tamanho FROM ch_anexos a LEFT JOIN ch_mensagens m ON m.id = a.mensagem_id WHERE a.chamado_id = $1 ${dp ? "" : "AND (m.id IS NULL OR NOT m.interno)"} ORDER BY a.id`, [id]);
   const out = { chamado: formata(ch, new Date()), mensagens: msgs.map((m) => ({ ...m, anexos: ans.filter((a) => a.mensagem_id === m.id) })) };
@@ -536,7 +548,23 @@ async function baixarAnexo(acc, id) {
   if (!rows[0]) throw erro(404, "Anexo não encontrado.");
   const ch = await carregar(pool, Number(rows[0].chamado_id), false);
   if (!podeVer(p, ch) || (rows[0].interno && !ehDp(p))) throw erro(403, "Sem acesso a esse anexo.");
+  audit(acc, "baixar_anexo", { papel: p.papel, chamado_id: Number(rows[0].chamado_id), anexo_id: id, detalhe: rows[0].nome });
   return rows[0];
+}
+
+const ACOES_AUDIT = { login: "Entrou", login_falhou: "Login com senha errada", login_bloqueado: "Login bloqueado (tentativas)", senha_alterada: "Trocou a própria senha", senha_redefinida: "Senha redefinida pelo gestor",
+  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo" };
+async function listarAuditoria(acc, f = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const w = [], v = []; const add = (x) => { v.push(x); return "$" + v.length; };
+  if (f.acao && ACOES_AUDIT[f.acao]) w.push(`a.acao = ${add(f.acao)}`);
+  if (f.usuario) w.push(`(lower(a.usuario) LIKE ${add("%" + String(f.usuario).toLowerCase().trim() + "%")} OR lower(a.alvo) LIKE $${v.length})`);
+  if (f.protocolo) w.push(`c.protocolo ILIKE ${add("%" + String(f.protocolo).trim() + "%")}`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(f.de || "")) w.push(`a.quando >= ${add(f.de + " 00:00-03")}`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(f.ate || "")) w.push(`a.quando < (${add(f.ate)}::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo'`);
+  const { rows } = await pool.query(`SELECT a.id::int AS id, a.quando, a.usuario, a.papel, a.acao, a.alvo, a.detalhe, a.ip, c.protocolo, a.chamado_id::int AS chamado_id
+    FROM ch_auditoria a LEFT JOIN ch_chamados c ON c.id = a.chamado_id ${w.length ? "WHERE " + w.join(" AND ") : ""} ORDER BY a.id DESC LIMIT 300`, v);
+  return { registros: rows.map((r) => ({ ...r, acao_nome: ACOES_AUDIT[r.acao] || r.acao })), acoes: ACOES_AUDIT };
 }
 
 async function reenviarEmail(acc, id) { const p = await papelDe(acc); exigirDp(p); return mail.reenviar(id); }
@@ -613,4 +641,4 @@ async function indicadores(acc, f = {}) {
       .map((x) => ({ id: x.id, protocolo: x.protocolo, loja_nome: x.loja_nome, assunto_nome: x.assunto_nome, status: x.status, relogio: x.relogio })) };
 }
 
-module.exports = { eu, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
+module.exports = { eu, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAuditoria, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
