@@ -49,38 +49,39 @@ ${link ? `<p style="margin:20px 0 0"><a href="${esc(link)}" style="background:#a
 const par = (rot, val) => ({ html: `<p style="margin:0 0 8px;font-size:14px"><b>${esc(rot)}:</b> ${esc(val)}</p>`, texto: `${rot}: ${val}` });
 const caixa = (rot, val) => ({ html: `<div style="margin:12px 0;padding:12px 14px;background:#f7f7f9;border-left:4px solid #a3274f;border-radius:6px;font-size:14px;line-height:1.5"><div style="font-size:12px;color:#6b6b73;margin-bottom:4px">${esc(rot)}</div>${esc(val).replace(/\n/g, "<br>")}</div>`, texto: `\n${rot}:\n${val}\n` });
 
+const aviso = () => par("Conteúdo", "Por segurança, o texto e os anexos do chamado não vão por e-mail. Abra o painel e entre com o seu login para ler.");
 function dadosChamado(ch) {
-  return [par("Protocolo", ch.protocolo), par("Loja", ch.loja_nome), par("Assunto", ch.assunto_nome), par("Status", STATUS_ROT[ch.status] || ch.status),
-    ...(ch.prioridade === "urgente" ? [par("Prioridade", "Urgente")] : []), ...(ch.colaborador ? [par("Colaborador", ch.colaborador)] : [])];
+  return [par("Protocolo", ch.protocolo), par("Loja", ch.loja_nome), par("Status", STATUS_ROT[ch.status] || ch.status),
+    ...(ch.prioridade === "urgente" ? [par("Prioridade", "Urgente")] : [])];
 }
 
 // monta os e-mails de cada evento
 function montar(tipo, ch, extra = {}) {
   const link = linkChamado(ch.id);
-  const assunto = (t) => `[${ch.protocolo}] ${t} · ${ch.assunto_nome}`;
+  const assunto = (t) => `[${ch.protocolo}] ${t}`;
   if (tipo === "abertura_loja") {
-    const l = layout("Recebemos o seu chamado", [...dadosChamado(ch), par("Aberto em", dh(ch.criado_em)), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), par("Prazo de resolução", fmtMin(ch.sla_resolucao_min)), caixa("O que você pediu", ch.descricao)], link);
+    const l = layout("Recebemos o seu chamado", [...dadosChamado(ch), par("Aberto em", dh(ch.criado_em)), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), par("Prazo de resolução", fmtMin(ch.sla_resolucao_min)), aviso()], link);
     return { assunto: assunto("Chamado aberto"), ...l };
   }
   if (tipo === "abertura_dp") {
-    const l = layout("Novo chamado de loja", [...dadosChamado(ch), par("Aberto por", ch.aberto_por), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), caixa("Descrição", ch.descricao)], link);
+    const l = layout("Novo chamado de loja", [...dadosChamado(ch), par("Aberto por", ch.aberto_por), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), aviso()], link);
     return { assunto: assunto("Novo chamado") + ` · ${ch.loja_nome}`, ...l };
   }
   if (tipo === "resposta_dp") {
     const resolvido = ch.status === "resolvido";
-    const l = layout(resolvido ? "Seu chamado foi resolvido" : "Resposta do DP ao seu chamado", [...dadosChamado(ch), caixa(`Resposta de ${extra.autor || "DP"}`, extra.texto || ""),
+    const l = layout(resolvido ? "Seu chamado foi resolvido" : "Resposta do DP ao seu chamado", [...dadosChamado(ch), par("Respondido por", extra.autor || "DP"), aviso(),
       ...(ch.status === "aguardando_loja" ? [par("Atenção", "O DP aguarda a sua resposta no painel para continuar o atendimento.")] : []),
       ...(resolvido ? [par("Se não resolveu", "responda pelo painel em até 7 dias que o chamado é reaberto.")] : []),
-      ...((extra.anexos || []).length ? [par("Anexos", extra.anexos.join(", ") + " (baixe no painel)")] : [])], link);
+      ...((extra.anexos || []).length ? [par("Anexos", extra.anexos.length + " arquivo(s) no painel")] : [])], link);
     return { assunto: assunto(resolvido ? "Resolvido" : "Resposta do DP"), ...l };
   }
   if (tipo === "resposta_loja") {
-    const l = layout("A loja respondeu ao chamado", [...dadosChamado(ch), caixa(`Resposta de ${extra.autor || ch.loja_nome}`, extra.texto || ""), ...(extra.reaberto ? [par("Atenção", "Chamado reaberto pela loja.")] : []),
-      ...((extra.anexos || []).length ? [par("Anexos", extra.anexos.join(", "))] : [])], link);
+    const l = layout("A loja respondeu ao chamado", [...dadosChamado(ch), par("Respondido por", extra.autor || ch.loja_nome), aviso(), ...(extra.reaberto ? [par("Atenção", "Chamado reaberto pela loja.")] : []),
+      ...((extra.anexos || []).length ? [par("Anexos", extra.anexos.length + " arquivo(s) no painel")] : [])], link);
     return { assunto: assunto(extra.reaberto ? "Chamado reaberto" : "Loja respondeu") + ` · ${ch.loja_nome}`, ...l };
   }
   if (tipo === "cancelamento") {
-    const l = layout("Chamado cancelado", [...dadosChamado(ch), ...(extra.motivo ? [par("Motivo", extra.motivo)] : [])], link);
+    const l = layout("Chamado cancelado", [...dadosChamado(ch)], link);
     return { assunto: assunto("Cancelado"), ...l };
   }
   throw new Error("Tipo de e-mail desconhecido: " + tipo);
