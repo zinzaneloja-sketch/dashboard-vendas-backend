@@ -577,7 +577,7 @@ app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
 // só libera /eu (para a tela saber que precisa trocar). A troca em si é POST /api/auth/trocar-senha.
 const exigeTrocaSenha = (req, res, next) => {
   req.access.ip = req.ip;
-  if (req.access.trocar_senha && !/\/api\/chamados\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
+  if (req.access.trocar_senha && !/\/api\/(chamados|admissao)\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
   next();
 };
 const chamadosAuth = [requireAuth, requireModule("chamados"), exigeTrocaSenha];
@@ -603,6 +603,35 @@ app.put(CH + "/equipe/:id", chamadosAuth, handle((req) => chamados.salvarEquipe(
 app.get(CH + "/config", chamadosAuth, handle((req) => chamados.config(req.access)));
 app.put(CH + "/config", chamadosAuth, handle((req) => chamados.salvarConfig(req.access, req.body || {})));
 app.get(CH + "/indicadores", chamadosAuth, handle((req) => chamados.indicadores(req.access, req.query)));
+
+// ---- Admissão e Rescisão (acompanhamento de etapas e SLA) ----
+const admissao = require("./admissao/admissao");
+const AD = "/api/admissao";
+const admAuth = [requireAuth, requireModule("admissao"), exigeTrocaSenha];
+app.get(AD + "/eu", admAuth, handle((req) => admissao.eu(req.access)));
+app.get(AD + "/processos", admAuth, handle((req) => admissao.listar(req.access, req.query)));
+app.post(AD + "/processos", admAuth, handle((req) => admissao.criar(req.access, req.body || {})));
+app.get(AD + "/processos/:id", admAuth, handle((req) => admissao.detalhe(req.access, nid(req))));
+app.put(AD + "/processos/:id", admAuth, handle((req) => admissao.editar(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/etapas/:eid/concluir", admAuth, handle((req) => admissao.concluirEtapa(req.access, nid(req), Number(req.params.eid), req.body || {})));
+app.post(AD + "/processos/:id/etapas/:eid/dispensar", admAuth, handle((req) => admissao.dispensarEtapa(req.access, nid(req), Number(req.params.eid), req.body || {})));
+app.post(AD + "/processos/:id/voltar-etapa", admAuth, handle((req) => admissao.reabrirEtapa(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/pausar", admAuth, handle((req) => admissao.pausar(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/retomar", admAuth, handle((req) => admissao.retomar(req.access, nid(req))));
+app.post(AD + "/processos/:id/responsavel", admAuth, handle((req) => admissao.atribuir(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/notas", admAuth, handle((req) => admissao.nota(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/cancelar", admAuth, handle((req) => admissao.cancelar(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/excluir", admAuth, handle((req) => admissao.excluir(req.access, nid(req), req.body || {})));
+app.put(AD + "/processos/:id/prazos", admAuth, handle((req) => admissao.ajustarPrazos(req.access, nid(req), req.body || {})));
+app.get(AD + "/etapas-modelo", admAuth, handle((req) => admissao.listarEtapasModelo(req.access, req.query)));
+app.post(AD + "/etapas-modelo", admAuth, handle((req) => admissao.salvarEtapaModelo(req.access, null, req.body || {})));
+app.put(AD + "/etapas-modelo/:id", admAuth, handle((req) => admissao.salvarEtapaModelo(req.access, nid(req), req.body || {})));
+app.put(AD + "/config", admAuth, handle((req) => admissao.salvarConfig(req.access, req.body || {})));
+app.get(AD + "/equipe", admAuth, handle((req) => admissao.listarEquipe(req.access)));
+app.post(AD + "/equipe", admAuth, handle((req) => admissao.criarEquipe(req.access, req.body || {})));
+app.put(AD + "/equipe/:id", admAuth, handle((req) => admissao.editarEquipe(req.access, nid(req), req.body || {})));
+app.post(AD + "/equipe/senha", admAuth, handle((req) => admissao.redefinirSenha(req.access, req.body || {})));
+app.get(AD + "/indicadores", admAuth, handle((req) => admissao.indicadores(req.access, req.query)));
 app.get(CH + "/emails/falhas", chamadosAuth, handle((req) => chamados.emailsFalhos(req.access)));
 app.post(CH + "/emails/:id/reenviar", chamadosAuth, handle((req) => chamados.reenviarEmail(req.access, nid(req))));
 app.get(CH + "/chamados", chamadosAuth, handle((req) => chamados.listar(req.access, req.query)));
