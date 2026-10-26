@@ -3,15 +3,26 @@ const jwt = require("jsonwebtoken");
 const { pool } = require("./db");
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const TOKEN_TTL = "30d";
+const seg = require("./seguranca");
+const auditoria = require("./auditoria");
+// Duração da sessão: quem acessa dados de DP (módulo chamados) ou é administrador entra a cada 12 h;
+// os demais seguem como antes (30 dias). Ajustáveis por variável de ambiente.
+const TTL_PADRAO = process.env.AUTH_TOKEN_TTL || "30d";
+const TTL_CHAMADOS = process.env.AUTH_TOKEN_TTL_CHAMADOS || "12h";
+const ttlPara = (u) => (u && (u.role === "admin" || (u.modules || []).includes("chamados")) ? TTL_CHAMADOS : TTL_PADRAO);
 
 if (!JWT_SECRET) {
-  console.warn("[auth] JWT_SECRET não configurado — defina essa variável de ambiente antes de usar login em produção.");
+  if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT) {
+    // Sem segredo próprio, qualquer pessoa conseguiria forjar um login de administrador. Melhor não subir.
+    console.error("[auth] ERRO: JWT_SECRET não configurado. Defina uma chave longa e aleatória nas variáveis do Railway.");
+    process.exit(1);
+  }
+  console.warn("[auth] JWT_SECRET não configurado — usando chave de desenvolvimento (NUNCA use assim em produção).");
 }
 
 function signToken(user) {
-  return jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET || "dev-secret-inseguro", {
-    expiresIn: TOKEN_TTL,
+  return jwt.sign({ sub: user.id, email: user.email, role: user.role, tv: user.token_version || 0 }, JWT_SECRET || "dev-secret-inseguro", {
+    expiresIn: ttlPara(user),
   });
 }
 
@@ -74,7 +85,7 @@ async function listUsers() {
 
 /** Perfil de acesso vindo do banco (sempre fresco: remover/alterar acesso vale na hora, sem esperar o token expirar). */
 async function loadAccess(userId) {
-  const { rows } = await pool.query("SELECT id, email, nome, role, modules, cd_perfis FROM users WHERE id = $1", [userId]);
+  const { rows } = await pool.query("SELECT id, email, nome, role, modules, cd_perfis, trocar_senha, token_version FROM users WHERE id = $1", [userId]);
   const u = rows[0];
   if (!u) return null;
   const admin = u.role === "admin";
@@ -86,6 +97,8 @@ async function loadAccess(userId) {
     role: u.role,
     modules: admin ? MODULES.slice() : u.modules || [],
     cd_perfis: admin ? CD_PERFIS.slice() : expandirPerfis(u.cd_perfis),
+    trocar_senha: !!u.trocar_senha,
+    token_version: u.token_version || 0,
   };
 }
 
@@ -118,6 +131,7 @@ function requireModule(mod) {
     try {
       const acc = await loadAccess(req.user.sub);
       if (!acc) return res.status(401).json({ error: "Usuário não encontrado." });
+      if ((req.user.tv || 0) !== acc.token_version) return res.status(401).json({ error: "Sessão encerrada. Entre novamente." });
       if (!acc.modules.includes(mod)) return res.status(403).json({ error: "Você não tem acesso a este módulo." });
       req.access = acc;
       next();
@@ -127,7 +141,68 @@ function requireModule(mod) {
   };
 }
 
+function httpErro(status, message) { const e = new Error(message); e.status = status; return e; }
+
+/** Senha nova aceitável: 10+ caracteres, com letra e número. */
+function validarSenhaNova(senha) {
+  const v = String(senha || "");
+  if (v.length < 10) throw httpErro(400, "A senha nova precisa de pelo menos 10 caracteres.");
+  if (v.length > 100) throw httpErro(400, "Senha muito longa (máximo 100 caracteres).");
+  if (!/[A-Za-z]/.test(v) || !/\d/.test(v)) throw httpErro(400, "A senha nova precisa ter letras e números.");
+}
+
+/** Login com limite de tentativas. Devolve { token, user }. */
+async function fazerLogin(email, password, ip) {
+  if (!email || !password) throw httpErro(400, "Informe email e senha.");
+  const espera = seg.esperaLogin(ip, email);
+  if (espera) {
+    throw seg.erroBloqueio(espera); // (só o momento do bloqueio é registrado, para um ataque não encher a auditoria)
+  }
+  const user = await findUserByEmail(email);
+  // compara sempre (mesmo sem usuário) para não revelar por tempo de resposta se o e-mail existe
+  const hash = user ? user.password_hash : "$2a$10$CwTycUXWue0Thq9StjUM0uJ8e1x0wV0y2oYb9uG0v1o3kz8m8Jr1u";
+  const ok = await bcrypt.compare(String(password), hash);
+  if (!user || !ok) {
+    const bloqueou = seg.falhaLogin(ip, email);
+    auditoria.registrar({ usuario: String(email).toLowerCase(), acao: bloqueou ? "login_bloqueado" : "login_falhou", ip, detalhe: bloqueou ? "limite de tentativas atingido" : null });
+    throw httpErro(401, "Email ou senha inválidos.");
+  }
+  seg.sucessoLogin(ip, email);
+  const acc = await loadAccess(user.id);
+  if (acc.role === "admin" || acc.modules.includes("chamados")) auditoria.registrar({ usuario: acc.email, acao: "login", ip });
+  return { token: signToken(user), user: acc };
+}
+
+/** O próprio usuário troca a senha. Encerra as outras sessões e devolve um token novo. */
+async function trocarSenha(userId, atual, nova, ip) {
+  const { rows } = await pool.query("SELECT * FROM users WHERE id = $1", [userId]);
+  const user = rows[0];
+  if (!user) throw httpErro(401, "Usuário não encontrado.");
+  const chave = "troca:" + user.id;
+  const espera = seg.esperaLogin(ip, chave);
+  if (espera) throw seg.erroBloqueio(espera);
+  if (!(await bcrypt.compare(String(atual || ""), user.password_hash))) {
+    seg.falhaLogin(ip, chave);
+    throw httpErro(400, "A senha atual não confere.");
+  }
+  seg.sucessoLogin(ip, chave);
+  validarSenhaNova(nova);
+  if (String(nova) === String(atual)) throw httpErro(400, "A senha nova precisa ser diferente da atual.");
+  const { rows: up } = await pool.query(
+    "UPDATE users SET password_hash = $2, trocar_senha = false, senha_alterada_em = now(), token_version = token_version + 1 WHERE id = $1 RETURNING *",
+    [user.id, await bcrypt.hash(String(nova), 10)]
+  );
+  auditoria.registrar({ usuario: user.email, acao: "senha_alterada", ip, detalhe: "pelo próprio usuário" });
+  return { token: signToken(up[0]), user: await loadAccess(user.id) };
+}
+
+/** Aviso de e-mail/senha: invalida todas as sessões abertas de uma pessoa. */
+async function encerrarSessoes(userId) {
+  await pool.query("UPDATE users SET token_version = token_version + 1 WHERE id = $1", [userId]);
+}
+
 module.exports = {
+  fazerLogin, trocarSenha, validarSenhaNova, encerrarSessoes,
   MODULES, CD_PERFIS, signToken, verifyToken, findUserByEmail, createUser, updateUserAccess, listUsers, deleteUser,
   loadAccess, requireAuth, requireAdmin, requireModule,
 };
