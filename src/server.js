@@ -611,6 +611,8 @@ app.get(CH + "/chamados/:id", chamadosAuth, handle((req) => chamados.detalhe(req
 app.post(CH + "/chamados/:id/mensagens", chamadosAuth, handle((req) => chamados.responder(req.access, nid(req), req.body || {})));
 app.post(CH + "/chamados/:id/assumir", chamadosAuth, handle((req) => chamados.assumir(req.access, nid(req), req.body || {})));
 app.post(CH + "/chamados/:id/cancelar", chamadosAuth, handle((req) => chamados.cancelar(req.access, nid(req), req.body || {})));
+app.post(CH + "/chamados/:id/excluir", chamadosAuth, handle((req) => chamados.excluir(req.access, nid(req), req.body || {})));
+app.put(CH + "/chamados/:id/sla", chamadosAuth, handle((req) => chamados.editarSla(req.access, nid(req), req.body || {})));
 app.get(CH + "/anexos/:id", chamadosAuth, async (req, res) => {
   try {
     const f = await chamados.baixarAnexo(req.access, nid(req));
