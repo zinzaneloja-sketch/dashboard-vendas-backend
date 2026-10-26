@@ -24,7 +24,7 @@ async function findUserByEmail(email) {
   return rows[0] || null;
 }
 
-const MODULES = ["vendas", "cd"];
+const MODULES = ["vendas", "cd", "chamados"];
 // Cada etapa do CD é uma mesa (um login por etapa). "gestor" é o consolidado: enxerga tudo.
 const CD_PERFIS = ["recebimento", "separacao", "contagem", "referencia", "etiquetas", "pedido", "entrada", "checkout", "confronto", "distribuicao", "picking", "faturamento", "gestor"];
 // Perfis agrupados do modelo antigo: viram as mesas equivalentes (ninguém perde acesso).
