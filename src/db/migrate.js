@@ -722,6 +722,148 @@ async function seedAdmin() {
   console.log("========================================================");
 }
 
+
+// ---------- Chamados das lojas para o DP ----------
+const SEED_ASSUNTOS = [
+  // nome, categoria, descricao, SLA 1ª resposta (min úteis), SLA resolução (min úteis; 600 = 1 dia útil), exige colaborador
+  ["Contracheque e folha de pagamento", "Folha", "Dúvida sobre valores, descontos, adiantamento ou contracheque não recebido.", 240, 1200, true],
+  ["Ajuste de ponto e banco de horas", "Ponto", "Esquecimento de batida, ponto errado, horas extras e saldo do banco de horas.", 240, 1200, true],
+  ["Férias", "Férias", "Programação, pedido, recibo e dúvidas sobre férias.", 240, 1800, true],
+  ["Atestado médico e afastamento", "Saúde", "Envio de atestado, afastamento, licença e retorno ao trabalho.", 120, 600, true],
+  ["Admissão (novo colaborador)", "Admissão", "Documentos e dados para admitir um novo colaborador.", 120, 1200, true],
+  ["Demissão e rescisão", "Desligamento", "Pedido de demissão, desligamento, homologação e rescisão.", 120, 1800, true],
+  ["Vale-transporte", "Benefícios", "Solicitação, alteração ou problema com o vale-transporte.", 240, 1200, true],
+  ["Vale-alimentação / refeição", "Benefícios", "Dúvidas ou problemas com o vale-alimentação ou refeição.", 240, 1200, true],
+  ["Plano de saúde e outros benefícios", "Benefícios", "Inclusão, exclusão e dúvidas de plano de saúde e demais benefícios.", 240, 1800, true],
+  ["Comissão e metas", "Remuneração", "Dúvidas sobre cálculo de comissão, metas e premiações.", 240, 1800, false],
+  ["Escala e jornada de trabalho", "Jornada", "Alterações de escala, folgas, trocas de turno e jornada.", 240, 1200, false],
+  ["Advertência e ocorrência disciplinar", "Relações trabalhistas", "Registro, orientação e dúvidas sobre advertências e ocorrências.", 240, 1800, true],
+  ["Declarações e documentos", "Documentos", "Declaração de trabalho, de renda, 2ª via de documentos.", 240, 1200, true],
+  ["Alteração de dados cadastrais", "Cadastro", "Mudança de endereço, banco, dependentes e outros dados do colaborador.", 240, 1200, true],
+  ["Outros assuntos de DP", "Geral", "Qualquer outro assunto de Departamento Pessoal.", 480, 2400, false],
+];
+async function migrarChamados() {
+  await pool.query(`
+CREATE TABLE IF NOT EXISTS ch_assuntos (
+  id                 BIGSERIAL PRIMARY KEY,
+  nome               TEXT NOT NULL,
+  categoria          TEXT,
+  descricao          TEXT,
+  sla_resposta_min   INTEGER NOT NULL DEFAULT 240,
+  sla_resolucao_min  INTEGER NOT NULL DEFAULT 1200,
+  exige_colaborador  BOOLEAN NOT NULL DEFAULT false,
+  ativo              BOOLEAN NOT NULL DEFAULT true,
+  ordem              INTEGER NOT NULL DEFAULT 0,
+  criado_em          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ch_assuntos_nome_uq ON ch_assuntos (lower(nome));
+CREATE TABLE IF NOT EXISTS ch_lojas (
+  id            BIGSERIAL PRIMARY KEY,
+  nome          TEXT NOT NULL,
+  codigo        TEXT,
+  email         TEXT NOT NULL,
+  emails_copia  TEXT[] NOT NULL DEFAULT '{}',
+  ativa         BOOLEAN NOT NULL DEFAULT true,
+  criada_em     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ch_lojas_email_uq ON ch_lojas (lower(email));
+CREATE UNIQUE INDEX IF NOT EXISTS ch_lojas_nome_uq ON ch_lojas (lower(nome));
+CREATE TABLE IF NOT EXISTS ch_equipe (
+  id         BIGSERIAL PRIMARY KEY,
+  email      TEXT NOT NULL,
+  nome       TEXT,
+  papel      TEXT NOT NULL DEFAULT 'dp',      -- 'dp' (atende) ou 'gestor' (atende + configura)
+  ativo      BOOLEAN NOT NULL DEFAULT true,
+  criado_em  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ch_equipe_email_uq ON ch_equipe (lower(email));
+CREATE TABLE IF NOT EXISTS ch_config (chave TEXT PRIMARY KEY, valor TEXT);
+CREATE TABLE IF NOT EXISTS ch_chamados (
+  id                    BIGSERIAL PRIMARY KEY,
+  protocolo             TEXT UNIQUE,
+  loja_id               BIGINT NOT NULL REFERENCES ch_lojas(id),
+  assunto_id            BIGINT REFERENCES ch_assuntos(id) ON DELETE SET NULL,
+  assunto_nome          TEXT NOT NULL,
+  descricao             TEXT NOT NULL,
+  prioridade            TEXT NOT NULL DEFAULT 'normal',
+  colaborador           TEXT,
+  data_ref              DATE,
+  status                TEXT NOT NULL DEFAULT 'aberto',  -- aberto | em_atendimento | aguardando_loja | resolvido | cancelado
+  aberto_por            TEXT,
+  atribuido_a           TEXT,
+  sla_resposta_min      INTEGER NOT NULL,
+  sla_resolucao_min     INTEGER NOT NULL,
+  primeira_resposta_em  TIMESTAMPTZ,
+  resolvido_em          TIMESTAMPTZ,
+  reaberturas           INTEGER NOT NULL DEFAULT 0,
+  pausado_desde         TIMESTAMPTZ,
+  pausa_acum_min        NUMERIC(12,1) NOT NULL DEFAULT 0,
+  cc_emails             TEXT[] NOT NULL DEFAULT '{}',
+  ultima_msg_autor      TEXT,
+  criado_em             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ch_chamados_loja_idx ON ch_chamados (loja_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS ch_chamados_status_idx ON ch_chamados (status, criado_em DESC);
+CREATE TABLE IF NOT EXISTS ch_mensagens (
+  id           BIGSERIAL PRIMARY KEY,
+  chamado_id   BIGINT NOT NULL REFERENCES ch_chamados(id) ON DELETE CASCADE,
+  autor_email  TEXT NOT NULL,
+  autor_nome   TEXT,
+  autor_tipo   TEXT NOT NULL,                      -- loja | dp
+  texto        TEXT NOT NULL,
+  interno      BOOLEAN NOT NULL DEFAULT false,     -- nota interna do DP: a loja não vê e não recebe e-mail
+  criado_em    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ch_mensagens_chamado_idx ON ch_mensagens (chamado_id, criado_em);
+CREATE TABLE IF NOT EXISTS ch_anexos (
+  id           BIGSERIAL PRIMARY KEY,
+  chamado_id   BIGINT NOT NULL REFERENCES ch_chamados(id) ON DELETE CASCADE,
+  mensagem_id  BIGINT REFERENCES ch_mensagens(id) ON DELETE CASCADE,
+  nome         TEXT NOT NULL,
+  tipo         TEXT,
+  tamanho      INTEGER NOT NULL,
+  conteudo     BYTEA NOT NULL,
+  criado_por   TEXT,
+  criado_em    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ch_anexos_chamado_idx ON ch_anexos (chamado_id);
+CREATE TABLE IF NOT EXISTS ch_eventos (
+  id          BIGSERIAL PRIMARY KEY,
+  chamado_id  BIGINT NOT NULL REFERENCES ch_chamados(id) ON DELETE CASCADE,
+  tipo        TEXT NOT NULL,
+  usuario     TEXT,
+  detalhe     JSONB,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ch_eventos_chamado_idx ON ch_eventos (chamado_id, criado_em);
+CREATE TABLE IF NOT EXISTS ch_emails (
+  id              BIGSERIAL PRIMARY KEY,
+  chamado_id      BIGINT REFERENCES ch_chamados(id) ON DELETE CASCADE,
+  tipo            TEXT NOT NULL,
+  destino         TEXT NOT NULL,
+  assunto         TEXT,
+  status          TEXT NOT NULL,                   -- enviado | falhou | pulado
+  erro            TEXT,
+  provedor_id     TEXT,
+  conteudo_html   TEXT,
+  conteudo_texto  TEXT,
+  tentativas      INTEGER NOT NULL DEFAULT 1,
+  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ch_emails_chamado_idx ON ch_emails (chamado_id);
+`);
+  const { rows } = await pool.query("SELECT count(*)::int AS n FROM ch_assuntos");
+  if (!rows[0].n) {
+    let ordem = 0;
+    for (const [nome, cat, desc, r, s, ex] of SEED_ASSUNTOS) {
+      await pool.query("INSERT INTO ch_assuntos (nome, categoria, descricao, sla_resposta_min, sla_resolucao_min, exige_colaborador, ordem) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING", [nome, cat, desc, r, s, ex, ++ordem]);
+    }
+    console.log("[chamados] Assuntos iniciais criados (edite os prazos no painel).");
+  }
+}
+
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
@@ -729,6 +871,7 @@ async function migrate() {
   await migrarMesas();
   await migrarParalela();
   await migrarFaturamento();
+  await migrarChamados();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
