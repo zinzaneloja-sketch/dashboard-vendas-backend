@@ -13,7 +13,7 @@ const REABRE_DIAS = 7;
 const ABERTOS = ["aberto", "em_atendimento", "aguardando_loja"];
 const PAUSADOS = ["aguardando_loja", "resolvido"]; // o relógio de resolução não corre enquanto a bola está com a loja
 const STATUS = ["aberto", "em_atendimento", "aguardando_loja", "resolvido", "cancelado"];
-const MAX_ANEXOS = 3, MAX_BYTES = 4 * 1024 * 1024;
+const MAX_ANEXOS = 3, MAX_BYTES = 2 * 1024 * 1024;
 const EXT_OK = /\.(pdf|png|jpe?g|webp|gif|heic|docx?|xlsx?|csv|txt|zip)$/i;
 
 async function comTransacao(fn) {
@@ -118,7 +118,7 @@ function limparAnexos(lista) {
     if (!EXT_OK.test(nome)) throw erro(400, `Tipo de arquivo não permitido: ${nome}. Envie PDF, imagem, Word, Excel, CSV, TXT ou ZIP.`);
     const buf = Buffer.from(String((a && a.base64) || "").replace(/^data:[^,]*,/, ""), "base64");
     if (!buf.length) throw erro(400, `Arquivo vazio: ${nome}.`);
-    if (buf.length > MAX_BYTES) throw erro(413, `${nome} passa de 4 MB.`);
+    if (buf.length > MAX_BYTES) throw erro(413, `${nome} passa de 2 MB.`);
     return { nome, tipo: txt(a.tipo).slice(0, 100) || null, buf };
   });
 }
