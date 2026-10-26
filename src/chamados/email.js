@@ -61,7 +61,7 @@ function montar(tipo, ch, extra = {}) {
   const link = linkChamado(ch.id);
   const assunto = (t) => `[${ch.protocolo}] ${t}`;
   if (tipo === "abertura_loja") {
-    const l = layout("Recebemos o seu chamado", [...dadosChamado(ch), par("Aberto em", dh(ch.criado_em)), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), par("Prazo de resolução", fmtMin(ch.sla_resolucao_min)), aviso()], link);
+    const l = layout("Recebemos o seu chamado", [...dadosChamado(ch), par("Aberto em", dh(ch.criado_em)), aviso()], link);
     return { assunto: assunto("Chamado aberto"), ...l };
   }
   if (tipo === "abertura_dp") {
