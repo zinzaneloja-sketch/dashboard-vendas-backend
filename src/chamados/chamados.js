@@ -125,7 +125,7 @@ function limparAnexos(lista) {
 async function salvarAnexos(c, chamadoId, mensagemId, lista, usuario) {
   for (const a of lista) await c.query("INSERT INTO ch_anexos (chamado_id, mensagem_id, nome, tipo, tamanho, conteudo, criado_por) VALUES ($1,$2,$3,$4,$5,$6,$7)", [chamadoId, mensagemId, a.nome, a.tipo, a.buf.length, a.buf, usuario]);
 }
-const destinosLoja = (ch) => [ch.loja_email, ...(ch.emails_copia || []), ...(ch.cc_emails || [])];
+const destinosLoja = (ch) => [ch.loja_email, ...(ch.emails_copia || []), ...(ch.cc_emails || [])].filter(Boolean);
 function dispara(fn) { setImmediate(() => { fn().catch((e) => console.error("[chamados:email]", e.message)); }); }
 
 // ---------- eu / cadastros ----------
@@ -185,27 +185,61 @@ function listaEmails(v) {
 
 async function listarLojas(acc) {
   const p = await papelDe(acc); exigirDp(p);
-  const { rows } = await pool.query(`SELECT l.id::int AS id, l.nome, l.codigo, l.email, l.emails_copia, l.ativa,
-    (SELECT count(*)::int FROM ch_chamados c WHERE c.loja_id = l.id AND c.status = ANY($1)) AS abertos FROM ch_lojas l ORDER BY l.nome`, [ABERTOS]);
+  const { rows } = await pool.query(`SELECT l.id::int AS id, l.nome, l.codigo, l.email, l.emails_copia, l.ativa, l.regional, l.regiao, l.uf, l.cidade, l.endereco, l.cep,
+    (SELECT count(*)::int FROM ch_chamados c WHERE c.loja_id = l.id AND c.status = ANY($1)) AS abertos,
+    EXISTS (SELECT 1 FROM users u WHERE l.email IS NOT NULL AND lower(u.email) = lower(l.email)) AS tem_usuario FROM ch_lojas l ORDER BY l.nome`, [ABERTOS]);
   return { lojas: rows };
 }
 async function salvarLoja(acc, id, b = {}) {
   const p = await papelDe(acc); exigirGestor(p);
-  const nome = txt(b.nome).slice(0, 120), email = em(b.email);
+  const nome = txt(b.nome).slice(0, 120), email = em(b.email) || null;
   if (!nome) throw erro(400, "Informe o nome da loja.");
-  if (!mail.emailValido(email)) throw erro(400, "Informe o e-mail da loja (é o login dela e recebe a cópia dos chamados).");
+  if (email && !mail.emailValido(email)) throw erro(400, "E-mail da loja inválido.");
   const cc = listaEmails(b.emails_copia);
+  const dados = [txt(b.codigo).slice(0, 30) || null, txt(b.regional).slice(0, 60) || null, txt(b.regiao).slice(0, 30) || null, txt(b.uf).toUpperCase().slice(0, 2) || null, txt(b.cidade).slice(0, 80) || null, txt(b.endereco).slice(0, 200) || null, txt(b.cep).slice(0, 12) || null];
+  const ativa = b.ativa === false ? false : true;
   try {
     if (id) {
-      const { rows } = await pool.query("UPDATE ch_lojas SET nome=$2, codigo=$3, email=$4, emails_copia=$5, ativa=$6 WHERE id=$1 RETURNING id::int AS id", [id, nome, txt(b.codigo).slice(0, 30) || null, email, cc, b.ativa === false ? false : true]);
+      const { rows } = await pool.query("UPDATE ch_lojas SET nome=$2, email=$3, emails_copia=$4, ativa=$5, codigo=$6, regional=$7, regiao=$8, uf=$9, cidade=$10, endereco=$11, cep=$12 WHERE id=$1 RETURNING id::int AS id", [id, nome, email, cc, ativa, ...dados]);
       if (!rows[0]) throw erro(404, "Loja não encontrada.");
-      const ac = await garantirAcesso(email, nome, b.senha);
+      const ac = email ? await garantirAcesso(email, nome, b.senha) : { criado: false };
       return { ok: true, id, acesso_criado: ac.criado };
     }
-    const ac = await garantirAcesso(email, nome, b.senha);
-    const { rows } = await pool.query("INSERT INTO ch_lojas (nome, codigo, email, emails_copia, ativa) VALUES ($1,$2,$3,$4,$5) RETURNING id::int AS id", [nome, txt(b.codigo).slice(0, 30) || null, email, cc, b.ativa === false ? false : true]);
+    const ac = email ? await garantirAcesso(email, nome, b.senha) : { criado: false };
+    const { rows } = await pool.query("INSERT INTO ch_lojas (nome, email, emails_copia, ativa, codigo, regional, regiao, uf, cidade, endereco, cep) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::int AS id", [nome, email, cc, ativa, ...dados]);
     return { ok: true, id: rows[0].id, acesso_criado: ac.criado };
   } catch (e) { if (e.code === "23505") throw erro(409, "Já existe uma loja com esse nome ou e-mail."); throw e; }
+}
+// Cadastro em lote dos e-mails (e acessos) das lojas. Cada linha: "NOME DA LOJA ; email@loja.com ; senha(opcional)".
+async function importarEmailsLojas(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const linhas = String(b.linhas || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 300);
+  if (!linhas.length) throw erro(400, "Cole pelo menos uma linha no formato: LOJA ; e-mail ; senha.");
+  const senhaPadrao = b.senha ? String(b.senha) : "";
+  const { rows: lojas } = await pool.query("SELECT id, nome, email FROM ch_lojas");
+  const chave = (v) => txt(v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/^zinzane\s*-\s*/i, "").replace(/\s+/g, " ").toLowerCase();
+  const porNome = new Map(lojas.map((l) => [chave(l.nome), l]));
+  const res = { atualizadas: 0, acessos_criados: 0, erros: [] };
+  for (const [n, linha] of linhas.entries()) {
+    const partes = linha.split(/[;\t]/).map((x) => x.trim());
+    if (partes.length < 2) { res.erros.push({ linha: n + 1, texto: linha, erro: "Use: LOJA ; e-mail ; senha" }); continue; }
+    if (n === 0 && /^(loja|nome)$/i.test(partes[0]) && /mail/i.test(partes[1])) continue; // cabeçalho
+    const l = porNome.get(chave(partes[0]));
+    const email = em(partes[1]), senha = partes[2] || senhaPadrao;
+    if (!l) { res.erros.push({ linha: n + 1, texto: linha, erro: "Loja não encontrada na lista" }); continue; }
+    if (!mail.emailValido(email)) { res.erros.push({ linha: n + 1, texto: linha, erro: "E-mail inválido" }); continue; }
+    try {
+      const { rows: dono } = await pool.query("SELECT 1 FROM ch_lojas WHERE lower(email) = $1 AND id <> $2", [email, l.id]);
+      if (dono[0]) { res.erros.push({ linha: n + 1, texto: linha, erro: "E-mail já usado por outra loja" }); continue; }
+      const { rows: jaTem } = await pool.query("SELECT 1 FROM users WHERE lower(email) = $1", [email]);
+      const ac = await garantirAcesso(email, l.nome, jaTem[0] ? undefined : (senha || undefined)); // nunca redefine a senha de quem já tem usuário
+      await pool.query("UPDATE ch_lojas SET email = $2 WHERE id = $1", [l.id, email]);
+      res.atualizadas++; if (ac.criado) res.acessos_criados++;
+    } catch (e) {
+      res.erros.push({ linha: n + 1, texto: linha, erro: e.code === "23505" ? "E-mail já usado por outra loja" : (e.message || "Erro") });
+    }
+  }
+  return { ok: true, ...res };
 }
 async function listarEquipe(acc) {
   const p = await papelDe(acc); exigirDp(p);
@@ -228,6 +262,74 @@ async function salvarEquipe(acc, id, b = {}) {
     const { rows } = await pool.query("INSERT INTO ch_equipe (email, nome, papel) VALUES ($1,$2,$3) RETURNING id::int AS id", [email, nome, papel]);
     return { ok: true, id: rows[0].id, acesso_criado: ac.criado };
   } catch (e) { if (e.code === "23505") throw erro(409, "Essa pessoa já está na equipe."); throw e; }
+}
+// ---- Acessos (logins) do módulo de chamados: tela única para o gestor criar, redefinir e bloquear ----
+async function listarAcessos(acc) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const { rows } = await pool.query(`
+    SELECT u.email, u.nome, u.role, ('chamados' = ANY(u.modules) OR u.role = 'admin') AS tem_modulo,
+      l.id::int AS loja_id, l.nome AS loja_nome, e.papel AS equipe_papel, e.ativo AS equipe_ativo
+    FROM users u
+    LEFT JOIN ch_lojas l ON lower(l.email) = lower(u.email)
+    LEFT JOIN ch_equipe e ON lower(e.email) = lower(u.email)
+    WHERE 'chamados' = ANY(u.modules) OR l.id IS NOT NULL OR e.id IS NOT NULL OR u.role = 'admin'
+    ORDER BY u.role = 'admin' DESC, e.papel NULLS LAST, l.nome NULLS LAST, u.email`);
+  const acessos = rows.map((r) => ({
+    email: r.email, nome: r.nome, admin: r.role === "admin", tem_acesso: r.tem_modulo,
+    perfil: r.role === "admin" ? "admin" : r.equipe_papel === "gestor" ? "gestor" : r.equipe_papel === "dp" ? "dp" : r.loja_id ? "loja" : "sem_perfil",
+    loja: r.loja_nome || null, ativo: r.role === "admin" ? true : r.equipe_papel ? !!r.equipe_ativo && r.tem_modulo : r.tem_modulo,
+  }));
+  const { rows: sem } = await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE email IS NULL AND ativa ORDER BY nome");
+  return { acessos, lojas_sem_acesso: sem };
+}
+// Cria (ou reativa) o login de uma pessoa nos chamados. perfil: 'loja' | 'dp' | 'gestor'.
+async function criarAcesso(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const email = em(b.email), nome = txt(b.nome).slice(0, 100) || null, perfil = txt(b.perfil);
+  if (!mail.emailValido(email)) throw erro(400, "Informe um e-mail válido.");
+  if (!["loja", "dp", "gestor"].includes(perfil)) throw erro(400, "Escolha o perfil: loja, atendente do DP ou gestor.");
+  const senha = b.senha ? String(b.senha) : "";
+  if (perfil === "loja") {
+    const { rows: lj } = await pool.query("SELECT id, nome, email FROM ch_lojas WHERE id = $1 OR ($1 = 0 AND lower(email) = $2)", [Number(b.loja_id) || 0, email]);
+    if (!lj[0]) throw erro(400, "Escolha a loja desse acesso.");
+    if (lj[0].email && em(lj[0].email) !== email) throw erro(409, `A loja ${lj[0].nome} já usa o login ${lj[0].email}. Para trocar, edite a loja em Cadastros > Lojas.`);
+    const { rows: outro } = await pool.query("SELECT nome FROM ch_lojas WHERE lower(email) = $1 AND id <> $2", [email, lj[0].id]);
+    if (outro[0]) throw erro(409, `Esse e-mail já é o login da loja ${outro[0].nome}.`);
+    const { rows: eqp } = await pool.query("SELECT 1 FROM ch_equipe WHERE lower(email) = $1", [email]);
+    if (eqp[0]) throw erro(409, "Esse e-mail já é da equipe do DP.");
+    const ac = await garantirAcesso(email, nome || lj[0].nome, senha || undefined);
+    await pool.query("UPDATE ch_lojas SET email = $2 WHERE id = $1", [lj[0].id, email]);
+    return { ok: true, acesso_criado: ac.criado, perfil, loja: lj[0].nome };
+  }
+  const { rows: dona } = await pool.query("SELECT nome FROM ch_lojas WHERE lower(email) = $1", [email]);
+  if (dona[0]) throw erro(409, `Esse e-mail é o login da loja ${dona[0].nome}.`);
+  const ac = await garantirAcesso(email, nome, senha || undefined);
+  await pool.query(`INSERT INTO ch_equipe (email, nome, papel, ativo) VALUES ($1,$2,$3,true)
+    ON CONFLICT (lower(email)) DO UPDATE SET papel = EXCLUDED.papel, ativo = true, nome = COALESCE(EXCLUDED.nome, ch_equipe.nome)`, [email, nome, perfil === "gestor" ? "gestor" : "dp"]);
+  return { ok: true, acesso_criado: ac.criado, perfil };
+}
+async function redefinirSenhaAcesso(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const email = em(b.email), senha = String(b.senha || "");
+  if (senha.length < 8) throw erro(400, "A senha precisa de pelo menos 8 caracteres.");
+  const { rows } = await pool.query("SELECT id, role, modules FROM users WHERE lower(email) = $1", [email]);
+  if (!rows[0]) throw erro(404, "Usuário não encontrado.");
+  if (rows[0].role === "admin" && em(acc.email) !== email) throw erro(403, "A senha de um administrador só ele mesmo redefine.");
+  if (!(rows[0].modules || []).includes("chamados") && rows[0].role !== "admin") throw erro(403, "Esse usuário não tem acesso aos chamados.");
+  await pool.query("UPDATE users SET password_hash = $2 WHERE id = $1", [rows[0].id, await bcrypt.hash(senha, 10)]);
+  return { ok: true };
+}
+// Bloqueia o acesso aos chamados (não apaga o usuário nem o histórico; criar o acesso de novo reativa).
+async function removerAcesso(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const email = em(b.email);
+  if (email === em(acc.email)) throw erro(400, "Você não pode bloquear o seu próprio acesso.");
+  const { rows } = await pool.query("SELECT id, role FROM users WHERE lower(email) = $1", [email]);
+  if (!rows[0]) throw erro(404, "Usuário não encontrado.");
+  if (rows[0].role === "admin") throw erro(403, "Administradores têm acesso a tudo; não dá para bloqueá-los por aqui.");
+  await pool.query("UPDATE users SET modules = array_remove(modules, 'chamados') WHERE id = $1", [rows[0].id]);
+  await pool.query("UPDATE ch_equipe SET ativo = false WHERE lower(email) = $1", [email]);
+  return { ok: true };
 }
 async function config(acc) {
   const p = await papelDe(acc); exigirDp(p);
@@ -511,4 +613,4 @@ async function indicadores(acc, f = {}) {
       .map((x) => ({ id: x.id, protocolo: x.protocolo, loja_nome: x.loja_nome, assunto_nome: x.assunto_nome, status: x.status, relogio: x.relogio })) };
 }
 
-module.exports = { eu, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
+module.exports = { eu, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
