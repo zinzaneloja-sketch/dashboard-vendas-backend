@@ -747,6 +747,11 @@ const SEED_LOJAS = [["PARK MACEIO","Dimy","Nordeste","AL","Maceio","AV COMENDADO
 
 // Departamentos que atendem as lojas (cada um com equipe, assuntos e e-mail próprios).
 const SEED_DEPARTAMENTOS = [["dp", "DP", 1], ["logistica", "Logística", 2], ["manutencao", "Manutenção", 3]];
+// Almoxarifado (Logística): insumos de uso da loja, que não são mercadoria para venda.
+const SEED_ALMOXARIFADO = [
+  ["Almoxarifado: solicitação de insumos", "Almoxarifado", "Pedido de insumos e materiais de uso da loja: papel higiênico, papel toalha, detergente, sabão, sacos de lixo, copos, material de limpeza, material de escritório e similares. Informe os itens e as quantidades.", 240, 1800, false],
+  ["Almoxarifado: falta ou divergência de insumos recebidos", "Almoxarifado", "Insumos que chegaram faltando, em quantidade diferente do pedido, danificados ou trocados.", 240, 1800, false],
+];
 const SEED_ASSUNTOS_LOGISTICA = [
   // nome, categoria, descricao, SLA 1ª resposta (min úteis), SLA resolução (min úteis; 600 = 1 dia útil), exige colaborador
   ["Falta ou divergência no recebimento", "Recebimento", "Mercadoria recebida diferente da nota ou do romaneio: faltou peça, sobrou peça ou veio item errado.", 240, 1200, false],
@@ -756,6 +761,7 @@ const SEED_ASSUNTOS_LOGISTICA = [
   ["Transferência entre lojas", "Transferência", "Envio ou recebimento de peças entre lojas.", 240, 1800, false],
   ["Atraso ou rastreio de entrega", "Transporte", "Acompanhamento e previsão de chegada de mercadoria em trânsito.", 120, 600, false],
   ["Etiquetas, cabides e embalagens", "Materiais", "Falta de etiquetas, cabides, sacolas ou outros materiais de embalagem.", 240, 1800, false],
+  ...SEED_ALMOXARIFADO,
   ["Outros assuntos de Logística", "Geral", "Qualquer outro assunto de Logística.", 480, 2400, false],
 ];
 const SEED_ASSUNTOS_MANUTENCAO = [
@@ -949,6 +955,23 @@ CREATE INDEX IF NOT EXISTS ch_chamados_dep_idx ON ch_chamados (departamento_id, 
   };
   if (await semearAssuntos("dp", SEED_ASSUNTOS)) console.log("[chamados] Assuntos iniciais do DP criados (edite os prazos no painel).");
   if (await semearAssuntos("logistica", SEED_ASSUNTOS_LOGISTICA)) console.log("[chamados] Assuntos iniciais de Logística criados.");
+  // Almoxarifado entra uma única vez nos bancos que já tinham a Logística (depois disso o gestor edita ou desativa à vontade).
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'seed_almoxarifado'");
+    if (!fl.length) {
+      const { rows: mx } = await pool.query("SELECT coalesce(max(ordem),0)::int AS m FROM ch_assuntos WHERE departamento_id = $1", [depId.logistica]);
+      let ordem = mx[0].m, criados = 0;
+      for (const [nome, cat, desc, r, s2, ex] of SEED_ALMOXARIFADO) {
+        const ins = await pool.query("INSERT INTO ch_assuntos (nome, categoria, descricao, sla_resposta_min, sla_resolucao_min, exige_colaborador, ordem, departamento_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING", [nome, cat, desc, r, s2, ex, ++ordem, depId.logistica]);
+        criados += ins.rowCount;
+      }
+      if (criados) {
+        await pool.query("UPDATE ch_assuntos SET ordem = $2 WHERE departamento_id = $1 AND nome = 'Outros assuntos de Logística'", [depId.logistica, ordem + 1]);
+        console.log("[chamados] Assuntos de Almoxarifado adicionados à Logística.");
+      }
+      await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('seed_almoxarifado','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
   if (await semearAssuntos("manutencao", SEED_ASSUNTOS_MANUTENCAO)) console.log("[chamados] Assuntos iniciais de Manutenção criados.");
   // Lojas: insere as que ainda não existem (pelo nome) e completa os dados de cadastro das que já existem.
   let novas = 0;
