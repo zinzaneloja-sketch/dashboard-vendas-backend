@@ -23,10 +23,15 @@ const {
   loadAccess,
   requireModule,
 } = require("./auth");
+const auth = require("./auth");
 const cd = require("./cd/cd");
 
 const app = express();
-app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
+const seguranca = require("./seguranca");
+app.set("trust proxy", 1); // atrás do proxy do Railway: req.ip passa a ser o IP real do visitante
+app.disable("x-powered-by");
+app.use(seguranca.cabecalhos);
+app.use(seguranca.corsMiddleware()); // CORS_ORIGINS restringe os sites que podem chamar a API (ver seguranca.js)
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 app.use("/api/chamados", express.json({ limit: "10mb" })); // anexos em base64
 const jsonPadrao = express.json();
@@ -59,7 +64,7 @@ function parseGa4DateRanges(req) {
 function handle(fn) {
   return async (req, res) => {
     try {
-      const result = await fn(req);
+      const result = await fn(req, res);
       res.json(result);
     } catch (err) {
       const details = err.response?.data || err.message;
@@ -331,33 +336,21 @@ app.get("/api/debug/sample-product-stock", requireAuth, requireAdmin, handle(asy
 }));
 
 // ---- Autenticação ----
-app.post("/api/auth/login", handle(async (req) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    const err = new Error("Informe email e senha.");
-    err.status = 400;
-    throw err;
-  }
-  const user = await findUserByEmail(email);
-  if (!user) {
-    const err = new Error("Email ou senha inválidos.");
-    err.status = 401;
-    throw err;
-  }
-  const ok = await bcrypt.compare(password, user.password_hash);
-  if (!ok) {
-    const err = new Error("Email ou senha inválidos.");
-    err.status = 401;
-    throw err;
-  }
-  const token = signToken(user);
-  return { token, user: await loadAccess(user.id) };
+app.post("/api/auth/login", handle(async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    return await auth.fazerLogin(email, password, req.ip);
+  } catch (err) { if (err.retryAfter) res.set("Retry-After", String(err.retryAfter)); throw err; }
 }));
+// O próprio usuário troca a senha (também usada na troca obrigatória do primeiro acesso).
+app.post("/api/auth/trocar-senha", requireAuth, handle((req) => auth.trocarSenha(req.user.sub, (req.body || {}).atual, (req.body || {}).nova, req.ip)));
 
 // Perfil sempre lido do banco: se o admin trocar o acesso de alguém, vale na próxima abertura de tela.
 app.get("/api/auth/me", requireAuth, handle(async (req) => {
   const user = await loadAccess(req.user.sub);
   if (!user) { const err = new Error("Usuário não encontrado."); err.status = 401; throw err; }
+  if ((req.user.tv || 0) !== user.token_version) { const err = new Error("Sessão encerrada. Entre novamente."); err.status = 401; throw err; }
+  delete user.token_version;
   return { user };
 }));
 
@@ -580,7 +573,14 @@ app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
     res.send(f.conteudo);
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
-const chamadosAuth = [requireAuth, requireModule("chamados")];
+// Em todo o módulo: guarda o IP no acesso (auditoria) e, enquanto a pessoa não trocar a senha provisória,
+// só libera /eu (para a tela saber que precisa trocar). A troca em si é POST /api/auth/trocar-senha.
+const exigeTrocaSenha = (req, res, next) => {
+  req.access.ip = req.ip;
+  if (req.access.trocar_senha && !/\/api\/chamados\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
+  next();
+};
+const chamadosAuth = [requireAuth, requireModule("chamados"), exigeTrocaSenha];
 // ---- Chamados das lojas para o DP ----
 const chamados = require("./chamados/chamados");
 const CH = "/api/chamados";
@@ -588,6 +588,7 @@ app.get(CH + "/eu", chamadosAuth, handle((req) => chamados.eu(req.access)));
 app.get(CH + "/assuntos", chamadosAuth, handle((req) => chamados.listarAssuntos(req.access, { todos: req.query.todos === "1" })));
 app.post(CH + "/assuntos", chamadosAuth, handle((req) => chamados.salvarAssunto(req.access, null, req.body || {})));
 app.put(CH + "/assuntos/:id", chamadosAuth, handle((req) => chamados.salvarAssunto(req.access, nid(req), req.body || {})));
+app.get(CH + "/auditoria", chamadosAuth, handle((req) => chamados.listarAuditoria(req.access, req.query || {})));
 app.get(CH + "/acessos", chamadosAuth, handle((req) => chamados.listarAcessos(req.access)));
 app.post(CH + "/acessos", chamadosAuth, handle((req) => chamados.criarAcesso(req.access, req.body || {})));
 app.post(CH + "/acessos/senha", chamadosAuth, handle((req) => chamados.redefinirSenhaAcesso(req.access, req.body || {})));
