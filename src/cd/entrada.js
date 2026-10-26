@@ -453,6 +453,24 @@ const MODELOS = { "55": "NF-e", "65": "NFC-e (cupom)", "57": "CT-e (conhecimento
 function dadosChave(c) {
   return { uf_cod: c.slice(0, 2), emissao_ano_mes: "20" + c.slice(2, 4) + "-" + c.slice(4, 6), cnpj: c.slice(6, 20), modelo: c.slice(20, 22), serie: String(parseInt(c.slice(22, 25), 10)), numero: String(parseInt(c.slice(25, 34), 10)) };
 }
+// nome do emitente pelo CNPJ numa base pública (BrasilAPI). Só ajuda a preencher: se falhar ou demorar, segue sem.
+const cnpjCache = new Map();
+async function consultaCnpj(cnpj) {
+  const ach = cnpjCache.get(cnpj);
+  if (ach && Date.now() - ach.t < (ach.v ? 24 * 3600e3 : 10 * 60e3)) return ach.v;
+  let v = null;
+  try {
+    if (typeof fetch === "function") {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3000);
+      try {
+        const r = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { signal: ctl.signal, headers: { accept: "application/json" } });
+        if (r.ok) { const j = await r.json(); const nome = txt(j.razao_social) || txt(j.nome_fantasia); if (nome) v = { nome, uf: txt(j.uf).toUpperCase().slice(0, 2) || null, cidade: txt(j.municipio) || null }; }
+      } finally { clearTimeout(tm); }
+    }
+  } catch (_) { v = null; }
+  cnpjCache.set(cnpj, { t: Date.now(), v });
+  return v;
+}
 // confere a chave (dígito verificador, modelo) e diz o que já existe no sistema com ela: nota na doca, envio, fornecedor conhecido pelo CNPJ
 async function consultaChave(acc, raw) {
   const s = txt(raw).replace(/\s+/g, "");
@@ -469,7 +487,11 @@ async function consultaChave(acc, raw) {
   const { rows: f } = await pool.query(
     `SELECT fornecedor FROM (SELECT fornecedor, criada_em AS t FROM cd_notas WHERE chave_nf IS NOT NULL AND substr(chave_nf, 7, 14) = $1
        UNION ALL SELECT fornecedor, criado_em AS t FROM cd_ent_envios WHERE chave_nf IS NOT NULL AND substr(chave_nf, 7, 14) = $1) x ORDER BY t DESC LIMIT 1`, [d.cnpj]);
-  if (f[0]) out.fornecedor_sugerido = f[0].fornecedor;
+  if (f[0]) { out.fornecedor_sugerido = f[0].fornecedor; out.fornecedor_fonte = "historico"; }
+  if (!out.nota) {
+    const q = await consultaCnpj(d.cnpj);
+    if (q) { if (!out.fornecedor_sugerido) { out.fornecedor_sugerido = q.nome; out.fornecedor_fonte = "cnpj"; } out.origem_uf = q.uf; out.origem_cidade = q.cidade; }
+  }
   if (!out.envio && !out.nota) {
     const p = await achaEnvio(pool, { chave_nf: c, numero_nf: d.numero, serie: d.serie, fornecedor: out.fornecedor_sugerido || "" });
     if (p) { const { rows: pe } = await pool.query("SELECT e.id::int AS id, e.fornecedor, e.status, e.numero_nf, t.nome AS transportadora FROM cd_ent_envios e LEFT JOIN cd_transportadoras t ON t.id = e.transportadora_id WHERE e.id = $1", [p.id]); out.envio_provavel = pe[0] || null; }
