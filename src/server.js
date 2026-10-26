@@ -28,7 +28,7 @@ const cd = require("./cd/cd");
 const app = express();
 app.use(cors()); // o dashboard roda em outro domínio (Artifact/estático), liberamos geral
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
-app.use("/api/chamados", express.json({ limit: "16mb" })); // anexos em base64
+app.use("/api/chamados", express.json({ limit: "10mb" })); // anexos em base64
 const jsonPadrao = express.json();
 app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
