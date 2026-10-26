@@ -3,7 +3,7 @@
 //   RESEND_API_KEY          chave da conta Resend (sem ela os e-mails ficam como "pulado")
 //   CHAMADOS_EMAIL_FROM     remetente no domínio verificado no Resend, ex.: "DP Zinzane <dp@zinzane.com.br>"
 //   CHAMADOS_URL            endereço da página do painel, ex.: https://zinzaneonline.com.br/chamados-zinzane.html
-//   CHAMADOS_DP_EMAIL       (opcional) e-mail(s) do DP separados por vírgula; também dá para cadastrar no painel
+//   CHAMADOS_DP_EMAIL       (opcional) e-mail(s) do departamento DP separados por vírgula; cada departamento também tem os seus e-mails no painel (Cadastros → E-mails)
 const { pool } = require("../db");
 
 const esc = (s) => String(s === undefined || s === null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -37,7 +37,7 @@ function layout(titulo, blocos, link) {
   const texto = [titulo, "", ...blocos.map((b) => b.texto), link ? `\nAbrir no painel: ${link}` : "", "\nPara responder, use o painel de chamados (esta mensagem é só uma cópia para acompanhamento)."].join("\n");
   const html = `<!doctype html><html><body style="margin:0;background:#f4f4f6;font-family:Arial,Helvetica,sans-serif;color:#1d1d1f">
 <div style="max-width:620px;margin:0 auto;padding:20px">
-<div style="font-size:13px;letter-spacing:.2em;font-weight:700;color:#a3274f;margin:0 0 10px">ZINZANE &amp; CO. · CHAMADOS DP</div>
+<div style="font-size:13px;letter-spacing:.2em;font-weight:700;color:#a3274f;margin:0 0 10px">ZINZANE &amp; CO. · CHAMADOS ZINZANE</div>
 <div style="background:#fff;border-radius:14px;padding:22px;border:1px solid #e3e3e8">
 <h2 style="margin:0 0 14px;font-size:18px">${esc(titulo)}</h2>${corpo}
 ${link ? `<p style="margin:20px 0 0"><a href="${esc(link)}" style="background:#a3274f;color:#fff;text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:700;display:inline-block">Abrir no painel</a></p>` : ""}
@@ -50,8 +50,9 @@ const par = (rot, val) => ({ html: `<p style="margin:0 0 8px;font-size:14px"><b>
 const caixa = (rot, val) => ({ html: `<div style="margin:12px 0;padding:12px 14px;background:#f7f7f9;border-left:4px solid #a3274f;border-radius:6px;font-size:14px;line-height:1.5"><div style="font-size:12px;color:#6b6b73;margin-bottom:4px">${esc(rot)}</div>${esc(val).replace(/\n/g, "<br>")}</div>`, texto: `\n${rot}:\n${val}\n` });
 
 const aviso = () => par("Conteúdo", "Por segurança, o texto e os anexos do chamado não vão por e-mail. Abra o painel e entre com o seu login para ler.");
+const depto = (ch) => ch.departamento_nome || "o departamento";
 function dadosChamado(ch) {
-  return [par("Protocolo", ch.protocolo), par("Loja", ch.loja_nome), par("Status", STATUS_ROT[ch.status] || ch.status),
+  return [par("Protocolo", ch.protocolo), par("Departamento", ch.departamento_nome || "—"), par("Loja", ch.loja_nome), par("Status", STATUS_ROT[ch.status] || ch.status),
     ...(ch.prioridade === "urgente" ? [par("Prioridade", "Urgente")] : [])];
 }
 
@@ -64,16 +65,16 @@ function montar(tipo, ch, extra = {}) {
     return { assunto: assunto("Chamado aberto"), ...l };
   }
   if (tipo === "abertura_dp") {
-    const l = layout("Novo chamado de loja", [...dadosChamado(ch), par("Aberto por", ch.aberto_por), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), aviso()], link);
+    const l = layout(`Novo chamado de loja para ${depto(ch)}`, [...dadosChamado(ch), par("Aberto por", ch.aberto_por), par("Prazo da 1ª resposta", fmtMin(ch.sla_resposta_min)), aviso()], link);
     return { assunto: assunto("Novo chamado") + ` · ${ch.loja_nome}`, ...l };
   }
   if (tipo === "resposta_dp") {
     const resolvido = ch.status === "resolvido";
-    const l = layout(resolvido ? "Seu chamado foi resolvido" : "Resposta do DP ao seu chamado", [...dadosChamado(ch), par("Respondido por", extra.autor || "DP"), aviso(),
-      ...(ch.status === "aguardando_loja" ? [par("Atenção", "O DP aguarda a sua resposta no painel para continuar o atendimento.")] : []),
+    const l = layout(resolvido ? "Seu chamado foi resolvido" : `Resposta de ${depto(ch)} ao seu chamado`, [...dadosChamado(ch), par("Respondido por", extra.autor || depto(ch)), aviso(),
+      ...(ch.status === "aguardando_loja" ? [par("Atenção", "O departamento aguarda a sua resposta no painel para continuar o atendimento.")] : []),
       ...(resolvido ? [par("Se não resolveu", "responda pelo painel em até 7 dias que o chamado é reaberto.")] : []),
       ...((extra.anexos || []).length ? [par("Anexos", extra.anexos.length + " arquivo(s) no painel")] : [])], link);
-    return { assunto: assunto(resolvido ? "Resolvido" : "Resposta do DP"), ...l };
+    return { assunto: assunto(resolvido ? "Resolvido" : `Resposta de ${depto(ch)}`), ...l };
   }
   if (tipo === "resposta_loja") {
     const l = layout("A loja respondeu ao chamado", [...dadosChamado(ch), par("Respondido por", extra.autor || ch.loja_nome), aviso(), ...(extra.reaberto ? [par("Atenção", "Chamado reaberto pela loja.")] : []),
@@ -102,15 +103,21 @@ async function chamarResend({ from, to, subject, html, text, replyTo }) {
   } finally { clearTimeout(tm); }
 }
 
-async function destinosDp() {
+// quem é avisado quando chega um chamado de um departamento: os e-mails cadastrados para ele (e, no DP, também CHAMADOS_DP_EMAIL)
+async function destinosDepto(deptId) {
   const out = new Set();
-  const env = String(process.env.CHAMADOS_DP_EMAIL || "").split(/[,;\s]+/).filter(emailValido);
-  env.forEach((e) => out.add(e.toLowerCase()));
   try {
-    const { rows } = await pool.query("SELECT valor FROM ch_config WHERE chave = 'dp_emails'");
-    String((rows[0] && rows[0].valor) || "").split(/[,;\s]+/).filter(emailValido).forEach((e) => out.add(e.toLowerCase()));
+    const { rows } = await pool.query("SELECT codigo, emails FROM ch_departamentos WHERE id = $1", [Number(deptId) || 0]);
+    if (rows[0]) {
+      String(rows[0].emails || "").split(/[,;\s]+/).filter(emailValido).forEach((e) => out.add(e.toLowerCase()));
+      if (rows[0].codigo === "dp") String(process.env.CHAMADOS_DP_EMAIL || "").split(/[,;\s]+/).filter(emailValido).forEach((e) => out.add(e.toLowerCase()));
+    }
   } catch (_) {}
   return [...out];
+}
+const destinosDp = async () => { const { rows } = await pool.query("SELECT id FROM ch_departamentos WHERE codigo = 'dp'"); return rows[0] ? destinosDepto(rows[0].id) : []; };
+async function responderA(chamadoId) {
+  try { const { rows } = await pool.query("SELECT departamento_id FROM ch_chamados WHERE id = $1", [chamadoId]); return rows[0] ? (await destinosDepto(rows[0].departamento_id))[0] : undefined; } catch (_) { return undefined; }
 }
 
 // registra e envia (uma linha em ch_emails por destinatário). Nunca lança.
@@ -122,8 +129,7 @@ async function enviar(chamadoId, tipo, destinos, conteudo) {
     try {
       if (!process.env.RESEND_API_KEY || !from) erro = "E-mail não configurado (RESEND_API_KEY / CHAMADOS_EMAIL_FROM).";
       else {
-        const dp = await destinosDp();
-        provedor_id = await chamarResend({ from, to: [para], subject: conteudo.assunto, html: conteudo.html, text: conteudo.texto, replyTo: dp[0] });
+        provedor_id = await chamarResend({ from, to: [para], subject: conteudo.assunto, html: conteudo.html, text: conteudo.texto, replyTo: await responderA(chamadoId) });
         status = "enviado";
       }
     } catch (e) { status = "falhou"; erro = String(e.message || e).slice(0, 400); console.error("[chamados:email]", erro); }
@@ -139,8 +145,7 @@ async function reenviar(emailId) {
   const from = String(process.env.CHAMADOS_EMAIL_FROM || "").trim();
   if (!process.env.RESEND_API_KEY || !from) { const er = new Error("E-mail não configurado no servidor (RESEND_API_KEY / CHAMADOS_EMAIL_FROM)."); er.status = 409; throw er; }
   try {
-    const dp = await destinosDp();
-    const id = await chamarResend({ from, to: [e.destino], subject: e.assunto, html: e.conteudo_html, text: e.conteudo_texto, replyTo: dp[0] });
+    const id = await chamarResend({ from, to: [e.destino], subject: e.assunto, html: e.conteudo_html, text: e.conteudo_texto, replyTo: await responderA(e.chamado_id) });
     await pool.query("UPDATE ch_emails SET status = 'enviado', erro = NULL, provedor_id = $2, tentativas = tentativas + 1, atualizado_em = now() WHERE id = $1", [emailId, id]);
     return { ok: true, status: "enviado" };
   } catch (err) {
@@ -149,4 +154,4 @@ async function reenviar(emailId) {
   }
 }
 
-module.exports = { montar, enviar, reenviar, destinosDp, emailValido, linkChamado, fmtMin };
+module.exports = { montar, enviar, reenviar, destinosDp, destinosDepto, emailValido, linkChamado, fmtMin };
