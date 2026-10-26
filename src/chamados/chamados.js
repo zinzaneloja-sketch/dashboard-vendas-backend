@@ -6,12 +6,16 @@ const { pool } = require("../db");
 const { minutosUteis, diaLocal, expediente } = require("../cd/tempo");
 const mail = require("./email");
 const auditoria = require("../auditoria");
+const seguranca = require("../seguranca");
 const audit = (acc, acao, o = {}) => auditoria.registrar({ usuario: acc && acc.email, papel: acc && (acc.role === "admin" ? "admin" : acc.papel), acao, ip: acc && acc.ip, ...o });
 
 function erro(status, message, extra) { const e = new Error(message); e.status = status; if (extra) e.extra = extra; return e; }
 const txt = (v) => (v === undefined || v === null ? "" : String(v).trim());
 const em = (v) => txt(v).toLowerCase();
 const REABRE_DIAS = 7;
+// Cancelar chamado é exclusivo do usuário master e exige a senha dele (a mesma do login) a cada cancelamento.
+const emailMaster = () => em(process.env.CHAMADOS_MASTER_EMAIL || "tbarone@zinzane.com.br");
+const ehMaster = (acc) => !!acc && em(acc.email) === emailMaster();
 const ABERTOS = ["aberto", "em_atendimento", "aguardando_loja"];
 const PAUSADOS = ["aguardando_loja", "resolvido"]; // o relógio de resolução não corre enquanto a bola está com a loja
 const STATUS = ["aberto", "em_atendimento", "aguardando_loja", "resolvido", "cancelado"];
@@ -134,7 +138,7 @@ function dispara(fn) { setImmediate(() => { fn().catch((e) => console.error("[ch
 async function eu(acc) {
   const p = await papelDe(acc);
   return { papel: p.papel, nome: p.nome, email: p.email, loja: p.loja ? { id: Number(p.loja.id), nome: p.loja.nome, codigo: p.loja.codigo } : null,
-    expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, reabertura_dias: REABRE_DIAS, email_configurado: !!(process.env.RESEND_API_KEY && process.env.CHAMADOS_EMAIL_FROM), trocar_senha: !!acc.trocar_senha };
+    expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, reabertura_dias: REABRE_DIAS, email_configurado: !!(process.env.RESEND_API_KEY && process.env.CHAMADOS_EMAIL_FROM), trocar_senha: !!acc.trocar_senha, pode_cancelar: ehMaster(acc) };
 }
 
 async function listarAssuntos(acc, { todos } = {}) {
@@ -526,15 +530,28 @@ async function assumir(acc, id, b = {}) {
 }
 
 async function cancelar(acc, id, b = {}) {
+  if (!ehMaster(acc)) { await audit(acc, "cancelar_negado", { chamado_id: id }); throw erro(403, "Só o usuário master pode cancelar chamados."); }
   const p = await papelDe(acc);
   const motivo = txt(b.motivo).slice(0, 400);
   if (!motivo) throw erro(400, "Diga o motivo do cancelamento.");
+  // confere a senha do master (limite de tentativas, igual ao login)
+  const ip = acc.ip || "", chave = "cancelar:" + emailMaster();
+  const espera = seguranca.esperaLogin(ip, chave);
+  if (espera) throw seguranca.erroBloqueio(espera);
+  const { rows: us } = await pool.query("SELECT password_hash FROM users WHERE lower(email) = $1", [emailMaster()]);
+  const certa = us[0] && b.senha && (await bcrypt.compare(String(b.senha), us[0].password_hash));
+  if (!certa) {
+    const bloqueou = seguranca.falhaLogin(ip, chave);
+    await audit(acc, "cancelar_senha_errada", { chamado_id: id, detalhe: bloqueou ? "bloqueado por tentativas" : null });
+    throw erro(403, "Senha incorreta.", { codigo: "senha_cancelamento" });
+  }
+  seguranca.sucessoLogin(ip, chave);
   const ch = await comTransacao(async (c) => {
     const ch = await carregar(c, id, true);
     if (!podeVer(p, ch)) throw erro(403, "Esse chamado é de outra loja.");
-    if (p.papel === "loja" && ch.primeira_resposta_em) throw erro(409, "O DP já respondeu esse chamado. Responda nele para encerrar com o DP.");
     if (["resolvido", "cancelado"].includes(ch.status)) throw erro(409, "Esse chamado já está encerrado.");
     await mudarStatus(c, ch, "cancelado", p.email, { motivo });
+    await audit(acc, "chamado_cancelado", { chamado_id: id, detalhe: ch.protocolo });
     await c.query("INSERT INTO ch_mensagens (chamado_id, autor_email, autor_nome, autor_tipo, texto) VALUES ($1,$2,$3,$4,$5)", [id, p.email, p.nome, p.papel === "loja" ? "loja" : "dp", "Chamado cancelado. Motivo: " + motivo]);
     return carregar(c, id, false);
   });
@@ -553,7 +570,7 @@ async function baixarAnexo(acc, id) {
 }
 
 const ACOES_AUDIT = { login: "Entrou", login_falhou: "Login com senha errada", login_bloqueado: "Login bloqueado (tentativas)", senha_alterada: "Trocou a própria senha", senha_redefinida: "Senha redefinida pelo gestor",
-  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo", exportar_indicadores: "Exportou relatório" };
+  acesso_criado: "Acesso criado", acesso_liberado: "Acesso liberado/reativado", acesso_bloqueado: "Acesso bloqueado", ver_chamado: "Abriu o chamado", baixar_anexo: "Baixou anexo", exportar_indicadores: "Exportou relatório", chamado_cancelado: "Cancelou chamado", cancelar_negado: "Tentou cancelar (sem permissão)", cancelar_senha_errada: "Senha errada ao cancelar" };
 async function listarAuditoria(acc, f = {}) {
   const p = await papelDe(acc); exigirGestor(p);
   const w = [], v = []; const add = (x) => { v.push(x); return "$" + v.length; };
