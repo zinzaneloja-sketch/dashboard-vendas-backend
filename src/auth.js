@@ -9,7 +9,7 @@ const auditoria = require("./auditoria");
 // os demais seguem como antes (30 dias). Ajustáveis por variável de ambiente.
 const TTL_PADRAO = process.env.AUTH_TOKEN_TTL || "30d";
 const TTL_CHAMADOS = process.env.AUTH_TOKEN_TTL_CHAMADOS || "12h";
-const ttlPara = (u) => (u && (u.role === "admin" || (u.modules || []).includes("chamados")) ? TTL_CHAMADOS : TTL_PADRAO);
+const ttlPara = (u) => (u && (u.role === "admin" || (u.modules || []).includes("chamados") || (u.modules || []).includes("admissao")) ? TTL_CHAMADOS : TTL_PADRAO);
 
 if (!JWT_SECRET) {
   if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT) {
@@ -35,7 +35,7 @@ async function findUserByEmail(email) {
   return rows[0] || null;
 }
 
-const MODULES = ["vendas", "cd", "chamados"];
+const MODULES = ["vendas", "cd", "chamados", "admissao"];
 // Cada etapa do CD é uma mesa (um login por etapa). "gestor" é o consolidado: enxerga tudo.
 const CD_PERFIS = ["recebimento", "separacao", "contagem", "referencia", "etiquetas", "pedido", "entrada", "checkout", "confronto", "distribuicao", "picking", "faturamento", "gestor"];
 // Perfis agrupados do modelo antigo: viram as mesas equivalentes (ninguém perde acesso).
@@ -169,7 +169,7 @@ async function fazerLogin(email, password, ip) {
   }
   seg.sucessoLogin(ip, email);
   const acc = await loadAccess(user.id);
-  if (acc.role === "admin" || acc.modules.includes("chamados")) auditoria.registrar({ usuario: acc.email, acao: "login", ip });
+  if (acc.role === "admin" || acc.modules.includes("chamados") || acc.modules.includes("admissao")) auditoria.registrar({ usuario: acc.email, acao: "login", ip });
   return { token: signToken(user), user: acc };
 }
 
