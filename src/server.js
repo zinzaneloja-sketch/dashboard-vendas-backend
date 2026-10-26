@@ -585,7 +585,7 @@ const chamadosAuth = [requireAuth, requireModule("chamados"), exigeTrocaSenha];
 const chamados = require("./chamados/chamados");
 const CH = "/api/chamados";
 app.get(CH + "/eu", chamadosAuth, handle((req) => chamados.eu(req.access)));
-app.get(CH + "/assuntos", chamadosAuth, handle((req) => chamados.listarAssuntos(req.access, { todos: req.query.todos === "1" })));
+app.get(CH + "/assuntos", chamadosAuth, handle((req) => chamados.listarAssuntos(req.access, { todos: req.query.todos === "1", departamento_id: req.query.departamento_id })));
 app.post(CH + "/assuntos", chamadosAuth, handle((req) => chamados.salvarAssunto(req.access, null, req.body || {})));
 app.put(CH + "/assuntos/:id", chamadosAuth, handle((req) => chamados.salvarAssunto(req.access, nid(req), req.body || {})));
 app.get(CH + "/auditoria", chamadosAuth, handle((req) => chamados.listarAuditoria(req.access, req.query || {})));
