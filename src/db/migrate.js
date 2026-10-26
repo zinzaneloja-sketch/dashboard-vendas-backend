@@ -778,6 +778,25 @@ ALTER TABLE ch_lojas ADD COLUMN IF NOT EXISTS uf TEXT;
 ALTER TABLE ch_lojas ADD COLUMN IF NOT EXISTS cidade TEXT;
 ALTER TABLE ch_lojas ADD COLUMN IF NOT EXISTS endereco TEXT;
 ALTER TABLE ch_lojas ADD COLUMN IF NOT EXISTS cep TEXT;
+-- Segurança de acesso: troca de senha obrigatória, encerramento de sessões e auditoria.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS trocar_senha BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS senha_alterada_em TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS ch_auditoria (
+  id          BIGSERIAL PRIMARY KEY,
+  quando      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  usuario     TEXT,
+  papel       TEXT,
+  acao        TEXT NOT NULL,
+  chamado_id  BIGINT,
+  anexo_id    BIGINT,
+  alvo        TEXT,
+  detalhe     TEXT,
+  ip          TEXT
+);
+CREATE INDEX IF NOT EXISTS ch_auditoria_quando_idx ON ch_auditoria (quando DESC);
+CREATE INDEX IF NOT EXISTS ch_auditoria_chamado_idx ON ch_auditoria (chamado_id);
+CREATE INDEX IF NOT EXISTS ch_auditoria_usuario_idx ON ch_auditoria (lower(usuario));
 CREATE TABLE IF NOT EXISTS ch_equipe (
   id         BIGSERIAL PRIMARY KEY,
   email      TEXT NOT NULL,
