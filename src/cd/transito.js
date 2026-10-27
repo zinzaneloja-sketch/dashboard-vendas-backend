@@ -160,22 +160,29 @@ async function cotarCom(db, t, nf, modal = "rodoviario") {
   const base = { transportadora_id: Number(t.id), nome: t.nome, prazo_corridos: t.prazo_corridos, modal };
   if (!nf.destino_uf) return { ...base, ok: false, motivo: "Informe a UF do destino." };
   if (nf.peso_kg === null || nf.peso_kg === undefined || Number(nf.peso_kg) <= 0) return { ...base, ok: false, motivo: "Informe o peso da NF." };
-  const row = await linhaDaTabela(db, t.id, nf.destino_uf, nf.destino_cidade, Number(nf.peso_kg), modal);
-  if (!row) return { ...base, ok: false, motivo: `Sem faixa na tabela${modal === "aereo" ? " aérea" : ""} para ${nf.destino_uf}${nf.destino_cidade ? " / " + nf.destino_cidade : ""} com ${Number(nf.peso_kg)} kg.` };
-  const c = calcFrete(row, nf.peso_kg, nf.valor);
+  // cubagem: a transportadora cobra pelo maior entre o peso real e o peso cubado (m³ x fator do modal)
+  let fatorT = t.fator_cub_rod, fatorA = t.fator_cub_aereo;
+  if (fatorT === undefined || fatorA === undefined) { const { rows: ft } = await db.query("SELECT fator_cub_rod, fator_cub_aereo FROM cd_transportadoras WHERE id = $1", [t.id]); fatorT = ft[0] ? ft[0].fator_cub_rod : null; fatorA = ft[0] ? ft[0].fator_cub_aereo : null; }
+  const fator = Number(modal === "aereo" ? fatorA : fatorT) || (modal === "aereo" ? FATOR_AEREO : FATOR_RODOVIARIO);
+  const pesoReal = Number(nf.peso_kg), m3 = Number(nf.cubagem_m3) > 0 ? Number(nf.cubagem_m3) : 0;
+  const pesoCubado = m3 > 0 ? Math.round(m3 * fator * 100) / 100 : 0, pesoTaxado = Math.max(pesoReal, pesoCubado);
+  const cub = { peso_real: pesoReal, cubagem_m3: m3 || null, fator_cubagem: m3 > 0 ? fator : null, peso_cubado: m3 > 0 ? pesoCubado : null, peso_taxado: pesoTaxado, cobrado_por: m3 > 0 && pesoCubado > pesoReal ? "cubagem" : "peso real" };
+  const row = await linhaDaTabela(db, t.id, nf.destino_uf, nf.destino_cidade, pesoTaxado, modal);
+  if (!row) return { ...base, ...cub, ok: false, motivo: `Sem faixa na tabela${modal === "aereo" ? " aérea" : ""} para ${nf.destino_uf}${nf.destino_cidade ? " / " + nf.destino_cidade : ""} com ${pesoTaxado} kg${cub.cobrado_por === "cubagem" ? " (peso cubado)" : ""}.` };
+  const c = calcFrete(row, pesoTaxado, nf.valor);
   // prazo: o cadastrado por UF/cidade vence o da tabela de frete; sem nenhum dos dois, vale o prazo padrão da transportadora
   const cad = modal === "rodoviario" ? await prazoCadastrado(db, t.id, nf.destino_uf, nf.destino_cidade) : null; // os prazos cadastrados por UF/cidade valem para o rodoviário
   let prazo = null, origem = null;
   if (cad) { prazo = cad.prazo; origem = cad.origem; }
   else if (row.prazo_dias !== null && row.prazo_dias !== undefined) { prazo = Number(row.prazo_dias); origem = "tabela de frete"; }
   else if (modal === "rodoviario") { const pp = t.prazo_padrao !== undefined ? t.prazo_padrao : (await db.query("SELECT prazo_padrao FROM cd_transportadoras WHERE id = $1", [t.id])).rows[0]?.prazo_padrao; if (pp !== null && pp !== undefined) { prazo = Number(pp); origem = "prazo padrão"; } }
-  const out = { ...base, ok: true, frete: c.total, memoria: c, prazo_dias: prazo, prazo_origem: origem, prazo_efetivo: prazo === null ? null : (t.prazo_corridos ? prazo : Math.round(prazo * 1.4 * 10) / 10), cidade_regra: row.cidade || null };
+  const out = { ...base, ...cub, ok: true, frete: c.total, memoria: c, prazo_dias: prazo, prazo_origem: origem, prazo_efetivo: prazo === null ? null : (t.prazo_corridos ? prazo : Math.round(prazo * 1.4 * 10) / 10), cidade_regra: row.cidade || null };
   if (nf.valor === null || nf.valor === undefined) out.aviso = "NF sem valor: ad valorem e GRIS não entraram.";
   return out;
 }
 
 async function cotacoes(db, nf, opts = {}) {
-  const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE ativa ORDER BY nome");
+  const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao, fator_cub_rod, fator_cub_aereo FROM cd_transportadoras WHERE ativa ORDER BY nome");
   const out = [];
   for (const t of ts) {
     const modais = await modaisDaTransp(db, t.id);
@@ -210,7 +217,7 @@ async function cotacoes(db, nf, opts = {}) {
 async function listarTransportadoras(acc) {
   exigirFat(acc);
   const { rows } = await pool.query(
-    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.pag_ciclo, t.pag_base, t.pag_fecha_dow, t.pag_dias, t.pag_dia_fixo, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
+    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.fator_cub_rod::float AS fator_cub_rod, t.fator_cub_aereo::float AS fator_cub_aereo, t.pag_ciclo, t.pag_base, t.pag_fecha_dow, t.pag_dias, t.pag_dia_fixo, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
             (SELECT count(*)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS linhas,
             (SELECT count(DISTINCT uf)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS ufs,
             (SELECT count(*)::int FROM cd_transportadora_prazos p WHERE p.transportadora_id = t.id) AS prazos,
@@ -261,6 +268,8 @@ async function salvarTransportadora(acc, id, b = {}) {
   const ppn = b.prazo_padrao === undefined || b.prazo_padrao === null || txt(b.prazo_padrao) === "" ? null : numBR(b.prazo_padrao);
   if (ppn !== null && (ppn < 0 || ppn > 120 || Math.round(ppn) !== ppn)) throw erro(400, "O prazo padrão deve ser um número inteiro de dias (0 a 120).");
   const pp = ppn;
+  const fator = (k, padrao) => { if (b[k] === undefined || b[k] === null || txt(b[k]) === "") return null; const v = numBR(b[k]); if (v === null || v < 50 || v > 1000) throw erro(400, "O fator de cubagem (" + (k === "fator_cub_aereo" ? "aéreo" : "rodoviário") + ") deve ficar entre 50 e 1000 kg por m³ (padrão " + padrao + ")."); return v; };
+  const fRod = fator("fator_cub_rod", FATOR_RODOVIARIO), fAer = fator("fator_cub_aereo", FATOR_AEREO);
   let pg = lerPagamento(b);
   if (id && !["pag_ciclo", "pag_base", "pag_fecha_dow", "pag_dias", "pag_dia_fixo"].some((k) => b[k] !== undefined)) { // chamada antiga, sem os campos: mantém o que já está salvo
     const { rows: at } = await pool.query("SELECT pag_ciclo, pag_base, pag_fecha_dow AS dow, pag_dias AS dias, pag_dia_fixo AS dia_fixo FROM cd_transportadoras WHERE id = $1", [id]);
@@ -268,12 +277,12 @@ async function salvarTransportadora(acc, id, b = {}) {
   }
   try {
     if (id) {
-      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6, pag_ciclo = $7, pag_base = $8, pag_fecha_dow = $9, pag_dias = $10, pag_dia_fixo = $11 WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo]);
+      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6, pag_ciclo = $7, pag_base = $8, pag_fecha_dow = $9, pag_dias = $10, pag_dia_fixo = $11, fator_cub_rod = COALESCE($12, fator_cub_rod), fator_cub_aereo = COALESCE($13, fator_cub_aereo) WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo, fRod, fAer]);
       if (!rows[0]) throw erro(404, "Transportadora não encontrada.");
       const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
       return { ok: true, id: Number(id), vinculadas: rl.vinculadas };
     }
-    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao, pag_ciclo, pag_base, pag_fecha_dow, pag_dias, pag_dia_fixo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo]);
+    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao, pag_ciclo, pag_base, pag_fecha_dow, pag_dias, pag_dia_fixo, fator_cub_rod, fator_cub_aereo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, 300),COALESCE($11, 167)) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo, fRod, fAer]);
     const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
     return { ok: true, id: Number(rows[0].id), vinculadas: rl.vinculadas };
   } catch (e) {
@@ -282,6 +291,7 @@ async function salvarTransportadora(acc, id, b = {}) {
   }
 }
 
+const FATOR_RODOVIARIO = 300, FATOR_AEREO = 167; // kg por m³ quando a transportadora não tem fator próprio
 const UFS = new Set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split(" "));
 // rows: [{uf, cidade, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias, [transportadora]}]
 // A importação SUBSTITUI a tabela do(s) modal(is) importado(s) (rodoviário e aéreo são tabelas separadas; a nova vira a vigente).
@@ -345,8 +355,9 @@ async function limparTabela(acc, transportadoraId, { modal } = {}) {
 
 async function simular(acc, b = {}) {
   exigirFat(acc);
-  const nf = { destino_uf: txt(b.uf).toUpperCase(), destino_cidade: txt(b.cidade), peso_kg: numBR(b.peso), valor: numBR(b.valor) };
+  const nf = { destino_uf: txt(b.uf).toUpperCase(), destino_cidade: txt(b.cidade), peso_kg: numBR(b.peso), valor: numBR(b.valor), cubagem_m3: numBR(b.cubagem) };
   if (!UFS.has(nf.destino_uf)) throw erro(400, "Informe a UF do destino.");
+  if (nf.cubagem_m3 !== null && (nf.cubagem_m3 < 0 || nf.cubagem_m3 > 500)) throw erro(400, "A cubagem deve ser em m³ (entre 0 e 500).");
   return { cotacoes: await cotacoes(pool, nf, opcoesBid(b)), bid: opcoesBid(b) };
 }
 
@@ -359,14 +370,15 @@ async function simularLote(acc, b = {}) {
   const bid = opcoesBid(b);
   const { rows: ts } = await pool.query("SELECT id::int AS id, nome, prazo_corridos FROM cd_transportadoras WHERE ativa ORDER BY nome");
   const cache = new Map();
-  const itens = linhas.map((l, i) => ({ linha: i + 1, ref: txt(l.ref).slice(0, 80), uf: txt(l.uf).toUpperCase(), cidade: txt(l.cidade).slice(0, 120), peso: numBR(l.peso), valor: numBR(l.valor), volumes: l.volumes === undefined || l.volumes === null || l.volumes === "" ? null : numBR(l.volumes) }));
+  const itens = linhas.map((l, i) => ({ linha: i + 1, ref: txt(l.ref).slice(0, 80), uf: txt(l.uf).toUpperCase(), cidade: txt(l.cidade).slice(0, 120), peso: numBR(l.peso), valor: numBR(l.valor), cubagem: numBR(l.cubagem), volumes: l.volumes === undefined || l.volumes === null || l.volumes === "" ? null : numBR(l.volumes) }));
   async function cota(it) {
     if (!UFS.has(it.uf)) { it.erro = `UF inválida: "${it.uf || "vazia"}"`; return; }
     if (!(it.peso > 0)) { it.erro = "Peso inválido ou vazio."; return; }
-    const k = [it.uf, semAcento(it.cidade), it.peso, it.valor ?? ""].join("|");
+    if (it.cubagem !== null && (it.cubagem < 0 || it.cubagem > 500)) { it.erro = "Cubagem inválida (use m³)."; return; }
+    const k = [it.uf, semAcento(it.cidade), it.peso, it.valor ?? "", it.cubagem ?? ""].join("|");
     let r = cache.get(k);
     if (!r) {
-      const cots = await cotacoes(pool, { destino_uf: it.uf, destino_cidade: it.cidade, peso_kg: it.peso, valor: it.valor }, bid);
+      const cots = await cotacoes(pool, { destino_uf: it.uf, destino_cidade: it.cidade, peso_kg: it.peso, valor: it.valor, cubagem_m3: it.cubagem }, bid);
       const pick = (x) => (x ? { id: x.transportadora_id, nome: x.nome, modal: x.modal, frete: x.frete, prazo_dias: x.prazo_dias, prazo_corridos: x.prazo_corridos } : null);
       const umaPorTransp = []; const vistos = new Set();
       cots.slice().sort((a, z) => (z.ok - a.ok) || ((a.frete ?? 1e12) - (z.frete ?? 1e12))).forEach((x) => { if (!vistos.has(x.transportadora_id)) { vistos.add(x.transportadora_id); umaPorTransp.push(x); } });
@@ -431,7 +443,7 @@ async function salvarPrazos(acc, id, b = {}) {
 
 // ---------- NFs de saída ----------
 const COLS_LISTA = `n.id::int AS id, n.tipo, n.arquivo_nome, n.numero, n.serie, n.chave, n.emitida_em, n.destino_nome, n.destino_cnpj, n.destino_uf, n.destino_cidade, n.destino_cep,
-  n.volumes, n.peso_kg::float AS peso_kg, n.valor::float AS valor, n.pecas, n.transportadora_xml, n.transportadora_cnpj, n.transportadora_id::int AS transportadora_id, t.nome AS transportadora, t.prazo_corridos,
+  n.volumes, n.peso_kg::float AS peso_kg, n.cubagem_m3::float AS cubagem_m3, n.valor::float AS valor, n.pecas, n.transportadora_xml, n.transportadora_cnpj, n.transportadora_id::int AS transportadora_id, t.nome AS transportadora, t.prazo_corridos,
   n.frete_previsto::float AS frete_previsto, n.frete_real::float AS frete_real, n.prazo_dias, n.prazo_manual, n.modal, n.status, n.coleta_data, n.previsao_entrega, n.entregue_data, n.entregue_por, n.recebido_por, n.obs, n.enviada_por, n.enviada_em`;
 
 // situação calculada: aguardando coleta, no prazo, vence hoje, atrasada, entregue (no prazo ou atrasada)
@@ -609,7 +621,7 @@ async function recalcular(db, id) {
   const n = rows[0]; if (!n) return null;
   let frete = null, prazo = n.prazo_manual ? n.prazo_dias : null, aviso = null, modal = n.modal || "rodoviario";
   if (n.transportadora_id) {
-    const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
+    const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao, fator_cub_rod, fator_cub_aereo FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
     // a transportadora não tem tabela desse modal: usa o rodoviário (ou o único que ela tem)
     const mds = await modaisDaTransp(db, n.transportadora_id);
     if (mds.length && !mds.includes(modal)) modal = mds.includes("rodoviario") ? "rodoviario" : mds[0];
@@ -773,7 +785,7 @@ async function enviarNf(acc, b = {}) {
   });
 }
 
-const EDITAVEIS = { numero: "txt", serie: "txt", destino_nome: "txt", destino_cnpj: "txt", destino_uf: "uf", destino_cidade: "txt", destino_cep: "txt", volumes: "int", peso_kg: "num", valor: "num", pecas: "int", obs: "txt", frete_real: "num", prazo_dias: "int" };
+const EDITAVEIS = { numero: "txt", serie: "txt", destino_nome: "txt", destino_cnpj: "txt", destino_uf: "uf", destino_cidade: "txt", destino_cep: "txt", volumes: "int", peso_kg: "num", cubagem_m3: "num", valor: "num", pecas: "int", obs: "txt", frete_real: "num", prazo_dias: "int" };
 async function editarNf(acc, id, b = {}) {
   exigirFat(acc);
   return comTransacao(async (c) => {
@@ -794,7 +806,7 @@ async function editarNf(acc, id, b = {}) {
       if (atual === v) continue;
       vals.push(v); sets.push(`${k} = $${vals.length}`);
       mud.push({ campo: k, de: atual, para: v });
-      if (["destino_uf", "destino_cidade", "peso_kg", "valor", "prazo_dias"].includes(k)) recalc = true;
+      if (["destino_uf", "destino_cidade", "peso_kg", "cubagem_m3", "valor", "prazo_dias"].includes(k)) recalc = true;
     }
     if (b.transportadora_id !== undefined) {
       const tid = b.transportadora_id ? Number(b.transportadora_id) : null;
