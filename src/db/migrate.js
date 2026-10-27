@@ -990,16 +990,21 @@ CREATE INDEX IF NOT EXISTS ch_chamados_dep_idx ON ch_chamados (departamento_id, 
 
 // ---------- Admissão e Rescisão ----------
 // nome, descrição, área, prazo (minutos úteis; 600 = 1 dia útil)
+// Admissão: fluxo do manual do DP (aprovação da GO, pré-admissão, validações com devolução, exame, contrato e boas-vindas).
+// acao: normal | aprovacao (GO aprova ou reprova a vaga) | validacao (RH aprova ou devolve para correção) | aso (resultado apto ou inapto)
+// externo: o tempo da etapa conta como "fora do RH" (GO, loja, candidato, clínica).
+const SEED_ETAPAS_ADM_V2 = [
+  { nome: "Aprovação da vaga e da faixa salarial", desc: "A GO aprova ou reprova a abertura da vaga e a faixa salarial vinculada. Se reprovar, o processo é encerrado com justificativa.", area: "GO", prazo: 600, acao: "aprovacao", externo: true, msg: "vaga_reprovada" },
+  { nome: "Pré-admissão: documentos enviados pelo gerente", desc: "O gerente preenche o Link 1 (pré-admissão) e anexa os documentos iniciais. Antes de concluir, informe o nome do candidato e a data de início.", area: "Loja", prazo: 1200, externo: true, exige: true, msg: "link_pre" },
+  { nome: "Validação dos documentos da pré-admissão", desc: "O RH confere os documentos. Se estiver incorreto ou incompleto, devolva para a loja corrigir; a etapa anterior reabre.", area: "RH", prazo: 300, acao: "validacao", msg: "correcao" },
+  { nome: "Admissão: documentos enviados pelo candidato", desc: "O candidato preenche o Link 2 (admissão) e anexa os documentos.", area: "Candidato", prazo: 1200, externo: true, msg: "link_adm" },
+  { nome: "Validação dos documentos da admissão", desc: "O RH confere os documentos do candidato. Se estiver incorreto ou incompleto, devolva; a etapa anterior reabre.", area: "RH", prazo: 300, acao: "validacao", msg: "correcao" },
+  { nome: "Exame admissional: pedido à clínica", desc: "Com os documentos aprovados, o RH abre o pedido do exame admissional na clínica parceira.", area: "RH", prazo: 300, msg: "aso_pedido" },
+  { nome: "Exame admissional: retorno da clínica (ASO)", desc: "A clínica realiza o exame e devolve o ASO. Registre o resultado: apto segue; inapto encerra o processo.", area: "Clínica", prazo: 1200, acao: "aso", externo: true },
+  { nome: "Contrato: envio e assinatura", desc: "Conferência dos documentos finais, envio do contrato para assinatura e confirmação de que foi assinado.", area: "RH", prazo: 600, msg: "contrato", sub: ["Documentos finais conferidos", "Contrato enviado para assinatura", "Assinatura confirmada"] },
+  { nome: "Ponto digital, boas-vindas e aviso à loja", desc: "Liberação do ponto digital, mensagem oficial de boas-vindas com a data de início e comunicado à loja.", area: "RH", prazo: 300, msg: "boas_vindas", sub: ["Acesso ao ponto digital liberado", "Boas-vindas enviada ao colaborador, com a data de início", "Loja avisada do início do colaborador"] },
+];
 const SEED_ETAPAS_ADM = {
-  admissao: [
-    ["Solicitação recebida e validada", "Vaga aprovada e dados do candidato, cargo, local, horário e data de início confirmados.", "Gestor / DP", 300],
-    ["Documentos do candidato recebidos e conferidos", "Documentos pessoais, dados bancários, dependentes e demais documentos exigidos.", "DP", 1800],
-    ["Exame admissional (ASO)", "Exame agendado, realizado e atestado de saúde ocupacional recebido.", "Saúde ocupacional", 1800],
-    ["Cadastro na folha e registro no eSocial", "Cadastro do colaborador na folha e envio do registro ao eSocial antes do início das atividades.", "DP", 600],
-    ["Contrato e documentos assinados", "Contrato de trabalho e termos assinados pelo colaborador.", "DP", 600],
-    ["Benefícios e ponto", "Vale-transporte, vale-alimentação ou refeição, plano de saúde e cadastro no ponto.", "DP", 600],
-    ["Integração, uniforme e acessos", "Integração, entrega de uniforme e liberação de acessos e sistemas.", "Loja / DP", 600],
-  ],
   rescisao: [
     ["Comunicação recebida e motivo validado", "Pedido de demissão ou dispensa, tipo de rescisão, aviso prévio e data do término do contrato.", "Gestor / DP", 300],
     ["Exame demissional (ASO)", "Exame demissional agendado e realizado.", "Saúde ocupacional", 1200],
@@ -1046,15 +1051,66 @@ async function migrarAdmissao() {
       tipo TEXT NOT NULL, usuario TEXT, detalhe JSONB, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
     CREATE INDEX IF NOT EXISTS adm_eventos_proc_idx ON adm_eventos (processo_id, criado_em);
   `);
-  // etapas sugeridas: só entram quando o tipo ainda não tem nenhuma (depois o gestor edita à vontade)
+  // fluxo do manual do DP (v2): tipo de ação da etapa, quem segura o tempo, checklist, voltas, devoluções, desfecho, perfil GO
+  await pool.query(`
+    ALTER TABLE adm_equipe DROP CONSTRAINT IF EXISTS adm_equipe_papel_check;
+    ALTER TABLE adm_equipe ADD CONSTRAINT adm_equipe_papel_check CHECK (papel IN ('analista','gestor','go'));
+    ALTER TABLE adm_processos ALTER COLUMN data_prevista DROP NOT NULL;
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS desfecho TEXT;
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS solicitante TEXT;
+    ALTER TABLE adm_etapas_modelo ADD COLUMN IF NOT EXISTS acao TEXT NOT NULL DEFAULT 'normal';
+    ALTER TABLE adm_etapas_modelo ADD COLUMN IF NOT EXISTS externo BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE adm_etapas_modelo ADD COLUMN IF NOT EXISTS exige_candidato BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE adm_etapas_modelo ADD COLUMN IF NOT EXISTS subtarefas JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE adm_etapas_modelo ADD COLUMN IF NOT EXISTS mensagem TEXT;
+    ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS acao TEXT NOT NULL DEFAULT 'normal';
+    ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS externo BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS exige_candidato BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS subtarefas JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS mensagem TEXT;
+    CREATE TABLE IF NOT EXISTS adm_passagens (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE,
+      etapa_id BIGINT NOT NULL REFERENCES adm_proc_etapas(id) ON DELETE CASCADE, inicio TIMESTAMPTZ NOT NULL, fim TIMESTAMPTZ);
+    CREATE INDEX IF NOT EXISTS adm_passagens_proc_idx ON adm_passagens (processo_id);
+    CREATE INDEX IF NOT EXISTS adm_passagens_etapa_idx ON adm_passagens (etapa_id);
+    CREATE TABLE IF NOT EXISTS adm_devolucoes (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE,
+      etapa_validacao_id BIGINT, etapa_destino_id BIGINT, etapa_nome TEXT, motivo_cat TEXT NOT NULL, detalhe TEXT, usuario TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS adm_devolucoes_proc_idx ON adm_devolucoes (processo_id);
+  `);
+  // cada etapa guarda quanto tempo o processo ficou nela (uma "passagem" por vez que a etapa fica ativa); processos antigos ganham o histórico calculado
+  await pool.query(`
+    INSERT INTO adm_passagens (processo_id, etapa_id, inicio, fim)
+    SELECT e.processo_id, e.id, COALESCE(LAG(e.concluida_em) OVER (PARTITION BY e.processo_id ORDER BY e.ordem, e.id), p.criado_em),
+           CASE WHEN e.status <> 'pendente' THEN e.concluida_em WHEN p.status = 'cancelado' THEN p.atualizado_em ELSE NULL END
+    FROM adm_proc_etapas e JOIN adm_processos p ON p.id = e.processo_id
+    WHERE NOT EXISTS (SELECT 1 FROM adm_passagens x WHERE x.processo_id = e.processo_id)
+      AND (e.status <> 'pendente' OR e.id = (SELECT z.id FROM adm_proc_etapas z WHERE z.processo_id = e.processo_id AND z.status = 'pendente' ORDER BY z.ordem, z.id LIMIT 1))`);
+  async function inserirEtapaAdm(tipo, ordem, x) {
+    await pool.query(`INSERT INTO adm_etapas_modelo (tipo, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11) ON CONFLICT DO NOTHING`,
+      [tipo, x.nome, x.desc, x.area, x.prazo, ordem, x.acao || "normal", !!x.externo, !!x.exige, JSON.stringify(x.sub || []), x.msg || null]);
+  }
+  // rescisão: etapas sugeridas só entram quando o tipo ainda não tem nenhuma (depois o gestor edita à vontade)
   for (const tipo of Object.keys(SEED_ETAPAS_ADM)) {
     const { rows } = await pool.query("SELECT count(*)::int AS n FROM adm_etapas_modelo WHERE tipo = $1", [tipo]);
     if (rows[0].n) continue;
     let ordem = 0;
-    for (const [nome, desc, area, prazo] of SEED_ETAPAS_ADM[tipo]) {
-      await pool.query("INSERT INTO adm_etapas_modelo (tipo, nome, descricao, area, prazo_min, ordem) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING", [tipo, nome, desc, area, prazo, ++ordem]);
-    }
+    for (const [nome, desc, area, prazo] of SEED_ETAPAS_ADM[tipo]) await inserirEtapaAdm(tipo, ++ordem, { nome, desc, area, prazo, externo: /cl[ií]nica|sa[uú]de/i.test(area) });
     console.log("[admissao] Etapas iniciais de " + tipo + " criadas (edite os prazos no painel).");
+  }
+  // admissão: o fluxo do manual entra uma única vez; as etapas da primeira versão ficam inativas (processos já abertos mantêm as suas)
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'fluxo_manual_v1'");
+    if (!fl.length) {
+      await pool.query("UPDATE adm_etapas_modelo SET ativo = false WHERE tipo = 'admissao'");
+      await pool.query("DELETE FROM adm_config WHERE chave = 'sla_total_admissao'");
+      await pool.query("UPDATE adm_etapas_modelo SET externo = true WHERE area ~* '(cl[ií]nica|sa[uú]de)'");
+      await pool.query("UPDATE adm_proc_etapas SET externo = true WHERE area ~* '(cl[ií]nica|sa[uú]de)'");
+      let ordem = 0;
+      for (const x of SEED_ETAPAS_ADM_V2) await inserirEtapaAdm("admissao", ++ordem, x);
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('fluxo_manual_v1','1') ON CONFLICT (chave) DO NOTHING");
+      console.log("[admissao] Fluxo de admissão do manual do DP criado (9 etapas).");
+    }
   }
 }
 
