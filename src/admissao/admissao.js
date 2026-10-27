@@ -872,12 +872,16 @@ async function indicadores(acc, f = {}) {
 const crypto = require("crypto");
 const seguranca = require("../seguranca");
 const FORM_TIPOS = { pre: "Pré-admissão (gerente)", adm: "Admissão (candidato)" };
+const ESTADO_CIVIL = ["Solteiro(a)", "Casado(a)", "União estável", "Separado(a)", "Divorciado(a)", "Viúvo(a)"];
+const UFS = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"];
+const PARENTESCOS = ["Filho(a)", "Cônjuge ou companheiro(a)", "Enteado(a)", "Pai ou mãe", "Outro"];
+// regra do formulário: um dado por campo (nada de "nome e telefone" no mesmo campo)
 const FORM_PADRAO = {
   pre: [
     { chave: "nome_candidato", rotulo: "Nome completo do candidato", kind: "texto", obrigatorio: true, fixo: true },
     { chave: "data_inicio", rotulo: "Data prevista de início", kind: "data", obrigatorio: true, fixo: true },
-    { chave: "telefone", rotulo: "WhatsApp do candidato (com DDD)", kind: "texto", obrigatorio: true },
-    { chave: "email", rotulo: "E-mail do candidato", kind: "texto", obrigatorio: false },
+    { chave: "telefone", rotulo: "WhatsApp do candidato (com DDD)", kind: "telefone", obrigatorio: true },
+    { chave: "email", rotulo: "E-mail do candidato", kind: "email", obrigatorio: false },
     { chave: "escala", rotulo: "Horário ou escala de trabalho", kind: "texto", obrigatorio: false },
     { chave: "rg_cnh", rotulo: "RG ou CNH (frente e verso)", kind: "arquivo", obrigatorio: true },
     { chave: "cpf_doc", rotulo: "CPF (documento ou comprovante)", kind: "arquivo", obrigatorio: true },
@@ -885,24 +889,34 @@ const FORM_PADRAO = {
   ],
   adm: [
     { chave: "nome_completo", rotulo: "Nome completo", kind: "texto", obrigatorio: true },
-    { chave: "cpf", rotulo: "CPF", kind: "texto", obrigatorio: true },
+    { chave: "cpf", rotulo: "CPF", kind: "cpf", obrigatorio: true },
     { chave: "nascimento", rotulo: "Data de nascimento", kind: "data", obrigatorio: true },
-    { chave: "estado_civil", rotulo: "Estado civil", kind: "texto", obrigatorio: true },
-    { chave: "endereco", rotulo: "Endereço completo com CEP", kind: "texto", obrigatorio: true },
-    { chave: "telefone", rotulo: "Telefone com DDD", kind: "texto", obrigatorio: true },
-    { chave: "contato_emergencia", rotulo: "Contato de emergência (nome e telefone)", kind: "texto", obrigatorio: true },
-    { chave: "banco", rotulo: "Dados bancários (banco, agência e conta)", kind: "texto", obrigatorio: true },
+    { chave: "estado_civil", rotulo: "Estado civil", kind: "selecao", opcoes: ESTADO_CIVIL, obrigatorio: true },
+    { chave: "telefone", rotulo: "Telefone com DDD", kind: "telefone", obrigatorio: true },
+    { chave: "cep", rotulo: "CEP", kind: "cep", obrigatorio: true },
+    { chave: "logradouro", rotulo: "Rua, avenida ou travessa", kind: "texto", obrigatorio: true },
+    { chave: "numero", rotulo: "Número", kind: "texto", obrigatorio: true },
+    { chave: "complemento", rotulo: "Complemento (apto, bloco, casa)", kind: "texto", obrigatorio: false },
+    { chave: "bairro", rotulo: "Bairro", kind: "texto", obrigatorio: true },
+    { chave: "cidade", rotulo: "Cidade", kind: "texto", obrigatorio: true },
+    { chave: "uf", rotulo: "Estado (UF)", kind: "selecao", opcoes: UFS, obrigatorio: true },
+    { chave: "contato_nome", rotulo: "Contato de emergência: nome", kind: "texto", obrigatorio: true },
+    { chave: "contato_telefone", rotulo: "Contato de emergência: telefone", kind: "telefone", obrigatorio: true },
+    { chave: "banco", rotulo: "Banco", kind: "banco", obrigatorio: true },
+    { chave: "agencia", rotulo: "Agência (sem o dígito)", kind: "texto", obrigatorio: true },
+    { chave: "conta", rotulo: "Conta corrente (com o dígito)", kind: "texto", obrigatorio: true },
     { chave: "pis", rotulo: "PIS/PASEP (se já tiver)", kind: "texto", obrigatorio: false },
-    { chave: "dependentes", rotulo: "Dependentes (nome e data de nascimento), se houver", kind: "texto", obrigatorio: false },
+    { chave: "dependentes", rotulo: "Dependentes (filhos, cônjuge...)", kind: "dependentes", obrigatorio: false },
     { chave: "rg_cnh", rotulo: "RG ou CNH (frente e verso)", kind: "arquivo", obrigatorio: true },
     { chave: "ctps", rotulo: "Carteira de trabalho (digital ou física)", kind: "arquivo", obrigatorio: true },
     { chave: "comprovante", rotulo: "Comprovante de residência recente", kind: "arquivo", obrigatorio: true },
     { chave: "titulo", rotulo: "Título de eleitor", kind: "arquivo", obrigatorio: false },
     { chave: "foto", rotulo: "Foto 3x4 ou selfie de rosto", kind: "arquivo", obrigatorio: false },
-    { chave: "certidao", rotulo: "Certidão de casamento ou de nascimento dos filhos", kind: "arquivo", obrigatorio: false },
+    { chave: "certidao_casamento", rotulo: "Certidão de casamento", kind: "arquivo", obrigatorio: false },
+    { chave: "certidao_filhos", rotulo: "Certidão de nascimento dos filhos", kind: "arquivo", obrigatorio: false },
   ],
 };
-const FORM_KINDS = ["texto", "data", "arquivo"];
+const FORM_KINDS = ["texto", "email", "cpf", "telefone", "data", "cep", "selecao", "banco", "dependentes", "arquivo"];
 const MIMES = {
   "application/pdf": (b) => b.slice(0, 4).toString() === "%PDF",
   "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8,
@@ -912,6 +926,34 @@ const MIMES = {
 const MAX_ARQ = 5 * 1024 * 1024, MAX_POR_ITEM = 3;
 const dataIso = (v) => /^\d{4}-\d{2}-\d{2}$/.test(txt(v)) && !isNaN(new Date(txt(v) + "T12:00:00Z").getTime());
 
+
+const digitos = (v) => txt(v).replace(/\D/g, "");
+// valida e normaliza o valor de um campo conforme o tipo; devolve o texto a gravar
+function valorDoCampo(kind, bruto, opcoes) {
+  const v = txt(bruto);
+  if (!v) return "";
+  if (kind === "data") { if (!dataIso(v)) throw erro(400, "Data inválida."); return v; }
+  if (kind === "email") { if (!emailValido(v.toLowerCase())) throw erro(400, "E-mail inválido."); return v.toLowerCase().slice(0, 160); }
+  if (kind === "cpf") { const d = digitos(v); if (d.length !== 11 || !cpfValido(d)) throw erro(400, "O CPF informado não é válido."); return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4"); }
+  if (kind === "telefone") { const d = digitos(v); if (d.length < 10 || d.length > 11) throw erro(400, "Telefone inválido. Informe o DDD e o número."); return d.length === 11 ? d.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3") : d.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3"); }
+  if (kind === "cep") { const d = digitos(v); if (d.length !== 8) throw erro(400, "CEP inválido."); return d.replace(/(\d{5})(\d{3})/, "$1-$2"); }
+  if (kind === "selecao") { if (!(Array.isArray(opcoes) ? opcoes : []).includes(v)) throw erro(400, "Escolha uma das opções da lista."); return v; }
+  if (kind === "dependentes") {
+    let lista; try { lista = JSON.parse(v); } catch (e) { throw erro(400, "Dependentes inválidos."); }
+    if (!Array.isArray(lista) || lista.length > 12) throw erro(400, "Informe até 12 dependentes.");
+    const out = lista.map((d) => {
+      const nome = txt(d && d.nome).slice(0, 120), nasc = txt(d && d.nascimento), par = txt(d && d.parentesco), cpf = txt(d && d.cpf);
+      if (nome.length < 3) throw erro(400, "Dependente: informe o nome completo.");
+      if (!dataIso(nasc)) throw erro(400, "Dependente " + nome + ": informe a data de nascimento.");
+      if (!PARENTESCOS.includes(par)) throw erro(400, "Dependente " + nome + ": escolha o parentesco.");
+      let cpfN = "";
+      if (cpf) { const dd = digitos(cpf); if (dd.length !== 11 || !cpfValido(dd)) throw erro(400, "Dependente " + nome + ": CPF inválido."); cpfN = dd.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4"); }
+      return { nome, nascimento: nasc, parentesco: par, cpf: cpfN };
+    });
+    return out.length ? JSON.stringify(out) : "";
+  }
+  return v.slice(0, 400);
+}
 async function modeloForm(c, tipo) {
   const { rows } = await c.query("SELECT valor FROM adm_config WHERE chave = $1", ["form_" + tipo]);
   if (rows[0]) { try { const v = JSON.parse(rows[0].valor); if (Array.isArray(v) && v.length) return v; } catch (e) { /* usa o padrão */ } }
@@ -924,6 +966,11 @@ async function formulariosModelo(acc) {
 async function salvarFormularioModelo(acc, tipo, b = {}) {
   const p = await papelDe(acc); exigirGestor(p);
   if (!FORM_TIPOS[tipo]) throw erro(400, "Formulário inválido.");
+  if (b.restaurar) {
+    await pool.query("DELETE FROM adm_config WHERE chave = $1", ["form_" + tipo]);
+    audit(acc, "adm_form_modelo", { papel: p.papel, alvo: FORM_TIPOS[tipo], detalhe: "restaurou o padrão" });
+    return { ok: true, campos: FORM_PADRAO[tipo] };
+  }
   const entrada = Array.isArray(b.campos) ? b.campos : [];
   const vistos = new Set(), lista = [];
   for (const x of entrada.slice(0, 40)) {
@@ -933,7 +980,9 @@ async function salvarFormularioModelo(acc, tipo, b = {}) {
     let chave = /^[a-z0-9_]{2,40}$/.test(txt(x.chave)) ? txt(x.chave) : rotulo.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 36) || "campo";
     let n = 2; const base = chave; while (vistos.has(chave)) chave = base + "_" + n++;
     vistos.add(chave);
-    lista.push({ chave, rotulo, kind, obrigatorio: !!x.obrigatorio, ...(["nome_candidato", "data_inicio"].includes(chave) && tipo === "pre" ? { fixo: true, obrigatorio: true } : {}) });
+    const opcoes = kind === "selecao" ? (Array.isArray(x.opcoes) ? x.opcoes : []).map((o) => txt(o).slice(0, 60)).filter(Boolean).slice(0, 40) : undefined;
+    if (kind === "selecao" && opcoes.length < 2) throw erro(400, "Campo de lista \"" + rotulo + "\": informe pelo menos 2 opções.");
+    lista.push({ chave, rotulo, kind, ...(opcoes ? { opcoes } : {}), obrigatorio: !!x.obrigatorio, ...(["nome_candidato", "data_inicio"].includes(chave) && tipo === "pre" ? { fixo: true, obrigatorio: true } : {}) });
   }
   if (tipo === "pre") for (const f of FORM_PADRAO.pre.filter((x) => x.fixo)) if (!lista.some((x) => x.chave === f.chave)) lista.unshift(f);
   if (!lista.length) throw erro(400, "O formulário precisa de pelo menos um campo.");
@@ -950,13 +999,13 @@ async function garantirForm(c, procId, tipo, email) {
   let o = 0;
   for (const m of await modeloForm(c, tipo)) {
     const valor = (m.chave === "nome_candidato" || m.chave === "nome_completo") ? pr[0].colaborador || null : m.chave === "data_inicio" ? pr[0].dia || null : null;
-    await c.query("INSERT INTO adm_form_itens (form_id, ordem, chave, rotulo, kind, obrigatorio, valor) VALUES ($1,$2,$3,$4,$5,$6,$7)", [nf[0].id, ++o, m.chave, m.rotulo, m.kind, !!m.obrigatorio, valor]);
+    await c.query("INSERT INTO adm_form_itens (form_id, ordem, chave, rotulo, kind, obrigatorio, valor, opcoes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)", [nf[0].id, ++o, m.chave, m.rotulo, m.kind, !!m.obrigatorio, valor, m.opcoes ? JSON.stringify(m.opcoes) : null]);
   }
   await evento(c, procId, "formulario_gerado", email || null, { formulario: FORM_TIPOS[tipo] });
   return nf[0].id;
 }
 async function itensDoForm(c, formId) {
-  const { rows: it } = await c.query("SELECT id::int AS id, chave, rotulo, kind, obrigatorio, valor, status, obs_rh FROM adm_form_itens WHERE form_id = $1 ORDER BY ordem, id", [formId]);
+  const { rows: it } = await c.query("SELECT id::int AS id, chave, rotulo, kind, opcoes, obrigatorio, valor, status, obs_rh FROM adm_form_itens WHERE form_id = $1 ORDER BY ordem, id", [formId]);
   const { rows: ar } = await c.query("SELECT a.id::int AS id, a.item_id::int AS item_id, a.nome, a.mime, a.tamanho FROM adm_form_arquivos a JOIN adm_form_itens i ON i.id = a.item_id WHERE i.form_id = $1 ORDER BY a.id", [formId]);
   return it.map((i) => ({ ...i, arquivos: ar.filter((a) => a.item_id === i.id).map(({ item_id, ...r }) => r) }));
 }
@@ -1046,7 +1095,7 @@ async function publicoVer(token, ip) {
     const { rows: d } = await pool.query("SELECT detalhe FROM adm_devolucoes WHERE etapa_destino_id = $1 ORDER BY criado_em DESC LIMIT 1", [coleta ? coleta.id : 0]);
     msgRh = d[0] ? d[0].detalhe : null;
   }
-  const itens = (await itensDoForm(pool, f.id)).map((i) => ({ id: i.id, rotulo: i.rotulo, kind: i.kind, obrigatorio: i.obrigatorio, valor: i.valor, status: i.status, obs_rh: i.status === "incorreto" ? i.obs_rh : null, arquivos: i.arquivos.map((a) => ({ id: a.id, nome: a.nome, tamanho: a.tamanho })) }));
+  const itens = (await itensDoForm(pool, f.id)).map((i) => ({ id: i.id, chave: i.chave, rotulo: i.rotulo, kind: i.kind, opcoes: i.opcoes || undefined, obrigatorio: i.obrigatorio, valor: i.valor, status: i.status, obs_rh: i.status === "incorreto" ? i.obs_rh : null, arquivos: i.arquivos.map((a) => ({ id: a.id, nome: a.nome, tamanho: a.tamanho })) }));
   let situacao = f.status === "aprovado" ? "aprovado" : f.status === "enviado" ? "enviado" : !aberto ? "encerrado" : !liberado ? "aguardando" : f.status === "devolvido" ? "devolvido" : "preencher";
   if (f.status === "aprovado") situacao = "aprovado";
   return { tipo: f.tipo, titulo: f.tipo === "pre" ? "Pré-admissão" : "Admissão", cargo: f.cargo, loja: f.unidade, protocolo: f.protocolo, situacao, editavel, mensagem_rh: msgRh, enviado_em: f.enviado_em, itens,
@@ -1063,14 +1112,14 @@ async function publicoEditavel(token, ip) {
 async function publicoSalvar(token, ip, b = {}) {
   const f = await publicoEditavel(token, ip);
   const valores = b.valores && typeof b.valores === "object" ? b.valores : {};
-  const { rows: it } = await pool.query("SELECT id::int AS id, chave, kind, status FROM adm_form_itens WHERE form_id = $1", [f.id]);
+  const { rows: it } = await pool.query("SELECT id::int AS id, chave, kind, opcoes, status FROM adm_form_itens WHERE form_id = $1", [f.id]);
+  const gravar = [];
   for (const x of it) {
     if (!(String(x.id) in valores) || x.kind === "arquivo") continue;
     if (x.status === "ok") continue; // item já aprovado pelo RH não muda mais
-    const v = txt(valores[x.id]).slice(0, 400);
-    if (x.kind === "data" && v && !dataIso(v)) throw erro(400, "Data inválida.");
-    await pool.query("UPDATE adm_form_itens SET status = CASE WHEN status = 'incorreto' AND valor IS DISTINCT FROM $2 THEN 'pendente' ELSE status END, valor = $2, atualizado_em = now() WHERE id = $1", [x.id, v || null]);
+    gravar.push([x.id, valorDoCampo(x.kind, valores[x.id], x.opcoes)]);
   }
+  for (const [id, v] of gravar) await pool.query("UPDATE adm_form_itens SET status = CASE WHEN status = 'incorreto' AND valor IS DISTINCT FROM $2 THEN 'pendente' ELSE status END, valor = $2, atualizado_em = now() WHERE id = $1", [id, v || null]);
   return { ok: true };
 }
 async function publicoArquivo(token, ip, b = {}) {
@@ -1109,8 +1158,10 @@ async function publicoEnviar(token, ip) {
     if (falta.length) throw erro(400, "Preencha antes de enviar: " + falta.map((i) => i.rotulo).join("; ") + ".", { faltando: falta.map((i) => i.id) });
     const aCorrigir = itens.filter((i) => i.status === "incorreto");
     if (aCorrigir.length) throw erro(400, "Corrija antes de reenviar o que o RH apontou: " + aCorrigir.map((i) => i.rotulo + " (" + i.obs_rh + ")").join("; ") + ".", { faltando: aCorrigir.map((i) => i.id) });
-    const cpfI = itens.find((i) => i.chave === "cpf" && i.kind === "texto" && txt(i.valor));
-    if (cpfI && !cpfValido(cpfDigitos(cpfI.valor))) throw erro(400, "O CPF informado não é válido.", { faltando: [cpfI.id] });
+    for (const i of itens) {
+      if (i.kind === "arquivo" || !txt(i.valor)) continue;
+      try { valorDoCampo(i.kind, i.valor, i.opcoes); } catch (e) { throw erro(400, i.rotulo + ": " + e.message, { faltando: [i.id] }); }
+    }
     const nomeI = itens.find((i) => i.chave === "nome_candidato"), diaI = itens.find((i) => i.chave === "data_inicio");
     if (nomeI && txt(nomeI.valor).length < 3) throw erro(400, "Informe o nome completo do candidato.", { faltando: [nomeI.id] });
     if (nomeI || diaI) {
