@@ -34,6 +34,7 @@ app.use(seguranca.cabecalhos);
 app.use(seguranca.corsMiddleware()); // CORS_ORIGINS restringe os sites que podem chamar a API (ver seguranca.js)
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 app.use("/api/chamados", express.json({ limit: "10mb" })); // anexos em base64
+app.use("/api/admissao/publico", express.json({ limit: "10mb" })); // documentos do formulário em base64
 const jsonPadrao = express.json();
 app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
@@ -619,6 +620,18 @@ app.post(AD + "/processos/:id/etapas/:eid/reprovar", admAuth, handle((req) => ad
 app.post(AD + "/processos/:id/etapas/:eid/devolver", admAuth, handle((req) => admissao.devolverEtapa(req.access, nid(req), Number(req.params.eid), req.body || {})));
 app.post(AD + "/processos/:id/etapas/:eid/tarefa", admAuth, handle((req) => admissao.marcarSubtarefa(req.access, nid(req), Number(req.params.eid), req.body || {})));
 app.post(AD + "/processos/:id/encerrar", admAuth, handle((req) => admissao.encerrar(req.access, nid(req), req.body || {})));
+app.get(AD + "/processos/:id/formularios/:tipo", admAuth, handle((req) => admissao.formulario(req.access, nid(req), String(req.params.tipo), false)));
+app.post(AD + "/processos/:id/formularios/:tipo", admAuth, handle((req) => admissao.formulario(req.access, nid(req), String(req.params.tipo), true)));
+app.post(AD + "/processos/:id/formulario-itens/:itemId", admAuth, handle((req) => admissao.revisarItem(req.access, nid(req), Number(req.params.itemId), req.body || {})));
+app.get(AD + "/processos/:id/formulario-arquivos/:aid", admAuth, handle((req) => admissao.arquivoRH(req.access, nid(req), Number(req.params.aid))));
+app.get(AD + "/formularios-modelo", admAuth, handle((req) => admissao.formulariosModelo(req.access)));
+app.put(AD + "/formularios-modelo/:tipo", admAuth, handle((req) => admissao.salvarFormularioModelo(req.access, String(req.params.tipo), req.body || {})));
+// parte pública: quem tem o link (gerente ou candidato) preenche sem login; o token é a chave (48 caracteres aleatórios)
+app.get(AD + "/publico/:token", handle((req) => admissao.publicoVer(req.params.token, req.ip)));
+app.put(AD + "/publico/:token/campos", handle((req) => admissao.publicoSalvar(req.params.token, req.ip, req.body || {})));
+app.post(AD + "/publico/:token/arquivos", handle((req) => admissao.publicoArquivo(req.params.token, req.ip, req.body || {})));
+app.delete(AD + "/publico/:token/arquivos/:aid", handle((req) => admissao.publicoRemoverArquivo(req.params.token, req.ip, req.params.aid)));
+app.post(AD + "/publico/:token/enviar", handle((req) => admissao.publicoEnviar(req.params.token, req.ip)));
 app.get(AD + "/mensagens", admAuth, handle((req) => admissao.mensagens(req.access)));
 app.put(AD + "/mensagens/:chave", admAuth, handle((req) => admissao.salvarMensagem(req.access, String(req.params.chave), req.body || {})));
 app.post(AD + "/processos/:id/voltar-etapa", admAuth, handle((req) => admissao.reabrirEtapa(req.access, nid(req), req.body || {})));
