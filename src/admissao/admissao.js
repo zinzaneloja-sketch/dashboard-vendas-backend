@@ -1,7 +1,7 @@
 // Admissão e Rescisão: controle de cada admissão ou rescisão de colaborador, etapa a etapa, com prazos (SLA) em
 // minutos úteis (expediente de tempo.js), por etapa e total. O relógio pode ser pausado quando o processo
 // depende de terceiros (ex.: o colaborador ainda não entregou os documentos).
-// Papéis: analista (conduz os processos), gestor (também mexe em etapas, prazos, equipe e cancela).
+// Papéis: analista/RH (conduz os processos), gestor (também mexe em etapas, prazos, equipe e cancela) e GO (só aprova ou reprova vagas).
 // O administrador do sistema (users.role = 'admin') é gestor.
 // Dados pessoais: só o mínimo (nome, CPF, cargo, local, datas, tipo). Sem salário, sem documentos.
 const bcrypt = require("bcryptjs");
@@ -25,6 +25,20 @@ const DIA_MIN = 600;                // 1 dia útil = 10 h de expediente
 const PRAZO_LEGAL_DIAS = 10;        // art. 477, §6º da CLT: pagamento das verbas e documentos até 10 dias corridos do término do contrato
 const RISCO = 0.8;                  // 80% do prazo usado = em risco
 const ABERTOS = ["em_andamento", "pausado"];
+const PAPEIS = ["analista", "gestor", "go"];
+const ACOES = ["normal", "aprovacao", "validacao", "aso"];
+const DESFECHOS = { vaga_reprovada: "Vaga reprovada pela GO", inapto: "Candidato inapto no exame admissional", desistencia: "Candidato desistiu", outro: "Cancelado" };
+const MOTIVOS_DEVOLUCAO = ["Documento ilegível", "Documento faltando", "Dado incorreto ou divergente", "Documento vencido", "Outro"];
+const MSG_PADRAO = [
+  { chave: "link_pre", titulo: "Link da pré-admissão (para o gerente)", destino: "Gerente da loja", texto: "Olá! Para dar andamento na contratação de {nome} ({cargo}) na {loja}, preencha o formulário de pré-admissão e anexe os documentos iniciais neste link: {link}" },
+  { chave: "link_adm", titulo: "Link da admissão (para o candidato)", destino: "Candidato", texto: "Olá, {nome}! Para concluir a sua admissão na Zinzane, preencha o formulário e anexe os documentos neste link: {link}" },
+  { chave: "correcao", titulo: "Pedido de correção dos documentos", destino: "Loja ou candidato", texto: "Olá! Precisamos de uma correção nos documentos de {nome}: {itens}. Pode reenviar pelo link? {link}" },
+  { chave: "aso_pedido", titulo: "Pedido de exame admissional", destino: "Clínica", texto: "Olá! Solicitamos o exame admissional de {nome}, para o cargo de {cargo}, com início previsto em {data_inicio}. Pode agendar e nos enviar o ASO assim que ficar pronto?" },
+  { chave: "contrato", titulo: "Contrato para assinatura", destino: "Candidato", texto: "Olá, {nome}! Enviamos o seu contrato de trabalho para assinatura. Assim que assinar, nos avise. Qualquer dúvida, estamos à disposição." },
+  { chave: "boas_vindas", titulo: "Boas-vindas ao novo colaborador", destino: "Colaborador", texto: "Olá, {nome}! Seja muito bem-vindo(a) à Zinzane! Seu primeiro dia será em {data_inicio}, na loja {loja}, no cargo de {cargo}. Estamos felizes em ter você com a gente." },
+  { chave: "aviso_loja", titulo: "Aviso de início à loja", destino: "Gerente da loja", texto: "Olá! Informamos que {nome} começa em {data_inicio} na {loja}, como {cargo}. O ponto digital já foi liberado. Qualquer dúvida, fale com o RH." },
+  { chave: "vaga_reprovada", titulo: "Vaga não aprovada (aviso à loja)", destino: "Gerente da loja", texto: "Olá! A vaga de {cargo} na {loja} não foi aprovada pela GO. Motivo: {motivo}." },
+];
 
 async function comTransacao(fn) {
   const c = await pool.connect();
@@ -38,9 +52,11 @@ async function papelDe(acc) {
   if (acc.role === "admin") return { papel: "gestor", admin: true, nome: acc.nome || acc.email, email: em(acc.email) };
   const { rows } = await pool.query("SELECT nome, papel, ativo FROM adm_equipe WHERE lower(email) = $1", [em(acc.email)]);
   if (!rows[0] || !rows[0].ativo) throw erro(403, "Seu usuário não está na equipe de Admissão e Rescisão. Peça ao gestor para cadastrar.");
-  return { papel: rows[0].papel === "gestor" ? "gestor" : "analista", admin: false, nome: rows[0].nome || acc.nome || acc.email, email: em(acc.email) };
+  return { papel: PAPEIS.includes(rows[0].papel) ? rows[0].papel : "analista", admin: false, nome: rows[0].nome || acc.nome || acc.email, email: em(acc.email) };
 }
 function exigirGestor(p) { if (p.papel !== "gestor") throw erro(403, "Só o gestor pode fazer isso."); }
+function exigirNaoGo(p) { if (p.papel === "go") throw erro(403, "O seu perfil (GO) só aprova ou reprova vagas."); }
+const podeAprovar = (p) => p.papel === "gestor" || p.papel === "go";
 function exigirAdmin(p) { if (!p.admin) throw erro(403, "Só o administrador pode fazer isso."); }
 
 // ---------- datas e CPF ----------
@@ -79,8 +95,9 @@ const pior = (...s) => s.filter((x) => x in GRAV).sort((a, b) => GRAV[a] - GRAV[
 
 // Prazo "de calendário": admissão = data de início do colaborador; rescisão = 10 dias corridos do fim do contrato (CLT art. 477 §6º).
 function prazoData(proc, agora) {
-  const limite = proc.tipo === "admissao" ? dstr(proc.data_prevista) : somaDias(dstr(proc.data_prevista), PRAZO_LEGAL_DIAS);
   const rotulo = proc.tipo === "admissao" ? "Início do colaborador" : "Prazo legal de pagamento";
+  if (!proc.data_prevista) return { rotulo, limite: null, situacao: proc.status === "cancelado" ? "cancelado" : proc.status === "concluido" ? "cumprido" : "sem_data", dias: null };
+  const limite = proc.tipo === "admissao" ? dstr(proc.data_prevista) : somaDias(dstr(proc.data_prevista), PRAZO_LEGAL_DIAS);
   const hoje = diaLocal(agora);
   if (proc.status === "cancelado") return { rotulo, limite, situacao: "cancelado", dias: null };
   if (proc.status === "concluido") {
@@ -91,29 +108,33 @@ function prazoData(proc, agora) {
   return { rotulo, limite, situacao: dias < 0 ? "estourado" : dias <= 2 ? "risco" : "ok", dias };
 }
 
-function monta(proc, etapasRows, pausas, agora = new Date()) {
+function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], devolucoes = []) {
   const etapas = etapasRows.slice().sort((a, b) => a.ordem - b.ordem || a.id - b.id);
   const aberto = ABERTOS.includes(proc.status);
   const fimTotal = proc.status === "concluido" ? proc.concluido_em : proc.status === "cancelado" ? proc.atualizado_em : agora;
-  const atual = aberto || proc.status === "concluido" ? etapas.find((e) => e.status === "pendente") : null;
-  let ini = proc.criado_em;
+  const atual = aberto ? etapas.find((e) => e.status === "pendente") : null;
+  const r1 = (n) => Math.round(n * 10) / 10;
   const lista = etapas.map((e) => {
-    const inicio = ini;
-    let o = { id: e.id, nome: e.nome, descricao: e.descricao, area: e.area, ordem: e.ordem, prazo_min: e.prazo_min, status: e.status, obs: e.obs, concluida_em: e.concluida_em, concluida_por: e.concluida_por, iniciada_em: null, decorrido: null, restante: null, situacao: "aguardando", atual: false };
+    const ps = passagens.filter((x) => x.etapa_id === e.id).sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
+    const durs = ps.map((x) => usado(x.inicio, x.fim || fimTotal, pausas));
+    const tempoTotal = r1(durs.reduce((s2, x) => s2 + x, 0)), maior = durs.length ? Math.max(...durs) : 0;
+    const aberta = ps.findIndex((x) => !x.fim);
+    const sub = (Array.isArray(e.subtarefas) ? e.subtarefas : []).map((t, i) => ({ indice: i, nome: t.nome, feita: !!t.feita_em, feita_em: t.feita_em || null, feita_por: t.feita_por || null }));
+    let o = { id: e.id, nome: e.nome, descricao: e.descricao, area: e.area, ordem: e.ordem, prazo_min: e.prazo_min, status: e.status, obs: e.obs, concluida_em: e.concluida_em, concluida_por: e.concluida_por,
+      acao: e.acao || "normal", externo: !!e.externo, exige_candidato: !!e.exige_candidato, mensagem: e.mensagem || null, subtarefas: sub, subtarefas_feitas: sub.filter((t) => t.feita).length,
+      iniciada_em: ps.length ? ps[0].inicio : null, passagens: ps.length, chegou: ps.length > 0, voltas: devolucoes.filter((d) => Number(d.etapa_destino_id) === e.id).length,
+      tempo_total: tempoTotal, decorrido: null, restante: null, situacao: "aguardando", atual: false };
     if (e.status === "concluida" || e.status === "dispensada") {
-      o.iniciada_em = inicio;
-      if (e.status === "concluida") { o.decorrido = usado(inicio, e.concluida_em, pausas); o.restante = Math.round((e.prazo_min - o.decorrido) * 10) / 10; o.situacao = o.decorrido <= e.prazo_min ? "cumprida" : "descumprida"; }
+      if (e.status === "concluida") { o.decorrido = tempoTotal; o.restante = r1(e.prazo_min - tempoTotal); o.situacao = maior <= e.prazo_min ? "cumprida" : "descumprida"; }
       else o.situacao = "dispensada";
-      ini = e.concluida_em;
-    } else if (atual && e.id === atual.id && proc.status !== "cancelado") {
-      o.atual = true; o.iniciada_em = inicio;
-      o.decorrido = usado(inicio, fimTotal, pausas); o.restante = Math.round((e.prazo_min - o.decorrido) * 10) / 10;
+    } else if (atual && e.id === atual.id) {
+      o.atual = true; o.decorrido = aberta >= 0 ? durs[aberta] : 0; o.restante = r1(e.prazo_min - o.decorrido);
       o.situacao = situacaoRelogio(o.decorrido, e.prazo_min, { pausado: proc.status === "pausado" });
     } else if (proc.status === "cancelado") o.situacao = "cancelada";
     return o;
   });
   const decTot = usado(proc.criado_em, fimTotal, pausas);
-  const total = { meta: proc.sla_total_min, decorrido: decTot, restante: Math.round((proc.sla_total_min - decTot) * 10) / 10, situacao: "ok" };
+  const total = { meta: proc.sla_total_min, decorrido: decTot, restante: r1(proc.sla_total_min - decTot), situacao: "ok" };
   if (proc.status === "concluido") total.situacao = decTot <= proc.sla_total_min ? "cumprido" : "descumprido";
   else if (proc.status === "cancelado") total.situacao = "cancelado";
   else total.situacao = situacaoRelogio(decTot, proc.sla_total_min, { pausado: proc.status === "pausado" });
@@ -122,43 +143,59 @@ function monta(proc, etapasRows, pausas, agora = new Date()) {
   const situacao = aberto ? pior(total.situacao, ea ? ea.situacao : "ok", pd.situacao === "estourado" ? "estourado" : pd.situacao === "risco" ? "risco" : null) : proc.status;
   const feitas = lista.filter((e) => e.status !== "pendente").length;
   const pa = pausas.find((p) => !p.fim);
+  // quem segura o processo: tempo (em minutos úteis) com o RH x fora do RH (GO, loja, candidato, clínica)
+  const lados = { rh: 0, fora: 0 }, porArea = {};
+  lista.forEach((e) => { lados[e.externo ? "fora" : "rh"] += e.tempo_total; const k = e.area || "Outros"; porArea[k] = r1((porArea[k] || 0) + e.tempo_total); });
+  lados.rh = r1(lados.rh); lados.fora = r1(lados.fora);
+  const dv = devolucoes.map((d) => ({ etapa: d.etapa_nome, motivo_cat: d.motivo_cat, detalhe: d.detalhe, por: d.usuario, em: d.criado_em }));
   return {
-    id: proc.id, protocolo: proc.protocolo, tipo: proc.tipo, tipo_rotulo: TIPO_ROT[proc.tipo], colaborador: proc.colaborador, cpf_mascarado: cpfMasc(proc.cpf), cargo: proc.cargo,
+    id: proc.id, protocolo: proc.protocolo, tipo: proc.tipo, tipo_rotulo: TIPO_ROT[proc.tipo], colaborador: proc.colaborador || ("Vaga de " + (proc.cargo || "cargo a definir")), candidato_definido: !!proc.colaborador,
+    cpf_mascarado: cpfMasc(proc.cpf), cargo: proc.cargo, solicitante: proc.solicitante || null,
     loja_id: proc.loja_id, unidade: proc.unidade, subtipo: proc.subtipo, data_prevista: dstr(proc.data_prevista), observacao: proc.observacao,
     responsavel: proc.responsavel, responsavel_nome: proc.responsavel_nome || null, status: proc.status, criado_por: proc.criado_por, criado_em: proc.criado_em, concluido_em: proc.concluido_em, cancelado_motivo: proc.cancelado_motivo,
+    desfecho: proc.desfecho || null, desfecho_rotulo: proc.status === "cancelado" ? (DESFECHOS[proc.desfecho] || DESFECHOS.outro) : null,
     sla_total_min: proc.sla_total_min, total, prazo_data: pd, situacao, progresso: { feitas, total: lista.length },
-    etapa_atual: ea ? { id: ea.id, nome: ea.nome, area: ea.area, ordem: ea.ordem, prazo_min: ea.prazo_min, decorrido: ea.decorrido, restante: ea.restante, situacao: ea.situacao } : null,
+    etapa_atual: ea ? { id: ea.id, nome: ea.nome, area: ea.area, externo: ea.externo, acao: ea.acao, voltas: ea.voltas, ordem: ea.ordem, prazo_min: ea.prazo_min, decorrido: ea.decorrido, restante: ea.restante, situacao: ea.situacao } : null,
+    lados, por_area: porArea, retornos: dv.length, devolucoes: dv,
     pausa: pa ? { desde: pa.inicio, motivo: pa.motivo } : null, etapas: lista,
   };
 }
 
 const COLS = `p.id::int AS id, p.protocolo, p.tipo, p.colaborador, p.cpf, p.cargo, p.loja_id::int AS loja_id, p.unidade, p.subtipo, p.data_prevista, p.observacao, p.responsavel, p.status,
-  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, r.nome AS responsavel_nome`;
+  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, r.nome AS responsavel_nome`;
+const COLS_ET = "id::int AS id, nome, descricao, area, ordem, prazo_min, status, concluida_em, concluida_por, obs, acao, externo, exige_candidato, subtarefas, mensagem";
 const FROM = "FROM adm_processos p LEFT JOIN adm_equipe r ON lower(r.email) = lower(p.responsavel)";
 
 async function carregarLista(where, params, limite = 2000) {
   const { rows } = await pool.query(`SELECT ${COLS} ${FROM} ${where ? "WHERE " + where : ""} ORDER BY p.criado_em DESC LIMIT ${Number(limite) || 2000}`, params);
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
-  const { rows: et } = await pool.query("SELECT id::int AS id, processo_id::int AS processo_id, nome, descricao, area, ordem, prazo_min, status, concluida_em, concluida_por, obs FROM adm_proc_etapas WHERE processo_id = ANY($1::bigint[])", [ids]);
+  const { rows: et } = await pool.query(`SELECT processo_id::int AS processo_id, ${COLS_ET} FROM adm_proc_etapas WHERE processo_id = ANY($1::bigint[])`, [ids]);
   const { rows: ps } = await pool.query("SELECT processo_id::int AS processo_id, inicio, fim, motivo FROM adm_pausas WHERE processo_id = ANY($1::bigint[]) ORDER BY inicio", [ids]);
+  const { rows: pg } = await pool.query("SELECT processo_id::int AS processo_id, etapa_id::int AS etapa_id, inicio, fim FROM adm_passagens WHERE processo_id = ANY($1::bigint[])", [ids]);
+  const { rows: dv } = await pool.query("SELECT processo_id::int AS processo_id, etapa_validacao_id::int AS etapa_validacao_id, etapa_destino_id::int AS etapa_destino_id, etapa_nome, motivo_cat, detalhe, usuario, criado_em FROM adm_devolucoes WHERE processo_id = ANY($1::bigint[]) ORDER BY criado_em", [ids]);
   const agora = new Date();
-  return rows.map((r) => monta(r, et.filter((e) => e.processo_id === r.id), ps.filter((x) => x.processo_id === r.id), agora));
+  return rows.map((r) => monta(r, et.filter((e) => e.processo_id === r.id), ps.filter((x) => x.processo_id === r.id), agora, pg.filter((x) => x.processo_id === r.id), dv.filter((x) => x.processo_id === r.id)));
 }
 async function carregarUm(id, c = pool) {
   const { rows } = await c.query(`SELECT ${COLS} ${FROM} WHERE p.id = $1`, [id]);
   if (!rows[0]) throw erro(404, "Processo não encontrado.");
-  const { rows: et } = await c.query("SELECT id::int AS id, nome, descricao, area, ordem, prazo_min, status, concluida_em, concluida_por, obs FROM adm_proc_etapas WHERE processo_id = $1", [id]);
+  const { rows: et } = await c.query(`SELECT ${COLS_ET} FROM adm_proc_etapas WHERE processo_id = $1`, [id]);
   const { rows: ps } = await c.query("SELECT inicio, fim, motivo FROM adm_pausas WHERE processo_id = $1 ORDER BY inicio", [id]);
-  return { raw: rows[0], etapas: et, pausas: ps };
+  const { rows: pg } = await c.query("SELECT etapa_id::int AS etapa_id, inicio, fim FROM adm_passagens WHERE processo_id = $1", [id]);
+  const { rows: dv } = await c.query("SELECT etapa_validacao_id::int AS etapa_validacao_id, etapa_destino_id::int AS etapa_destino_id, etapa_nome, motivo_cat, detalhe, usuario, criado_em FROM adm_devolucoes WHERE processo_id = $1 ORDER BY criado_em", [id]);
+  return { raw: rows[0], etapas: et, pausas: ps, passagens: pg, devolucoes: dv };
 }
+// uma "passagem" = um período em que a etapa ficou ativa (a etapa pode voltar a ficar ativa depois de uma devolução)
+async function abrirPassagem(c, processoId, etapaId, quando) { await c.query("INSERT INTO adm_passagens (processo_id, etapa_id, inicio) VALUES ($1,$2,$3)", [processoId, etapaId, quando]); }
+async function fecharPassagem(c, etapaId, quando) { await c.query("UPDATE adm_passagens SET fim = GREATEST($2::timestamptz, inicio) WHERE etapa_id = $1 AND fim IS NULL", [etapaId, quando]); }
 async function evento(c, processoId, tipo, usuario, detalhe) {
   await c.query("INSERT INTO adm_eventos (processo_id, tipo, usuario, detalhe) VALUES ($1,$2,$3,$4)", [processoId, tipo, usuario || null, detalhe ? JSON.stringify(detalhe) : null]);
 }
 
 // ---------- /eu ----------
 async function responsaveis() {
-  const { rows } = await pool.query(`SELECT email, coalesce(nome, email) AS nome FROM adm_equipe WHERE ativo
+  const { rows } = await pool.query(`SELECT email, coalesce(nome, email) AS nome FROM adm_equipe WHERE ativo AND papel <> 'go'
     UNION SELECT email, coalesce(nome, email) FROM users WHERE role = 'admin' ORDER BY 2`);
   const vistos = new Set();
   return rows.filter((r) => (vistos.has(r.email.toLowerCase()) ? false : vistos.add(r.email.toLowerCase())));
@@ -166,7 +203,8 @@ async function responsaveis() {
 async function eu(acc) {
   const p = await papelDe(acc);
   const { rows: lj } = await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa ORDER BY nome");
-  return { nome: p.nome, email: p.email, papel: p.papel, admin: !!p.admin, tipos: TIPO_ROT, subtipos: SUBTIPOS, prazo_legal_dias: PRAZO_LEGAL_DIAS,
+  return { nome: p.nome, email: p.email, papel: p.papel, admin: !!p.admin, go: p.papel === "go", tipos: p.papel === "go" ? { admissao: TIPO_ROT.admissao } : TIPO_ROT, subtipos: SUBTIPOS, prazo_legal_dias: PRAZO_LEGAL_DIAS,
+    acoes: ACOES, desfechos: DESFECHOS, motivos_devolucao: MOTIVOS_DEVOLUCAO,
     expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, lojas: lj, responsaveis: await responsaveis(), trocar_senha: !!acc.trocar_senha };
 }
 
@@ -179,39 +217,47 @@ async function totalPadrao(tipo, c = pool) {
   return rows[0].s;
 }
 async function criar(acc, b = {}) {
-  const p = await papelDe(acc);
+  const p = await papelDe(acc); exigirNaoGo(p);
   const tipo = txt(b.tipo);
   if (!TIPOS.includes(tipo)) throw erro(400, "Escolha se é admissão ou rescisão.");
   const colaborador = txt(b.colaborador).slice(0, 120);
-  if (colaborador.length < 3) throw erro(400, "Informe o nome do colaborador.");
+  const cargo = txt(b.cargo).slice(0, 100);
+  // Admissão: o processo nasce na aprovação da vaga, quando o candidato ainda pode não existir. Rescisão sempre tem colaborador e data.
+  if (tipo === "rescisao" && colaborador.length < 3) throw erro(400, "Informe o nome do colaborador.");
+  if (tipo === "admissao" && colaborador && colaborador.length < 3) throw erro(400, "O nome do colaborador está muito curto.");
+  if (tipo === "admissao" && !colaborador && !cargo) throw erro(400, "Informe o cargo da vaga (ou o nome do candidato, se já tiver).");
   const cpf = cpfDigitos(b.cpf);
   if (cpf && !cpfValido(cpf)) throw erro(400, "CPF inválido. Confira os números.");
   const dataPrev = txt(b.data_prevista);
-  if (!dataOk(dataPrev)) throw erro(400, tipo === "admissao" ? "Informe a data de início do colaborador." : "Informe a data do término do contrato.");
+  if (dataPrev ? !dataOk(dataPrev) : tipo === "rescisao") throw erro(400, tipo === "admissao" ? "Data de início inválida." : "Informe a data do término do contrato.");
   const subtipo = txt(b.subtipo).slice(0, 80);
   if (tipo === "rescisao" && !subtipo) throw erro(400, "Informe o tipo de rescisão.");
-  const cargo = txt(b.cargo).slice(0, 100);
   let lojaId = Number(b.loja_id) || null, unidade = txt(b.unidade).slice(0, 120);
   if (lojaId) { const { rows } = await pool.query("SELECT nome FROM ch_lojas WHERE id = $1", [lojaId]); if (!rows[0]) throw erro(400, "Loja não encontrada."); unidade = rows[0].nome; }
   if (!unidade) throw erro(400, "Informe a loja ou o local de trabalho.");
   let resp = em(b.responsavel) || p.email;
-  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [resp]);
-  if (!rr[0]) throw erro(400, "O responsável precisa ser da equipe.");
+  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel <> 'go' UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [resp]);
+  if (!rr[0]) throw erro(400, "O responsável precisa ser da equipe do RH.");
   if (cpf) {
     const { rows: dup } = await pool.query("SELECT protocolo FROM adm_processos WHERE cpf = $1 AND tipo = $2 AND status IN ('em_andamento','pausado') LIMIT 1", [cpf, tipo]);
     if (dup[0]) throw erro(409, `Já existe um processo de ${TIPO_ROT[tipo].toLowerCase()} em andamento para esse CPF (${dup[0].protocolo}).`);
   }
   const info = await comTransacao(async (c) => {
-    const { rows: md } = await c.query("SELECT id, nome, descricao, area, prazo_min, ordem FROM adm_etapas_modelo WHERE tipo = $1 AND ativo ORDER BY ordem, id", [tipo]);
+    const { rows: md } = await c.query("SELECT id, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem FROM adm_etapas_modelo WHERE tipo = $1 AND ativo ORDER BY ordem, id", [tipo]);
     if (!md.length) throw erro(400, "Não há etapas ativas para esse tipo. Cadastre as etapas em Cadastros.");
     const total = await totalPadrao(tipo, c);
-    const { rows } = await c.query(`INSERT INTO adm_processos (protocolo, tipo, colaborador, cpf, cargo, loja_id, unidade, subtipo, data_prevista, observacao, responsavel, sla_total_min, criado_por)
-      VALUES ('tmp-' || nextval('adm_proto_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id::int AS id`,
-      [tipo, colaborador, cpf || null, cargo || null, lojaId, unidade, subtipo || null, dataPrev, txt(b.observacao).slice(0, 1000) || null, resp, total, p.email]);
+    const { rows } = await c.query(`INSERT INTO adm_processos (protocolo, tipo, colaborador, cpf, cargo, loja_id, unidade, subtipo, data_prevista, observacao, responsavel, sla_total_min, criado_por, solicitante)
+      VALUES ('tmp-' || nextval('adm_proto_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id::int AS id, criado_em`,
+      [tipo, colaborador, cpf || null, cargo || null, lojaId, unidade, subtipo || null, dataPrev || null, txt(b.observacao).slice(0, 1000) || null, resp, total, p.email, txt(b.solicitante).slice(0, 120) || null]);
     const id = rows[0].id, protocolo = `${PREFIXO[tipo]}-${new Date().getFullYear()}-${String(id).padStart(5, "0")}`;
     await c.query("UPDATE adm_processos SET protocolo = $2 WHERE id = $1", [id, protocolo]);
     let o = 0;
-    for (const m of md) await c.query("INSERT INTO adm_proc_etapas (processo_id, modelo_id, nome, descricao, area, ordem, prazo_min) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, m.id, m.nome, m.descricao, m.area, ++o, m.prazo_min]);
+    for (const m of md) {
+      const sub = (Array.isArray(m.subtarefas) ? m.subtarefas : []).map((nome) => ({ nome: String(nome) }));
+      const { rows: ne } = await c.query(`INSERT INTO adm_proc_etapas (processo_id, modelo_id, nome, descricao, area, ordem, prazo_min, acao, externo, exige_candidato, subtarefas, mensagem)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) RETURNING id`, [id, m.id, m.nome, m.descricao, m.area, ++o, m.prazo_min, m.acao || "normal", !!m.externo, !!m.exige_candidato, JSON.stringify(sub), m.mensagem || null]);
+      if (o === 1) await abrirPassagem(c, id, ne[0].id, rows[0].criado_em);
+    }
     await evento(c, id, "criado", p.email, { tipo, responsavel: resp });
     return { id, protocolo };
   });
@@ -220,10 +266,11 @@ async function criar(acc, b = {}) {
 }
 
 async function listar(acc, f = {}) {
-  await papelDe(acc);
+  const pp = await papelDe(acc);
   const w = [], v = [];
   const add = (x) => { v.push(x); return "$" + v.length; };
-  if (TIPOS.includes(f.tipo)) w.push(`p.tipo = ${add(f.tipo)}`);
+  if (pp.papel === "go") w.push(`p.tipo = ${add("admissao")}`);
+  else if (TIPOS.includes(f.tipo)) w.push(`p.tipo = ${add(f.tipo)}`);
   if (f.status === "abertos" || !f.status) w.push("p.status IN ('em_andamento','pausado')");
   else if (f.status === "fechados") w.push("p.status IN ('concluido','cancelado')");
   else if (["em_andamento", "pausado", "concluido", "cancelado"].includes(f.status)) w.push(`p.status = ${add(f.status)}`);
@@ -238,39 +285,50 @@ async function listar(acc, f = {}) {
   if (f.sla === "estourado") lista = lista.filter((x) => x.situacao === "estourado");
   else if (f.sla === "risco") lista = lista.filter((x) => x.situacao === "risco");
   else if (f.sla === "atencao") lista = lista.filter((x) => x.situacao === "estourado" || x.situacao === "risco");
+  // com quem está o processo agora: rh | fora (loja, candidato, clínica) | go (aguardando aprovação da vaga)
+  if (f.com === "rh") lista = lista.filter((x) => x.etapa_atual && !x.etapa_atual.externo);
+  else if (f.com === "fora") lista = lista.filter((x) => x.etapa_atual && x.etapa_atual.externo);
+  else if (f.com === "go") lista = lista.filter((x) => x.etapa_atual && x.etapa_atual.acao === "aprovacao");
+  else if (f.com === "devolvidos") lista = lista.filter((x) => x.etapa_atual && x.etapas.some((e) => e.atual && e.voltas > 0));
   const ab = lista.filter((x) => ABERTOS.includes(x.status));
   const fe = lista.filter((x) => !ABERTOS.includes(x.status));
-  ab.sort((a, b) => (GRAV[a.situacao] ?? 9) - (GRAV[b.situacao] ?? 9) || (a.prazo_data.limite < b.prazo_data.limite ? -1 : 1));
+  ab.sort((a, b) => (GRAV[a.situacao] ?? 9) - (GRAV[b.situacao] ?? 9) || ((a.prazo_data.limite || "9999") < (b.prazo_data.limite || "9999") ? -1 : 1));
   const ordenada = ab.concat(fe);
   const contagem = {}; lista.forEach((x) => { contagem[x.status] = (contagem[x.status] || 0) + 1; });
   const lim = Math.min(Number(f.limite) || 300, 1000);
-  return { processos: ordenada.slice(0, lim).map((x) => ({ ...x, etapas: undefined })), total: ordenada.length, contagem };
+  return { processos: ordenada.slice(0, lim).map((x) => ({ ...x, etapas: undefined, devolucoes: undefined, lados: undefined, por_area: undefined })), total: ordenada.length, contagem };
 }
 
 async function detalhe(acc, id) {
   const p = await papelDe(acc);
-  const { raw, etapas, pausas } = await carregarUm(id);
+  const { raw, etapas, pausas, passagens, devolucoes } = await carregarUm(id);
+  if (p.papel === "go" && raw.tipo !== "admissao") throw erro(403, "O seu perfil só acompanha admissões.");
   audit(acc, "adm_ver", { papel: p.papel, alvo: raw.protocolo, detalhe: raw.colaborador }); // quem leu os dados pessoais (LGPD)
-  const proc = monta(raw, etapas, pausas);
-  proc.cpf = cpfFmt(raw.cpf);
+  const proc = monta(raw, etapas, pausas, new Date(), passagens, devolucoes);
+  proc.cpf = p.papel === "go" ? null : cpfFmt(raw.cpf);
+  if (p.papel === "go") proc.cpf_mascarado = null;
   const { rows: ev } = await pool.query("SELECT tipo, usuario, detalhe, criado_em FROM adm_eventos WHERE processo_id = $1 ORDER BY criado_em, id", [id]);
   const { rows: ps } = await pool.query("SELECT inicio, fim, motivo, usuario FROM adm_pausas WHERE processo_id = $1 ORDER BY inicio", [id]);
   return { processo: proc, eventos: ev, pausas: ps };
 }
 
 async function editar(acc, id, b = {}) {
-  const p = await papelDe(acc);
+  const p = await papelDe(acc); exigirNaoGo(p);
   const { raw } = await carregarUm(id);
   if (!ABERTOS.includes(raw.status) && !p.admin && p.papel !== "gestor") throw erro(409, "Processo encerrado. Só o gestor altera.");
   if (raw.status === "cancelado") throw erro(409, "Processo cancelado não pode ser editado.");
   const sets = [], v = [id];
   const set = (col, val) => { v.push(val); sets.push(`${col} = $${v.length}`); };
-  if (b.colaborador !== undefined) { const n = txt(b.colaborador).slice(0, 120); if (n.length < 3) throw erro(400, "Informe o nome do colaborador."); set("colaborador", n); }
+  if (b.colaborador !== undefined) { const n = txt(b.colaborador).slice(0, 120); if (n.length < 3 && !(raw.tipo === "admissao" && n === "")) throw erro(400, "Informe o nome do colaborador."); set("colaborador", n); }
+  if (b.solicitante !== undefined) set("solicitante", txt(b.solicitante).slice(0, 120) || null);
   if (b.cpf !== undefined) { const c = cpfDigitos(b.cpf); if (c && !cpfValido(c)) throw erro(400, "CPF inválido. Confira os números."); set("cpf", c || null); }
   if (b.cargo !== undefined) set("cargo", txt(b.cargo).slice(0, 100) || null);
   if (b.subtipo !== undefined) set("subtipo", txt(b.subtipo).slice(0, 80) || null);
   if (b.observacao !== undefined) set("observacao", txt(b.observacao).slice(0, 1000) || null);
-  if (b.data_prevista !== undefined) { if (!dataOk(txt(b.data_prevista))) throw erro(400, "Data inválida."); set("data_prevista", txt(b.data_prevista)); }
+  if (b.data_prevista !== undefined) {
+    if (txt(b.data_prevista) === "" && raw.tipo === "admissao") set("data_prevista", null);
+    else { if (!dataOk(txt(b.data_prevista))) throw erro(400, "Data inválida."); set("data_prevista", txt(b.data_prevista)); }
+  }
   if (b.loja_id !== undefined || b.unidade !== undefined) {
     const lojaId = Number(b.loja_id) || null; let un = txt(b.unidade).slice(0, 120);
     if (lojaId) { const { rows } = await pool.query("SELECT nome FROM ch_lojas WHERE id = $1", [lojaId]); if (!rows[0]) throw erro(400, "Loja não encontrada."); un = rows[0].nome; }
@@ -279,7 +337,7 @@ async function editar(acc, id, b = {}) {
   }
   if (!sets.length) throw erro(400, "Nada para alterar.");
   await pool.query(`UPDATE adm_processos SET ${sets.join(", ")}, atualizado_em = now() WHERE id = $1`, v);
-  await evento(pool, id, "editado", p.email, { campos: Object.keys(b).filter((k) => ["colaborador", "cpf", "cargo", "subtipo", "observacao", "data_prevista", "loja_id", "unidade"].includes(k)) });
+  await evento(pool, id, "editado", p.email, { campos: Object.keys(b).filter((k) => ["colaborador", "cpf", "cargo", "subtipo", "observacao", "data_prevista", "loja_id", "unidade", "solicitante"].includes(k)) });
   audit(acc, "adm_editado", { papel: p.papel, alvo: raw.protocolo });
   return { ok: true };
 }
@@ -287,14 +345,25 @@ async function editar(acc, id, b = {}) {
 // etapa atual = a primeira pendente; as etapas vão em ordem
 async function etapaAtual(c, id, etapaId) {
   const { raw, etapas, pausas } = await carregarUm(id, c);
-  if (!ABERTOS.includes(raw.status)) throw erro(409, raw.status === "concluido" ? "Processo já concluído." : "Processo cancelado.");
+  if (!ABERTOS.includes(raw.status)) throw erro(409, raw.status === "concluido" ? "Processo já concluído." : "Processo encerrado.");
   if (raw.status === "pausado") throw erro(409, "O processo está pausado. Retome antes de avançar.");
   const ord = etapas.slice().sort((a, b) => a.ordem - b.ordem || a.id - b.id);
   const atual = ord.find((e) => e.status === "pendente");
-  if (!atual || atual.id !== Number(etapaId)) throw erro(409, "Só a etapa atual pode ser concluída. Atualize a tela.");
+  if (!atual || atual.id !== Number(etapaId)) throw erro(409, "Só a etapa atual pode ser alterada. Atualize a tela.");
   const idx = ord.indexOf(atual);
-  const ini = idx === 0 ? raw.criado_em : ord[idx - 1].concluida_em;
-  return { raw, ord, atual, ini, ultima: idx === ord.length - 1, pausas };
+  const { rows: pg } = await c.query("SELECT inicio FROM adm_passagens WHERE etapa_id = $1 AND fim IS NULL ORDER BY inicio DESC LIMIT 1", [atual.id]);
+  return { raw, ord, atual, idx, proximo: ord[idx + 1] || null, anterior: ord[idx - 1] || null, ini: pg[0] ? pg[0].inicio : raw.criado_em, ultima: idx === ord.length - 1, pausas };
+}
+// encerra o processo sem contratação (vaga reprovada, inapto, desistência ou cancelamento)
+async function encerrarInterno(c, id, p, desfecho, motivo) {
+  await c.query("UPDATE adm_pausas SET fim = now() WHERE processo_id = $1 AND fim IS NULL", [id]);
+  await c.query("UPDATE adm_passagens SET fim = now() WHERE processo_id = $1 AND fim IS NULL", [id]);
+  await c.query("UPDATE adm_processos SET status = 'cancelado', cancelado_motivo = $2, desfecho = $3, atualizado_em = now() WHERE id = $1", [id, motivo, desfecho]);
+  await evento(c, id, "cancelado", p.email, { motivo, desfecho });
+}
+function exigirPapelDaEtapa(p, etapa) {
+  if (etapa.acao === "aprovacao") { if (!podeAprovar(p)) throw erro(403, "Só a GO ou o gestor aprovam ou reprovam a vaga."); }
+  else exigirNaoGo(p);
 }
 function quando(b, ini) {
   if (!b.concluida_em) return new Date();
@@ -309,15 +378,32 @@ async function concluirEtapa(acc, id, etapaId, b = {}) {
   const r = await comTransacao(async (c) => {
     await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
     const e = await etapaAtual(c, id, etapaId);
+    const a = e.atual;
+    exigirPapelDaEtapa(p, a);
+    if (a.exige_candidato && (!e.raw.colaborador || !e.raw.data_prevista)) throw erro(400, "Antes de concluir, informe o nome do candidato e a data de início (botão Editar dados).");
+    const falta = (Array.isArray(a.subtarefas) ? a.subtarefas : []).filter((t) => !t.feita_em);
+    if (falta.length) throw erro(400, "Marque todas as tarefas da etapa antes de concluir. Falta: " + falta.map((t) => t.nome).join("; ") + ".");
+    let resultado = null;
+    if (a.acao === "aso") {
+      resultado = txt(b.resultado).toLowerCase();
+      if (!["apto", "inapto"].includes(resultado)) throw erro(400, "Informe o resultado do exame: apto ou inapto.");
+    }
     const quand = quando(b, e.ini);
-    await c.query("UPDATE adm_proc_etapas SET status = 'concluida', concluida_em = $2, concluida_por = $3, obs = $4 WHERE id = $1", [e.atual.id, quand, p.email, txt(b.obs).slice(0, 500) || null]);
+    const obs = txt(b.obs).slice(0, 500) || null;
+    const obsFinal = resultado ? "Resultado: " + resultado + (obs ? " · " + obs : "") : obs;
+    await c.query("UPDATE adm_proc_etapas SET status = 'concluida', concluida_em = $2, concluida_por = $3, obs = $4 WHERE id = $1", [a.id, quand, p.email, obsFinal]);
+    await fecharPassagem(c, a.id, quand);
+    await evento(c, id, "etapa_concluida", p.email, { etapa: a.nome, ordem: a.ordem, quando: quand, obs: obsFinal, final: e.ultima, resultado, aprovacao: a.acao === "aprovacao" || undefined });
+    if (resultado === "inapto") {
+      await encerrarInterno(c, id, p, "inapto", "Resultado do exame admissional: inapto" + (obs ? " · " + obs : ""));
+      return { protocolo: e.raw.protocolo, final: false, encerrado: true, etapa: a.nome };
+    }
     if (e.ultima) await c.query("UPDATE adm_processos SET status = 'concluido', concluido_em = $2, atualizado_em = now() WHERE id = $1", [id, quand]);
-    else await c.query("UPDATE adm_processos SET atualizado_em = now() WHERE id = $1", [id]);
-    await evento(c, id, "etapa_concluida", p.email, { etapa: e.atual.nome, ordem: e.atual.ordem, quando: quand, obs: txt(b.obs).slice(0, 500) || null, final: e.ultima });
-    return { protocolo: e.raw.protocolo, final: e.ultima, etapa: e.atual.nome };
+    else { await c.query("UPDATE adm_processos SET atualizado_em = now() WHERE id = $1", [id]); await abrirPassagem(c, id, e.proximo.id, quand); }
+    return { protocolo: e.raw.protocolo, final: e.ultima, etapa: a.nome };
   });
-  audit(acc, r.final ? "adm_concluido" : "adm_etapa_concluida", { papel: p.papel, alvo: r.protocolo, detalhe: r.etapa });
-  return { ok: true, concluido: r.final };
+  audit(acc, r.final ? "adm_concluido" : r.encerrado ? "adm_encerrado" : "adm_etapa_concluida", { papel: p.papel, alvo: r.protocolo, detalhe: r.etapa });
+  return { ok: true, concluido: r.final, encerrado: !!r.encerrado };
 }
 async function dispensarEtapa(acc, id, etapaId, b = {}) {
   const p = await papelDe(acc);
@@ -326,9 +412,11 @@ async function dispensarEtapa(acc, id, etapaId, b = {}) {
   const r = await comTransacao(async (c) => {
     await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
     const e = await etapaAtual(c, id, etapaId);
+    exigirPapelDaEtapa(p, e.atual);
     await c.query("UPDATE adm_proc_etapas SET status = 'dispensada', concluida_em = $2, concluida_por = $3, obs = $4 WHERE id = $1", [e.atual.id, e.ini, p.email, motivo]);
+    await c.query("UPDATE adm_passagens SET fim = inicio WHERE etapa_id = $1 AND fim IS NULL", [e.atual.id]);
     if (e.ultima) await c.query("UPDATE adm_processos SET status = 'concluido', concluido_em = now(), atualizado_em = now() WHERE id = $1", [id]);
-    else await c.query("UPDATE adm_processos SET atualizado_em = now() WHERE id = $1", [id]);
+    else { await c.query("UPDATE adm_processos SET atualizado_em = now() WHERE id = $1", [id]); await abrirPassagem(c, id, e.proximo.id, e.ini); }
     await evento(c, id, "etapa_dispensada", p.email, { etapa: e.atual.nome, ordem: e.atual.ordem, motivo, final: e.ultima });
     return { protocolo: e.raw.protocolo, etapa: e.atual.nome, final: e.ultima };
   });
@@ -337,18 +425,20 @@ async function dispensarEtapa(acc, id, etapaId, b = {}) {
 }
 // desfaz a última etapa concluída ou dispensada (engano de clique)
 async function reabrirEtapa(acc, id, b = {}) {
-  const p = await papelDe(acc);
+  const p = await papelDe(acc); exigirNaoGo(p);
   const motivo = txt(b.motivo).slice(0, 300);
   if (motivo.length < 5) throw erro(400, "Explique por que a etapa volta (mínimo 5 letras).");
   const r = await comTransacao(async (c) => {
     await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
     const { raw, etapas } = await carregarUm(id, c);
-    if (raw.status === "cancelado") throw erro(409, "Processo cancelado.");
+    if (raw.status === "cancelado") throw erro(409, "Processo encerrado.");
     if (raw.status === "concluido" && p.papel !== "gestor") throw erro(403, "Só o gestor reabre um processo concluído.");
     const feitas = etapas.filter((e) => e.status !== "pendente").sort((a, b2) => b2.ordem - a.ordem || b2.id - a.id);
     if (!feitas.length) throw erro(409, "Nenhuma etapa concluída para voltar.");
     const ult = feitas[0];
+    await c.query("UPDATE adm_passagens SET fim = now() WHERE processo_id = $1 AND fim IS NULL", [id]);
     await c.query("UPDATE adm_proc_etapas SET status = 'pendente', concluida_em = NULL, concluida_por = NULL, obs = NULL WHERE id = $1", [ult.id]);
+    await abrirPassagem(c, id, ult.id, new Date());
     await c.query("UPDATE adm_processos SET status = CASE WHEN status = 'concluido' THEN 'em_andamento' ELSE status END, concluido_em = NULL, atualizado_em = now() WHERE id = $1", [id]);
     await evento(c, id, "etapa_reaberta", p.email, { etapa: ult.nome, ordem: ult.ordem, motivo });
     return { protocolo: raw.protocolo, etapa: ult.nome };
@@ -356,8 +446,82 @@ async function reabrirEtapa(acc, id, b = {}) {
   audit(acc, "adm_etapa_reaberta", { papel: p.papel, alvo: r.protocolo, detalhe: r.etapa });
   return { ok: true };
 }
-async function pausar(acc, id, b = {}) {
+
+// A GO (ou o gestor) reprova a vaga: o processo é encerrado com a justificativa.
+async function reprovarVaga(acc, id, etapaId, b = {}) {
   const p = await papelDe(acc);
+  const motivo = txt(b.motivo).slice(0, 300);
+  if (motivo.length < 5) throw erro(400, "Informe a justificativa da reprovação (mínimo 5 letras).");
+  const r = await comTransacao(async (c) => {
+    await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
+    const e = await etapaAtual(c, id, etapaId);
+    if (e.atual.acao !== "aprovacao") throw erro(409, "Essa etapa não é de aprovação.");
+    exigirPapelDaEtapa(p, e.atual);
+    await c.query("UPDATE adm_passagens SET fim = now() WHERE etapa_id = $1 AND fim IS NULL", [e.atual.id]);
+    await evento(c, id, "vaga_reprovada", p.email, { etapa: e.atual.nome, motivo });
+    await encerrarInterno(c, id, p, "vaga_reprovada", motivo);
+    return e.raw.protocolo;
+  });
+  audit(acc, "adm_vaga_reprovada", { papel: p.papel, alvo: r, detalhe: motivo });
+  return { ok: true };
+}
+// O RH não aprova os documentos: devolve para a etapa anterior (loja ou candidato corrige) e a etapa de validação volta para a fila.
+async function devolverEtapa(acc, id, etapaId, b = {}) {
+  const p = await papelDe(acc); exigirNaoGo(p);
+  const cat = MOTIVOS_DEVOLUCAO.includes(txt(b.motivo_cat)) ? txt(b.motivo_cat) : "Outro";
+  const detalhe = txt(b.detalhe).slice(0, 500);
+  if (detalhe.length < 5) throw erro(400, "Descreva o que está incorreto ou faltando (mínimo 5 letras).");
+  const r = await comTransacao(async (c) => {
+    await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
+    const e = await etapaAtual(c, id, etapaId);
+    if (e.atual.acao !== "validacao") throw erro(409, "Só etapas de validação podem ser devolvidas.");
+    if (!e.anterior) throw erro(409, "Não há etapa anterior para devolver.");
+    await c.query("UPDATE adm_passagens SET fim = now() WHERE etapa_id = $1 AND fim IS NULL", [e.atual.id]);
+    await c.query("UPDATE adm_proc_etapas SET status = 'pendente', concluida_em = NULL, concluida_por = NULL, obs = NULL WHERE id = $1", [e.anterior.id]);
+    await abrirPassagem(c, id, e.anterior.id, new Date());
+    await c.query("INSERT INTO adm_devolucoes (processo_id, etapa_validacao_id, etapa_destino_id, etapa_nome, motivo_cat, detalhe, usuario) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, e.atual.id, e.anterior.id, e.anterior.nome, cat, detalhe, p.email]);
+    await c.query("UPDATE adm_processos SET atualizado_em = now() WHERE id = $1", [id]);
+    await evento(c, id, "devolvida", p.email, { etapa: e.atual.nome, para: e.anterior.nome, motivo_cat: cat, detalhe });
+    return { protocolo: e.raw.protocolo, de: e.atual.nome, para: e.anterior.nome };
+  });
+  audit(acc, "adm_devolvida", { papel: p.papel, alvo: r.protocolo, detalhe: cat + " · " + r.para });
+  return { ok: true, voltou_para: r.para };
+}
+// checklist dentro da etapa atual
+async function marcarSubtarefa(acc, id, etapaId, b = {}) {
+  const p = await papelDe(acc); exigirNaoGo(p);
+  const r = await comTransacao(async (c) => {
+    await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
+    const e = await etapaAtual(c, id, etapaId);
+    const sub = Array.isArray(e.atual.subtarefas) ? e.atual.subtarefas.map((t) => ({ ...t })) : [];
+    const i = Number(b.indice);
+    if (!(i >= 0 && i < sub.length)) throw erro(400, "Tarefa não encontrada.");
+    const feita = b.feita !== false;
+    if (feita) { sub[i].feita_em = new Date().toISOString(); sub[i].feita_por = p.email; } else { delete sub[i].feita_em; delete sub[i].feita_por; }
+    await c.query("UPDATE adm_proc_etapas SET subtarefas = $2::jsonb WHERE id = $1", [e.atual.id, JSON.stringify(sub)]);
+    await evento(c, id, "tarefa", p.email, { etapa: e.atual.nome, tarefa: sub[i].nome, feita });
+    return { feitas: sub.filter((t) => t.feita_em).length, total: sub.length };
+  });
+  return { ok: true, ...r };
+}
+// o candidato desistiu (o gestor ainda tem o cancelamento livre)
+async function encerrar(acc, id, b = {}) {
+  const p = await papelDe(acc); exigirNaoGo(p);
+  const motivo = txt(b.motivo).slice(0, 300);
+  if (motivo.length < 5) throw erro(400, "Conte brevemente o que aconteceu (mínimo 5 letras).");
+  const protocolo = await comTransacao(async (c) => {
+    const { rows } = await c.query("SELECT protocolo, status, tipo FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
+    if (!rows[0]) throw erro(404, "Processo não encontrado.");
+    if (!ABERTOS.includes(rows[0].status)) throw erro(409, "O processo já está encerrado.");
+    if (rows[0].tipo !== "admissao") throw erro(400, "A desistência vale para admissões.");
+    await encerrarInterno(c, id, p, "desistencia", motivo);
+    return rows[0].protocolo;
+  });
+  audit(acc, "adm_encerrado", { papel: p.papel, alvo: protocolo, detalhe: "desistência: " + motivo });
+  return { ok: true };
+}
+async function pausar(acc, id, b = {}) {
+  const p = await papelDe(acc); exigirNaoGo(p);
   const motivo = txt(b.motivo).slice(0, 300);
   if (motivo.length < 5) throw erro(400, "Diga o que está sendo aguardado (mínimo 5 letras).");
   const protocolo = await comTransacao(async (c) => {
@@ -373,7 +537,7 @@ async function pausar(acc, id, b = {}) {
   return { ok: true };
 }
 async function retomar(acc, id) {
-  const p = await papelDe(acc);
+  const p = await papelDe(acc); exigirNaoGo(p);
   const protocolo = await comTransacao(async (c) => {
     const { rows } = await c.query("SELECT protocolo, status FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
     if (!rows[0]) throw erro(404, "Processo não encontrado.");
@@ -387,9 +551,9 @@ async function retomar(acc, id) {
   return { ok: true };
 }
 async function atribuir(acc, id, b = {}) {
-  const p = await papelDe(acc);
+  const p = await papelDe(acc); exigirNaoGo(p);
   const email = em(b.responsavel);
-  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [email]);
+  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel <> 'go' UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [email]);
   if (!rr[0]) throw erro(400, "O responsável precisa ser da equipe.");
   const { raw } = await carregarUm(id);
   if (!ABERTOS.includes(raw.status)) throw erro(409, "Processo encerrado.");
@@ -415,9 +579,7 @@ async function cancelar(acc, id, b = {}) {
     const { rows } = await c.query("SELECT protocolo, status FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
     if (!rows[0]) throw erro(404, "Processo não encontrado.");
     if (!ABERTOS.includes(rows[0].status)) throw erro(409, "Só dá para cancelar um processo em andamento.");
-    await c.query("UPDATE adm_pausas SET fim = now() WHERE processo_id = $1 AND fim IS NULL", [id]);
-    await c.query("UPDATE adm_processos SET status = 'cancelado', cancelado_motivo = $2, atualizado_em = now() WHERE id = $1", [id, motivo]);
-    await evento(c, id, "cancelado", p.email, { motivo });
+    await encerrarInterno(c, id, p, "outro", motivo);
     return rows[0].protocolo;
   });
   audit(acc, "adm_cancelado", { papel: p.papel, alvo: protocolo, detalhe: motivo });
@@ -461,13 +623,35 @@ async function ajustarPrazos(acc, id, b = {}) {
   return { ok: true };
 }
 
+// ---------- modelos de mensagem (copiar e colar no WhatsApp ou e-mail) ----------
+async function mensagens(acc) {
+  await papelDe(acc);
+  const { rows } = await pool.query("SELECT chave, valor FROM adm_config WHERE chave LIKE 'msg\\_%'");
+  const cust = {}; rows.forEach((r) => { cust[r.chave.slice(4)] = r.valor; });
+  return { modelos: MSG_PADRAO.map((m) => ({ ...m, padrao: m.texto, texto: cust[m.chave] || m.texto, personalizada: !!cust[m.chave] })),
+    variaveis: ["{nome}", "{cargo}", "{loja}", "{data_inicio}", "{link}", "{itens}", "{motivo}"] };
+}
+async function salvarMensagem(acc, chave, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const m = MSG_PADRAO.find((x) => x.chave === chave);
+  if (!m) throw erro(404, "Modelo de mensagem não encontrado.");
+  const t = txt(b.texto).slice(0, 1200);
+  if (!t || t === m.texto) await pool.query("DELETE FROM adm_config WHERE chave = $1", ["msg_" + chave]);
+  else {
+    if (t.length < 10) throw erro(400, "A mensagem está muito curta.");
+    await pool.query("INSERT INTO adm_config (chave, valor) VALUES ($1,$2) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", ["msg_" + chave, t]);
+  }
+  audit(acc, "adm_msg_modelo", { papel: p.papel, alvo: chave });
+  return { ok: true };
+}
+
 // ---------- cadastros: etapas ----------
 async function listarEtapasModelo(acc, f = {}) {
-  await papelDe(acc);
-  const { rows } = await pool.query("SELECT id::int AS id, tipo, nome, descricao, area, prazo_min, ordem, ativo FROM adm_etapas_modelo " + (TIPOS.includes(f.tipo) ? "WHERE tipo = $1 " : "") + "ORDER BY tipo, ordem, id", TIPOS.includes(f.tipo) ? [f.tipo] : []);
+  const pp = await papelDe(acc); exigirNaoGo(pp);
+  const { rows } = await pool.query("SELECT id::int AS id, tipo, nome, descricao, area, prazo_min, ordem, ativo, acao, externo, exige_candidato, subtarefas, mensagem FROM adm_etapas_modelo " + (TIPOS.includes(f.tipo) ? "WHERE tipo = $1 " : "") + "ORDER BY tipo, ordem, id", TIPOS.includes(f.tipo) ? [f.tipo] : []);
   const cfg = {};
-  for (const t of TIPOS) { const { rows: c } = await pool.query("SELECT valor FROM adm_config WHERE chave = $1", ["sla_total_" + t]); cfg[t] = { definido: Number(c[0] && c[0].valor) || null, soma: rows.filter((r) => r.tipo === t && r.ativo).reduce((s, r) => s + r.prazo_min, 0) }; }
-  return { etapas: rows, totais: cfg };
+  for (const t of TIPOS) { const { rows: c } = await pool.query("SELECT valor FROM adm_config WHERE chave = $1", ["sla_total_" + t]); cfg[t] = { definido: Number(c[0] && c[0].valor) || null, soma: rows.filter((r) => r.tipo === t && r.ativo).reduce((s2, r) => s2 + r.prazo_min, 0) }; }
+  return { etapas: rows, totais: cfg, acoes: ACOES, mensagens: MSG_PADRAO.map((m) => ({ chave: m.chave, titulo: m.titulo })) };
 }
 async function salvarEtapaModelo(acc, id, b = {}) {
   const p = await papelDe(acc); exigirGestor(p);
@@ -476,14 +660,20 @@ async function salvarEtapaModelo(acc, id, b = {}) {
   const prazo = Math.round(Number(b.prazo_min));
   if (!(prazo > 0)) throw erro(400, "Informe o prazo da etapa (maior que zero).");
   const area = txt(b.area).slice(0, 60) || null, desc = txt(b.descricao).slice(0, 400) || null;
+  const acao = ACOES.includes(txt(b.acao)) ? txt(b.acao) : "normal";
+  const externo = !!b.externo, exige = !!b.exige_candidato;
+  const sub = (Array.isArray(b.subtarefas) ? b.subtarefas : []).map((x) => txt(x).slice(0, 120)).filter(Boolean).slice(0, 10);
+  const msg = MSG_PADRAO.some((m) => m.chave === txt(b.mensagem)) ? txt(b.mensagem) : null;
   try {
     if (id) {
-      const { rows } = await pool.query("UPDATE adm_etapas_modelo SET nome=$2, descricao=$3, area=$4, prazo_min=$5, ordem=COALESCE($6, ordem), ativo=COALESCE($7, ativo) WHERE id=$1 RETURNING id", [id, nome, desc, area, prazo, b.ordem === undefined ? null : Math.round(Number(b.ordem)), b.ativo === undefined ? null : !!b.ativo]);
+      const { rows } = await pool.query("UPDATE adm_etapas_modelo SET nome=$2, descricao=$3, area=$4, prazo_min=$5, ordem=COALESCE($6, ordem), ativo=COALESCE($7, ativo), acao=$8, externo=$9, exige_candidato=$10, subtarefas=$11::jsonb, mensagem=$12 WHERE id=$1 RETURNING id",
+        [id, nome, desc, area, prazo, b.ordem === undefined ? null : Math.round(Number(b.ordem)), b.ativo === undefined ? null : !!b.ativo, acao, externo, exige, JSON.stringify(sub), msg]);
       if (!rows[0]) throw erro(404, "Etapa não encontrada.");
     } else {
       const tipo = txt(b.tipo); if (!TIPOS.includes(tipo)) throw erro(400, "Escolha o tipo (admissão ou rescisão).");
       const { rows: mx } = await pool.query("SELECT coalesce(max(ordem),0)::int AS m FROM adm_etapas_modelo WHERE tipo = $1", [tipo]);
-      await pool.query("INSERT INTO adm_etapas_modelo (tipo, nome, descricao, area, prazo_min, ordem) VALUES ($1,$2,$3,$4,$5,$6)", [tipo, nome, desc, area, prazo, b.ordem === undefined || b.ordem === "" ? mx[0].m + 1 : Math.round(Number(b.ordem))]);
+      await pool.query("INSERT INTO adm_etapas_modelo (tipo, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)",
+        [tipo, nome, desc, area, prazo, b.ordem === undefined || b.ordem === "" ? mx[0].m + 1 : Math.round(Number(b.ordem)), acao, externo, exige, JSON.stringify(sub), msg]);
     }
   } catch (e) { if (e.code === "23505") throw erro(409, "Já existe uma etapa com esse nome nesse tipo."); throw e; }
   audit(acc, "adm_etapa_modelo", { papel: p.papel, alvo: nome, detalhe: id ? "editada" : "criada" });
@@ -528,7 +718,7 @@ async function listarEquipe(acc) {
 }
 async function criarEquipe(acc, b = {}) {
   const p = await papelDe(acc); exigirGestor(p);
-  const email = em(b.email), nome = txt(b.nome).slice(0, 100) || null, papel = txt(b.papel) === "gestor" ? "gestor" : "analista";
+  const email = em(b.email), nome = txt(b.nome).slice(0, 100) || null, papel = PAPEIS.includes(txt(b.papel)) ? txt(b.papel) : "analista";
   if (!emailValido(email)) throw erro(400, "Informe um e-mail válido.");
   const ac = await garantirAcesso(email, nome, b.senha ? String(b.senha) : undefined);
   await pool.query(`INSERT INTO adm_equipe (email, nome, papel, ativo) VALUES ($1,$2,$3,true)
@@ -542,7 +732,7 @@ async function editarEquipe(acc, id, b = {}) {
   if (!rows[0]) throw erro(404, "Pessoa não encontrada.");
   const email = em(rows[0].email);
   if (email === p.email && (b.ativo === false || (b.papel && b.papel !== "gestor"))) throw erro(400, "Você não pode tirar o seu próprio acesso de gestor.");
-  await pool.query("UPDATE adm_equipe SET nome = COALESCE($2, nome), papel = COALESCE($3, papel), ativo = COALESCE($4, ativo) WHERE id = $1", [id, b.nome === undefined ? null : txt(b.nome) || null, b.papel ? (b.papel === "gestor" ? "gestor" : "analista") : null, b.ativo === undefined ? null : !!b.ativo]);
+  await pool.query("UPDATE adm_equipe SET nome = COALESCE($2, nome), papel = COALESCE($3, papel), ativo = COALESCE($4, ativo) WHERE id = $1", [id, b.nome === undefined ? null : txt(b.nome) || null, b.papel ? (PAPEIS.includes(b.papel) ? b.papel : "analista") : null, b.ativo === undefined ? null : !!b.ativo]);
   if (b.ativo === false) await pool.query("UPDATE users SET modules = array_remove(modules, 'admissao'), token_version = token_version + 1 WHERE lower(email) = $1 AND role <> 'admin'", [email]);
   if (b.ativo === true) await garantirAcesso(email, null, undefined);
   audit(acc, b.ativo === false ? "acesso_bloqueado" : "acesso_alterado", { papel: p.papel, alvo: email, detalhe: "Admissão e Rescisão" });
@@ -564,7 +754,7 @@ async function redefinirSenha(acc, b = {}) {
 const media = (a) => (a.length ? Math.round((a.reduce((s, x) => s + x, 0) / a.length) * 10) / 10 : null);
 const pct = (ok, tot) => (tot ? Math.round((ok / tot) * 1000) / 10 : null);
 async function indicadores(acc, f = {}) {
-  await papelDe(acc);
+  const pp = await papelDe(acc); exigirNaoGo(pp);
   const hoje = diaLocal(new Date());
   const ate = dataOk(txt(f.ate)) ? f.ate : hoje;
   const de = dataOk(txt(f.de)) ? f.de : somaDias(ate, -(Number(f.dias) > 0 ? Number(f.dias) : 90));
@@ -592,17 +782,39 @@ async function indicadores(acc, f = {}) {
     admissoes_antes_inicio_pct: pct(conc.filter((x) => x.tipo === "admissao" && x.prazo_data.situacao === "cumprido").length, conc.filter((x) => x.tipo === "admissao").length),
     rescisoes_prazo_legal_pct: pct(conc.filter((x) => x.tipo === "rescisao" && x.prazo_data.situacao === "cumprido").length, conc.filter((x) => x.tipo === "rescisao").length),
   };
+  // quem segura o processo: tempo com o RH x fora do RH (GO, loja, candidato, clínica)
+  const tRh = per.reduce((s2, x) => s2 + x.lados.rh, 0), tFora = per.reduce((s2, x) => s2 + x.lados.fora, 0);
+  kpis.tempo_rh_min = Math.round(tRh); kpis.tempo_fora_min = Math.round(tFora);
+  kpis.fora_do_rh_pct = tRh + tFora > 0 ? pct(tFora, tRh + tFora) : null;
+  const adms = per.filter((x) => x.tipo === "admissao" && x.status !== "cancelado" || x.tipo === "admissao" && x.retornos > 0);
+  kpis.retornos_total = per.reduce((s2, x) => s2 + x.retornos, 0);
+  kpis.com_retorno = per.filter((x) => x.retornos > 0).length;
+  kpis.retrabalho_pct = adms.length ? pct(adms.filter((x) => x.retornos > 0).length, adms.length) : null;
+  kpis.aguardando_go = abertos.filter((x) => x.etapa_atual && x.etapa_atual.acao === "aprovacao").length;
+  kpis.com_rh_agora = abertos.filter((x) => x.status === "em_andamento" && x.etapa_atual && !x.etapa_atual.externo).length;
+  kpis.fora_agora = abertos.filter((x) => x.status === "em_andamento" && x.etapa_atual && x.etapa_atual.externo).length;
+  const mapaAr = new Map();
+  per.forEach((x) => x.etapas.forEach((e) => { if (!(e.tempo_total > 0)) return; const k = e.area || "Outros"; if (!mapaAr.has(k)) mapaAr.set(k, { area: k, externo: e.externo, total: 0, procs: new Set() }); const m = mapaAr.get(k); m.total += e.tempo_total; m.procs.add(x.id); }));
+  const porArea = [...mapaAr.values()].map((m) => ({ area: m.area, externo: m.externo, total_min: Math.round(m.total), processos: m.procs.size, media_por_processo_min: Math.round((m.total / m.procs.size) * 10) / 10 })).sort((a, b) => b.total_min - a.total_min);
+  const contar = (arr) => { const m = new Map(); arr.forEach((k) => m.set(k, (m.get(k) || 0) + 1)); return [...m.entries()].map(([k, n]) => ({ rotulo: k, n })).sort((a, b) => b.n - a.n); };
+  const porDesfecho = contar(per.filter((x) => x.status === "cancelado").map((x) => x.desfecho_rotulo));
+  const todasDev = per.flatMap((x) => x.devolucoes.map((d) => ({ ...d, unidade: x.unidade })));
+  const devMotivo = contar(todasDev.map((d) => d.motivo_cat));
+  const devEtapa = contar(todasDev.map((d) => d.etapa));
+  const devLoja = (() => { const g = new Map(); per.filter((x) => x.tipo === "admissao").forEach((x) => { const m = g.get(x.unidade) || { rotulo: x.unidade, processos: 0, devolucoes: 0 }; m.processos++; m.devolucoes += x.retornos; g.set(x.unidade, m); }); return [...g.values()].filter((m) => m.devolucoes > 0).sort((a, b) => b.devolucoes - a.devolucoes).slice(0, 10); })();
   // por etapa (nome + tipo): tempo médio, % no prazo, estouradas agora (gargalo)
   const mapaEt = new Map();
   const chaveEt = (tipo, e) => tipo + "|" + e.ordem + "|" + e.nome;
-  validos.concat(abertos.filter((a) => !validos.some((x) => x.id === a.id))).forEach((proc) => proc.etapas.forEach((e) => {
+  per.concat(abertos.filter((a) => !per.some((x) => x.id === a.id))).forEach((proc) => proc.etapas.forEach((e) => {
     const k = chaveEt(proc.tipo, e);
-    if (!mapaEt.has(k)) mapaEt.set(k, { tipo: proc.tipo, ordem: e.ordem, nome: e.nome, area: e.area, meta_min: e.prazo_min, feitas: [], no_prazo: 0, fora: 0, atrasadas_agora: 0, atuais: 0 });
+    if (!mapaEt.has(k)) mapaEt.set(k, { tipo: proc.tipo, ordem: e.ordem, nome: e.nome, area: e.area, meta_min: e.prazo_min, externo: e.externo, acao: e.acao, feitas: [], no_prazo: 0, fora: 0, atrasadas_agora: 0, atuais: 0, chegaram: 0, voltas: 0 });
     const m = mapaEt.get(k);
     if (e.situacao === "cumprida" || e.situacao === "descumprida") { m.feitas.push(e.decorrido); if (e.situacao === "cumprida") m.no_prazo++; else m.fora++; }
     if (e.atual) { m.atuais++; if (e.situacao === "estourado") m.atrasadas_agora++; }
+    if (e.chegou) m.chegaram++;
+    m.voltas += e.voltas;
   }));
-  const porEtapa = [...mapaEt.values()].map((m) => ({ tipo: m.tipo, ordem: m.ordem, nome: m.nome, area: m.area, meta_min: m.meta_min, concluidas: m.feitas.length, tempo_medio_min: media(m.feitas), no_prazo_pct: pct(m.no_prazo, m.no_prazo + m.fora), em_andamento: m.atuais, atrasadas_agora: m.atrasadas_agora }))
+  const porEtapa = [...mapaEt.values()].map((m) => ({ tipo: m.tipo, ordem: m.ordem, nome: m.nome, area: m.area, meta_min: m.meta_min, externo: m.externo, acao: m.acao, chegaram: m.chegaram, voltas: m.voltas, concluidas: m.feitas.length, tempo_medio_min: media(m.feitas), no_prazo_pct: pct(m.no_prazo, m.no_prazo + m.fora), em_andamento: m.atuais, atrasadas_agora: m.atrasadas_agora }))
     .sort((a, b) => (a.tipo < b.tipo ? -1 : a.tipo > b.tipo ? 1 : a.ordem - b.ordem));
   const grupo = (lista, chave, rot) => {
     const g = new Map(); lista.forEach((x) => { const k = chave(x); if (!g.has(k)) g.set(k, []); g.get(k).push(x); });
@@ -622,12 +834,12 @@ async function indicadores(acc, f = {}) {
     .map((x) => ({ id: x.id, protocolo: x.protocolo, tipo: x.tipo, colaborador: x.colaborador, unidade: x.unidade, situacao: x.situacao, etapa_atual: x.etapa_atual, total: x.total, prazo_data: x.prazo_data, responsavel_nome: x.responsavel_nome, status: x.status }));
   const proximos = abertos.filter((x) => x.prazo_data.dias !== null && x.prazo_data.dias <= 14).sort((a, b) => a.prazo_data.dias - b.prazo_data.dias).slice(0, 10)
     .map((x) => ({ id: x.id, protocolo: x.protocolo, tipo: x.tipo, colaborador: x.colaborador, unidade: x.unidade, prazo_data: x.prazo_data, progresso: x.progresso, etapa_atual: x.etapa_atual }));
-  return { periodo: { de, ate }, kpis, por_etapa: porEtapa, por_responsavel: porResp, por_loja: porLoja, por_subtipo: porSubtipo, por_mes: porMes, mais_urgentes: urgentes, proximos_prazos: proximos,
+  return { periodo: { de, ate }, kpis, por_area: porArea, por_desfecho: porDesfecho, devolucoes: { total: todasDev.length, por_motivo: devMotivo, por_etapa: devEtapa, por_loja: devLoja }, por_etapa: porEtapa, por_responsavel: porResp, por_loja: porLoja, por_subtipo: porSubtipo, por_mes: porMes, mais_urgentes: urgentes, proximos_prazos: proximos,
     lista: per.map((x) => ({ protocolo: x.protocolo, tipo: x.tipo_rotulo, colaborador: x.colaborador, cpf: x.cpf_mascarado, cargo: x.cargo, unidade: x.unidade, subtipo: x.subtipo, data_prevista: x.data_prevista, status: x.status, responsavel: x.responsavel_nome || x.responsavel,
-      criado_em: x.criado_em, concluido_em: x.concluido_em, meta_total_min: x.total.meta, tempo_total_min: x.total.decorrido, sla_total: x.total.situacao, prazo_data: x.prazo_data.situacao, prazo_data_limite: x.prazo_data.limite, etapa_atual: x.etapa_atual ? x.etapa_atual.nome : null,
-      etapas: x.etapas.map((e) => ({ nome: e.nome, meta_min: e.prazo_min, tempo_min: e.decorrido, situacao: e.situacao })) })) };
+      criado_em: x.criado_em, concluido_em: x.concluido_em, retornos: x.retornos, desfecho: x.desfecho_rotulo, tempo_rh_min: x.lados.rh, tempo_fora_min: x.lados.fora, meta_total_min: x.total.meta, tempo_total_min: x.total.decorrido, sla_total: x.total.situacao, prazo_data: x.prazo_data.situacao, prazo_data_limite: x.prazo_data.limite, etapa_atual: x.etapa_atual ? x.etapa_atual.nome : null,
+      etapas: x.etapas.map((e) => ({ nome: e.nome, area: e.area, meta_min: e.prazo_min, tempo_min: e.tempo_total, voltas: e.voltas, situacao: e.situacao })) })) };
 }
 
-module.exports = { eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
+module.exports = { eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
   listarEtapasModelo, salvarEtapaModelo, salvarConfig, listarEquipe, criarEquipe, editarEquipe, redefinirSenha, indicadores,
   _t: { usado, monta, cpfValido, prazoData } };
