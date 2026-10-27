@@ -382,6 +382,10 @@ ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS prazo_manual BOOLEAN NOT NULL DE
 ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS transportadora_cnpj TEXT;
 -- prazos de entrega cadastrados por transportadora (por UF ou cidade) + prazo padrão
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS prazo_padrao INTEGER;
+-- Cubagem: a transportadora cobra pelo maior entre o peso real e o peso cubado (m³ x fator, em kg por m³)
+ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS fator_cub_rod NUMERIC(8,2) NOT NULL DEFAULT 300;
+ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS fator_cub_aereo NUMERIC(8,2) NOT NULL DEFAULT 167;
+ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS cubagem_m3 NUMERIC(10,4);
 -- prazo de pagamento da transportadora (ciclo de fechamento + vencimento)
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS pag_ciclo TEXT NOT NULL DEFAULT 'nenhum';
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS pag_base TEXT NOT NULL DEFAULT 'emissao';
