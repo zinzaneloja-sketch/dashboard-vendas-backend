@@ -1081,6 +1081,9 @@ async function migrarAdmissao() {
       ordem INT NOT NULL, chave TEXT NOT NULL, rotulo TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('texto','data','arquivo')),
       obrigatorio BOOLEAN NOT NULL DEFAULT false, valor TEXT, status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente','ok','incorreto')),
       obs_rh TEXT, atualizado_em TIMESTAMPTZ);
+    ALTER TABLE adm_form_itens ADD COLUMN IF NOT EXISTS opcoes JSONB;
+    ALTER TABLE adm_form_itens DROP CONSTRAINT IF EXISTS adm_form_itens_kind_check;
+    ALTER TABLE adm_form_itens ADD CONSTRAINT adm_form_itens_kind_check CHECK (kind IN ('texto','email','cpf','telefone','data','cep','selecao','banco','dependentes','arquivo'));
     CREATE INDEX IF NOT EXISTS adm_form_itens_form_idx ON adm_form_itens (form_id);
     CREATE TABLE IF NOT EXISTS adm_form_arquivos (
       id BIGSERIAL PRIMARY KEY, item_id BIGINT NOT NULL REFERENCES adm_form_itens(id) ON DELETE CASCADE,
@@ -1144,6 +1147,17 @@ async function migrarAdmissao() {
       }
       await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('formularios_v1','1') ON CONFLICT (chave) DO NOTHING");
       console.log("[admissao] Formulários do gerente e do candidato ligados às etapas.");
+    }
+  }
+  // v2 do formulário do candidato (CEP com preenchimento automático, banco em lista, dependentes campo a campo):
+  // links ainda não usados (rascunho, sem anexos) são recriados com o modelo novo; os que já têm dados ficam como estão
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'formularios_v2'");
+    if (!fl.length) {
+      await pool.query("DELETE FROM adm_formularios f WHERE f.tipo = 'adm' AND f.status = 'rascunho' AND NOT EXISTS (SELECT 1 FROM adm_form_itens i JOIN adm_form_arquivos a ON a.item_id = i.id WHERE i.form_id = f.id)");
+      await pool.query("DELETE FROM adm_config WHERE chave = 'form_adm'");
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('formularios_v2','1') ON CONFLICT (chave) DO NOTHING");
+      console.log("[admissao] Formulário do candidato atualizado (v2).");
     }
   }
 }
