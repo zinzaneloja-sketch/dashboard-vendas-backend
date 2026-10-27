@@ -384,8 +384,10 @@ ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS transportadora_cnpj TEXT;
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS prazo_padrao INTEGER;
 -- Cubagem: a transportadora cobra pelo maior entre o peso real e o peso cubado (m³ x fator, em kg por m³)
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS fator_cub_rod NUMERIC(8,2) NOT NULL DEFAULT 300;
-ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS fator_cub_aereo NUMERIC(8,2) NOT NULL DEFAULT 167;
+ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS fator_cub_aereo NUMERIC(8,2) NOT NULL DEFAULT 166.67;
 ALTER TABLE cd_fat_nfs ADD COLUMN IF NOT EXISTS cubagem_m3 NUMERIC(10,4);
+-- Seguro (ad valorem) padrão da transportadora, em % do valor da NF: vale onde a tabela de frete não traz ad valorem
+ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS seguro_pct NUMERIC(6,3);
 -- prazo de pagamento da transportadora (ciclo de fechamento + vencimento)
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS pag_ciclo TEXT NOT NULL DEFAULT 'nenhum';
 ALTER TABLE cd_transportadoras ADD COLUMN IF NOT EXISTS pag_base TEXT NOT NULL DEFAULT 'emissao';
@@ -1162,6 +1164,13 @@ async function migrarAdmissao() {
       await pool.query("DELETE FROM adm_config WHERE chave = 'form_adm'");
       await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('formularios_v2','1') ON CONFLICT (chave) DO NOTHING");
       console.log("[admissao] Formulário do candidato atualizado (v2).");
+    }
+  }
+  {
+    const { rows: fa } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'cub_aereo_6000'");
+    if (!fa.length) {
+      await pool.query("UPDATE cd_transportadoras SET fator_cub_aereo = 166.67 WHERE fator_cub_aereo = 167");
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('cub_aereo_6000','1') ON CONFLICT (chave) DO NOTHING");
     }
   }
   // GO só enxerga as lojas do grupo dela: o grupo é o nome da GO na coluna "regional" do cadastro de lojas
