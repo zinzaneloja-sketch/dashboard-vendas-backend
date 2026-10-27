@@ -1160,6 +1160,18 @@ async function migrarAdmissao() {
       console.log("[admissao] Formulário do candidato atualizado (v2).");
     }
   }
+  // GO só enxerga as lojas do grupo dela: o grupo é o nome da GO na coluna "regional" do cadastro de lojas
+  await pool.query("ALTER TABLE adm_equipe ADD COLUMN IF NOT EXISTS grupos TEXT[] NOT NULL DEFAULT '{}'");
+  {
+    const { rows: fg } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'go_grupos_v1'");
+    if (!fg.length) {
+      // GOs que já existiam: se o primeiro nome bate com o nome de um grupo (ex.: "Silvia Souza" -> Silvia), já fica ligada; o gestor confere em Cadastros > Equipe
+      const r = await pool.query(`UPDATE adm_equipe e SET grupos = ARRAY[g.regional] FROM (SELECT DISTINCT ON (lower(trim(regional))) trim(regional) AS regional FROM ch_lojas WHERE coalesce(trim(regional), '') <> '') g
+        WHERE e.papel = 'go' AND coalesce(array_length(e.grupos, 1), 0) = 0 AND lower(split_part(trim(coalesce(e.nome, '')), ' ', 1)) = lower(g.regional)`);
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('go_grupos_v1','1') ON CONFLICT (chave) DO NOTHING");
+      console.log("[admissao] GOs ligadas ao grupo de lojas pelo nome: " + r.rowCount);
+    }
+  }
 }
 
 async function migrate() {
