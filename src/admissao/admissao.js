@@ -311,6 +311,7 @@ async function detalhe(acc, id) {
     if (ea && ea.formulario && ea.acao !== "validacao" && ABERTOS.includes(raw.status)) await comTransacao((c) => garantirForm(c, id, ea.formulario, p.email));
   }
   proc.formularios = raw.tipo === "admissao" ? await resumoFormularios(id, p.papel !== "go") : {};
+  proc.candidato_telefone = raw.tipo === "admissao" && p.papel !== "go" ? await telefoneCandidato(id) : null;
   if (p.papel === "go") proc.cpf_mascarado = null;
   const { rows: ev } = await pool.query("SELECT tipo, usuario, detalhe, criado_em FROM adm_eventos WHERE processo_id = $1 ORDER BY criado_em, id", [id]);
   const { rows: ps } = await pool.query("SELECT inicio, fim, motivo, usuario FROM adm_pausas WHERE processo_id = $1 ORDER BY inicio", [id]);
@@ -370,14 +371,7 @@ function exigirPapelDaEtapa(p, etapa) {
   if (etapa.acao === "aprovacao") { if (!podeAprovar(p)) throw erro(403, "Só a GO ou o gestor aprovam ou reprovam a vaga."); }
   else exigirNaoGo(p);
 }
-function quando(b, ini) {
-  if (!b.concluida_em) return new Date();
-  const d = new Date(b.concluida_em);
-  if (isNaN(d.getTime())) throw erro(400, "Data e hora inválidas.");
-  if (d.getTime() > Date.now() + 60000) throw erro(400, "A conclusão não pode estar no futuro.");
-  if (d.getTime() < new Date(ini).getTime()) throw erro(400, "A conclusão não pode ser anterior ao início da etapa.");
-  return d;
-}
+function quando() { return new Date(); } // data e hora da conclusão são sempre automáticas (o momento do clique); ninguém informa nem altera
 async function concluirEtapa(acc, id, etapaId, b = {}) {
   const p = await papelDe(acc);
   const r = await comTransacao(async (c) => {
@@ -402,7 +396,7 @@ async function concluirEtapa(acc, id, etapaId, b = {}) {
       resultado = txt(b.resultado).toLowerCase();
       if (!["apto", "inapto"].includes(resultado)) throw erro(400, "Informe o resultado do exame: apto ou inapto.");
     }
-    const quand = quando(b, e.ini);
+    const quand = quando();
     const obs = txt(b.obs).slice(0, 500) || null;
     const obsFinal = resultado ? "Resultado: " + resultado + (obs ? " · " + obs : "") : obs;
     await c.query("UPDATE adm_proc_etapas SET status = 'concluida', concluida_em = $2, concluida_por = $3, obs = $4 WHERE id = $1", [a.id, quand, p.email, obsFinal]);
@@ -1045,6 +1039,11 @@ async function arquivoRH(acc, id, arqId) {
   if (!rows[0]) throw erro(404, "Arquivo não encontrado.");
   audit(acc, "adm_ver_doc", { papel: p.papel, alvo: rows[0].protocolo, detalhe: rows[0].nome });
   return { nome: rows[0].nome, mime: rows[0].mime, base64: rows[0].dados.toString("base64") };
+}
+// telefone do candidato para o WhatsApp: o que ele mesmo informou no Link 2 vale mais; senão, o que o gerente informou no Link 1
+async function telefoneCandidato(id) {
+  const { rows } = await pool.query("SELECT i.valor FROM adm_form_itens i JOIN adm_formularios f ON f.id = i.form_id WHERE f.processo_id = $1 AND i.chave = 'telefone' AND i.valor IS NOT NULL AND i.valor <> '' ORDER BY (f.tipo = 'adm') DESC, f.id LIMIT 1", [id]);
+  return rows[0] ? rows[0].valor : null;
 }
 async function resumoFormularios(id, comToken) {
   const { rows: fs } = await pool.query(`SELECT ${FORM_COLS} FROM adm_formularios WHERE processo_id = $1`, [id]);
