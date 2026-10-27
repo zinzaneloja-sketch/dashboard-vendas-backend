@@ -98,16 +98,18 @@ function lerXmlSaida(xml) {
 }
 
 // ---------- cálculo do frete ----------
-function calcFrete(row, peso, valor) {
+function calcFrete(row, peso, valor, seguroPadrao) {
   const p = Number(peso), v = Number(valor) || 0;
   const frete = Number(row.frete) || 0, porKg = (Number(row.frete_kg) || 0) * p, exc = (Number(row.excedente_kg) || 0) * Math.max(0, p - (Number(row.peso_de) || 0));
   let base = frete + porKg + exc;
   const minimo = Number(row.frete_minimo) || 0;
   const minAplicado = minimo > base;
   if (minAplicado) base = minimo;
-  const adv = v * (Number(row.adv_pct) || 0) / 100, gris = v * (Number(row.gris_pct) || 0) / 100, taxa = Number(row.taxa_fixa) || 0;
+  // seguro (ad valorem): vale o da tabela; onde a tabela não traz, vale o percentual do cadastro da transportadora
+  const advTab = Number(row.adv_pct) || 0, advPct = advTab > 0 ? advTab : (Number(seguroPadrao) || 0), advOrigem = advTab > 0 ? "tabela" : (advPct > 0 ? "cadastro" : null);
+  const adv = v * advPct / 100, gris = v * (Number(row.gris_pct) || 0) / 100, taxa = Number(row.taxa_fixa) || 0;
   const arred = (x) => Math.round(x * 100) / 100;
-  return { frete_peso: arred(base), ad_valorem: arred(adv), gris: arred(gris), taxa_fixa: arred(taxa), minimo_aplicado: minAplicado, total: arred(base + adv + gris + taxa) };
+  return { frete_peso: arred(base), ad_valorem: arred(adv), adv_pct: advPct || null, adv_origem: advOrigem, gris: arred(gris), taxa_fixa: arred(taxa), minimo_aplicado: minAplicado, total: arred(base + adv + gris + taxa) };
 }
 
 // modal do frete: cada tabela de frete é rodoviária ou aérea (a transportadora pode ter uma de cada)
@@ -169,7 +171,9 @@ async function cotarCom(db, t, nf, modal = "rodoviario") {
   const cub = { peso_real: pesoReal, cubagem_m3: m3 || null, fator_cubagem: m3 > 0 ? fator : null, peso_cubado: m3 > 0 ? pesoCubado : null, peso_taxado: pesoTaxado, cobrado_por: m3 > 0 && pesoCubado > pesoReal ? "cubagem" : "peso real" };
   const row = await linhaDaTabela(db, t.id, nf.destino_uf, nf.destino_cidade, pesoTaxado, modal);
   if (!row) return { ...base, ...cub, ok: false, motivo: `Sem faixa na tabela${modal === "aereo" ? " aérea" : ""} para ${nf.destino_uf}${nf.destino_cidade ? " / " + nf.destino_cidade : ""} com ${pesoTaxado} kg${cub.cobrado_por === "cubagem" ? " (peso cubado)" : ""}.` };
-  const c = calcFrete(row, pesoTaxado, nf.valor);
+  let seguro = t.seguro_pct;
+  if (seguro === undefined) { const { rows: sg } = await db.query("SELECT seguro_pct FROM cd_transportadoras WHERE id = $1", [t.id]); seguro = sg[0] ? sg[0].seguro_pct : null; }
+  const c = calcFrete(row, pesoTaxado, nf.valor, seguro);
   // prazo: o cadastrado por UF/cidade vence o da tabela de frete; sem nenhum dos dois, vale o prazo padrão da transportadora
   const cad = modal === "rodoviario" ? await prazoCadastrado(db, t.id, nf.destino_uf, nf.destino_cidade) : null; // os prazos cadastrados por UF/cidade valem para o rodoviário
   let prazo = null, origem = null;
@@ -182,7 +186,7 @@ async function cotarCom(db, t, nf, modal = "rodoviario") {
 }
 
 async function cotacoes(db, nf, opts = {}) {
-  const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao, fator_cub_rod, fator_cub_aereo FROM cd_transportadoras WHERE ativa ORDER BY nome");
+  const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao, fator_cub_rod, fator_cub_aereo, seguro_pct FROM cd_transportadoras WHERE ativa ORDER BY nome");
   const out = [];
   for (const t of ts) {
     const modais = await modaisDaTransp(db, t.id);
@@ -217,7 +221,7 @@ async function cotacoes(db, nf, opts = {}) {
 async function listarTransportadoras(acc) {
   exigirFat(acc);
   const { rows } = await pool.query(
-    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.fator_cub_rod::float AS fator_cub_rod, t.fator_cub_aereo::float AS fator_cub_aereo, t.pag_ciclo, t.pag_base, t.pag_fecha_dow, t.pag_dias, t.pag_dia_fixo, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
+    `SELECT t.id, t.nome, t.cnpj, t.prazo_corridos, t.prazo_padrao, t.fator_cub_rod::float AS fator_cub_rod, t.fator_cub_aereo::float AS fator_cub_aereo, t.seguro_pct::float AS seguro_pct, t.pag_ciclo, t.pag_base, t.pag_fecha_dow, t.pag_dias, t.pag_dia_fixo, t.ativa, t.tabela_importada_em, t.tabela_importada_por,
             (SELECT count(*)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS linhas,
             (SELECT count(DISTINCT uf)::int FROM cd_frete_tabela f WHERE f.transportadora_id = t.id) AS ufs,
             (SELECT count(*)::int FROM cd_transportadora_prazos p WHERE p.transportadora_id = t.id) AS prazos,
@@ -268,8 +272,10 @@ async function salvarTransportadora(acc, id, b = {}) {
   const ppn = b.prazo_padrao === undefined || b.prazo_padrao === null || txt(b.prazo_padrao) === "" ? null : numBR(b.prazo_padrao);
   if (ppn !== null && (ppn < 0 || ppn > 120 || Math.round(ppn) !== ppn)) throw erro(400, "O prazo padrão deve ser um número inteiro de dias (0 a 120).");
   const pp = ppn;
-  const fator = (k, padrao) => { if (b[k] === undefined || b[k] === null || txt(b[k]) === "") return null; const v = numBR(b[k]); if (v === null || v < 50 || v > 1000) throw erro(400, "O fator de cubagem (" + (k === "fator_cub_aereo" ? "aéreo" : "rodoviário") + ") deve ficar entre 50 e 1000 kg por m³ (padrão " + padrao + ")."); return v; };
+  const fator = (k, padrao) => { if (b[k] === undefined || b[k] === null || txt(b[k]) === "") return null; const v = numBR(b[k]); if (v === null || v < 50 || v > 1000) throw erro(400, "O fator de cubagem (" + (k === "fator_cub_aereo" ? "aéreo" : "rodoviário") + ") deve ficar entre 50 e 1000 kg por m³ (padrão " + String(padrao).replace(".", ",") + ")."); return v; };
   const fRod = fator("fator_cub_rod", FATOR_RODOVIARIO), fAer = fator("fator_cub_aereo", FATOR_AEREO);
+  const temSeguro = b.seguro_pct !== undefined; let seguro = null;
+  if (temSeguro && txt(b.seguro_pct) !== "") { seguro = numBR(b.seguro_pct); if (seguro === null || seguro < 0 || seguro > 20) throw erro(400, "O percentual do seguro deve ficar entre 0 e 20% sobre o valor da NF."); }
   let pg = lerPagamento(b);
   if (id && !["pag_ciclo", "pag_base", "pag_fecha_dow", "pag_dias", "pag_dia_fixo"].some((k) => b[k] !== undefined)) { // chamada antiga, sem os campos: mantém o que já está salvo
     const { rows: at } = await pool.query("SELECT pag_ciclo, pag_base, pag_fecha_dow AS dow, pag_dias AS dias, pag_dia_fixo AS dia_fixo FROM cd_transportadoras WHERE id = $1", [id]);
@@ -277,12 +283,12 @@ async function salvarTransportadora(acc, id, b = {}) {
   }
   try {
     if (id) {
-      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6, pag_ciclo = $7, pag_base = $8, pag_fecha_dow = $9, pag_dias = $10, pag_dia_fixo = $11, fator_cub_rod = COALESCE($12, fator_cub_rod), fator_cub_aereo = COALESCE($13, fator_cub_aereo) WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo, fRod, fAer]);
+      const { rows } = await pool.query("UPDATE cd_transportadoras SET nome = $2, cnpj = $3, prazo_corridos = $4, ativa = COALESCE($5, ativa), prazo_padrao = $6, pag_ciclo = $7, pag_base = $8, pag_fecha_dow = $9, pag_dias = $10, pag_dia_fixo = $11, fator_cub_rod = COALESCE($12, fator_cub_rod), fator_cub_aereo = COALESCE($13, fator_cub_aereo), seguro_pct = CASE WHEN $14 THEN $15::numeric ELSE seguro_pct END WHERE id = $1 RETURNING id", [id, nome, opt(txt(b.cnpj)), corr, b.ativa === undefined ? null : !!b.ativa, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo, fRod, fAer, temSeguro, seguro]);
       if (!rows[0]) throw erro(404, "Transportadora não encontrada.");
       const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
       return { ok: true, id: Number(id), vinculadas: rl.vinculadas };
     }
-    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao, pag_ciclo, pag_base, pag_fecha_dow, pag_dias, pag_dia_fixo, fator_cub_rod, fator_cub_aereo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, 300),COALESCE($11, 167)) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo, fRod, fAer]);
+    const { rows } = await pool.query("INSERT INTO cd_transportadoras (nome, cnpj, prazo_corridos, prazo_padrao, pag_ciclo, pag_base, pag_fecha_dow, pag_dias, pag_dia_fixo, fator_cub_rod, fator_cub_aereo, seguro_pct) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, 300),COALESCE($11, 166.67),$12) RETURNING id", [nome, opt(txt(b.cnpj)), corr, pp, pg.ciclo, pg.base, pg.dow, pg.dias, pg.dia_fixo, fRod, fAer, seguro]);
     const rl = await religarNfs(pool).catch(() => ({ vinculadas: 0 }));
     return { ok: true, id: Number(rows[0].id), vinculadas: rl.vinculadas };
   } catch (e) {
@@ -291,7 +297,7 @@ async function salvarTransportadora(acc, id, b = {}) {
   }
 }
 
-const FATOR_RODOVIARIO = 300, FATOR_AEREO = 167; // kg por m³ quando a transportadora não tem fator próprio
+const FATOR_RODOVIARIO = 300, FATOR_AEREO = 166.67; // kg por m³ quando a transportadora não tem fator próprio
 const UFS = new Set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split(" "));
 // rows: [{uf, cidade, peso_de, peso_ate, frete, frete_kg, excedente_kg, adv_pct, gris_pct, taxa_fixa, frete_minimo, prazo_dias, [transportadora]}]
 // A importação SUBSTITUI a tabela do(s) modal(is) importado(s) (rodoviário e aéreo são tabelas separadas; a nova vira a vigente).
@@ -621,7 +627,7 @@ async function recalcular(db, id) {
   const n = rows[0]; if (!n) return null;
   let frete = null, prazo = n.prazo_manual ? n.prazo_dias : null, aviso = null, modal = n.modal || "rodoviario";
   if (n.transportadora_id) {
-    const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao, fator_cub_rod, fator_cub_aereo FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
+    const { rows: ts } = await db.query("SELECT id, nome, prazo_corridos, prazo_padrao, fator_cub_rod, fator_cub_aereo, seguro_pct FROM cd_transportadoras WHERE id = $1", [n.transportadora_id]);
     // a transportadora não tem tabela desse modal: usa o rodoviário (ou o único que ela tem)
     const mds = await modaisDaTransp(db, n.transportadora_id);
     if (mds.length && !mds.includes(modal)) modal = mds.includes("rodoviario") ? "rodoviario" : mds[0];
