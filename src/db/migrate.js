@@ -1068,6 +1068,24 @@ async function migrarAdmissao() {
     ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS exige_candidato BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS subtarefas JSONB NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS mensagem TEXT;
+    ALTER TABLE adm_etapas_modelo ADD COLUMN IF NOT EXISTS formulario TEXT;
+    ALTER TABLE adm_proc_etapas ADD COLUMN IF NOT EXISTS formulario TEXT;
+    CREATE TABLE IF NOT EXISTS adm_formularios (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE,
+      tipo TEXT NOT NULL CHECK (tipo IN ('pre','adm')), token TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'rascunho' CHECK (status IN ('rascunho','enviado','devolvido','aprovado')),
+      enviado_em TIMESTAMPTZ, enviado_vezes INT NOT NULL DEFAULT 0, criado_em TIMESTAMPTZ NOT NULL DEFAULT now(), criado_por TEXT,
+      UNIQUE (processo_id, tipo));
+    CREATE TABLE IF NOT EXISTS adm_form_itens (
+      id BIGSERIAL PRIMARY KEY, form_id BIGINT NOT NULL REFERENCES adm_formularios(id) ON DELETE CASCADE,
+      ordem INT NOT NULL, chave TEXT NOT NULL, rotulo TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('texto','data','arquivo')),
+      obrigatorio BOOLEAN NOT NULL DEFAULT false, valor TEXT, status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente','ok','incorreto')),
+      obs_rh TEXT, atualizado_em TIMESTAMPTZ);
+    CREATE INDEX IF NOT EXISTS adm_form_itens_form_idx ON adm_form_itens (form_id);
+    CREATE TABLE IF NOT EXISTS adm_form_arquivos (
+      id BIGSERIAL PRIMARY KEY, item_id BIGINT NOT NULL REFERENCES adm_form_itens(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL, mime TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS adm_form_arquivos_item_idx ON adm_form_arquivos (item_id);
     CREATE TABLE IF NOT EXISTS adm_passagens (
       id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE,
       etapa_id BIGINT NOT NULL REFERENCES adm_proc_etapas(id) ON DELETE CASCADE, inicio TIMESTAMPTZ NOT NULL, fim TIMESTAMPTZ);
@@ -1107,9 +1125,25 @@ async function migrarAdmissao() {
       await pool.query("UPDATE adm_etapas_modelo SET externo = true WHERE area ~* '(cl[ií]nica|sa[uú]de)'");
       await pool.query("UPDATE adm_proc_etapas SET externo = true WHERE area ~* '(cl[ií]nica|sa[uú]de)'");
       let ordem = 0;
-      for (const x of SEED_ETAPAS_ADM_V2) await inserirEtapaAdm("admissao", ++ordem, x);
+      for (const x of SEED_ETAPAS_ADM_V2) {
+        ordem++;
+        await inserirEtapaAdm("admissao", ordem, x);
+        await pool.query("UPDATE adm_etapas_modelo SET ativo = true, ordem = $3 WHERE tipo = $1 AND nome = $2", ["admissao", x.nome, ordem]); // caso a etapa já exista com esse nome
+      }
       await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('fluxo_manual_v1','1') ON CONFLICT (chave) DO NOTHING");
       console.log("[admissao] Fluxo de admissão do manual do DP criado (9 etapas).");
+    }
+  }
+  // formulários do Link 1 (gerente) e do Link 2 (candidato): ligam-se às etapas do fluxo do manual (uma única vez; depois o gestor ajusta em Cadastros)
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'formularios_v1'");
+    if (!fl.length) {
+      for (const t of ["adm_etapas_modelo", "adm_proc_etapas"]) {
+        await pool.query(`UPDATE ${t} SET formulario = 'pre' WHERE formulario IS NULL AND nome IN ('Pré-admissão: documentos enviados pelo gerente', 'Validação dos documentos da pré-admissão')`);
+        await pool.query(`UPDATE ${t} SET formulario = 'adm' WHERE formulario IS NULL AND nome IN ('Admissão: documentos enviados pelo candidato', 'Validação dos documentos da admissão')`);
+      }
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('formularios_v1','1') ON CONFLICT (chave) DO NOTHING");
+      console.log("[admissao] Formulários do gerente e do candidato ligados às etapas.");
     }
   }
 }
