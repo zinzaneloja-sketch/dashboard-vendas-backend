@@ -50,9 +50,17 @@ async function comTransacao(fn) {
 // ---------- quem é a pessoa ----------
 async function papelDe(acc) {
   if (acc.role === "admin") return { papel: "gestor", admin: true, nome: acc.nome || acc.email, email: em(acc.email) };
-  const { rows } = await pool.query("SELECT nome, papel, ativo FROM adm_equipe WHERE lower(email) = $1", [em(acc.email)]);
+  const { rows } = await pool.query("SELECT nome, papel, ativo, grupos FROM adm_equipe WHERE lower(email) = $1", [em(acc.email)]);
   if (!rows[0] || !rows[0].ativo) throw erro(403, "Seu usuário não está na equipe de Admissão e Rescisão. Peça ao gestor para cadastrar.");
-  return { papel: PAPEIS.includes(rows[0].papel) ? rows[0].papel : "analista", admin: false, nome: rows[0].nome || acc.nome || acc.email, email: em(acc.email) };
+  const papel = PAPEIS.includes(rows[0].papel) ? rows[0].papel : "analista";
+  return { papel, admin: false, nome: rows[0].nome || acc.nome || acc.email, email: em(acc.email), grupos: papel === "go" ? (rows[0].grupos || []).map((g) => String(g).toLowerCase()) : null };
+}
+// A GO só enxerga as lojas do(s) grupo(s) dela (coluna "regional" do cadastro de lojas). Sem grupo cadastrado, não enxerga nenhuma.
+function filtroLojasGo(p, add) { return p.grupos && p.grupos.length ? `p.loja_id IN (SELECT id FROM ch_lojas WHERE lower(regional) = ANY(${add(p.grupos)}::text[]))` : "FALSE"; }
+async function exigirLojaDaGo(p, lojaId, c = pool) {
+  if (p.papel !== "go") return;
+  const ok = lojaId && p.grupos && p.grupos.length && (await c.query("SELECT 1 FROM ch_lojas WHERE id = $1 AND lower(regional) = ANY($2::text[])", [lojaId, p.grupos])).rows.length;
+  if (!ok) throw erro(403, "Essa vaga é de uma loja que não está sob a sua responsabilidade.");
 }
 function exigirGestor(p) { if (p.papel !== "gestor") throw erro(403, "Só o gestor pode fazer isso."); }
 function exigirNaoGo(p) { if (p.papel === "go") throw erro(403, "O seu perfil (GO) só aprova ou reprova vagas."); }
@@ -202,8 +210,10 @@ async function responsaveis() {
 }
 async function eu(acc) {
   const p = await papelDe(acc);
-  const { rows: lj } = await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa ORDER BY nome");
-  return { nome: p.nome, email: p.email, papel: p.papel, admin: !!p.admin, go: p.papel === "go", tipos: p.papel === "go" ? { admissao: TIPO_ROT.admissao } : TIPO_ROT, subtipos: SUBTIPOS, prazo_legal_dias: PRAZO_LEGAL_DIAS,
+  const { rows: lj } = p.papel === "go"
+    ? await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa AND lower(regional) = ANY($1::text[]) ORDER BY nome", [p.grupos && p.grupos.length ? p.grupos : []])
+    : await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa ORDER BY nome");
+  return { nome: p.nome, email: p.email, papel: p.papel, admin: !!p.admin, go: p.papel === "go", grupos_go: p.papel === "go" ? (await gruposDe(p.email)) : undefined, tipos: p.papel === "go" ? { admissao: TIPO_ROT.admissao } : TIPO_ROT, subtipos: SUBTIPOS, prazo_legal_dias: PRAZO_LEGAL_DIAS,
     acoes: ACOES, desfechos: DESFECHOS, motivos_devolucao: MOTIVOS_DEVOLUCAO,
     expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, lojas: lj, responsaveis: await responsaveis(), trocar_senha: !!acc.trocar_senha };
 }
@@ -269,7 +279,7 @@ async function listar(acc, f = {}) {
   const pp = await papelDe(acc);
   const w = [], v = [];
   const add = (x) => { v.push(x); return "$" + v.length; };
-  if (pp.papel === "go") w.push(`p.tipo = ${add("admissao")}`);
+  if (pp.papel === "go") { w.push(`p.tipo = ${add("admissao")}`); w.push(filtroLojasGo(pp, add)); }
   else if (TIPOS.includes(f.tipo)) w.push(`p.tipo = ${add(f.tipo)}`);
   if (f.status === "abertos" || !f.status) w.push("p.status IN ('em_andamento','pausado')");
   else if (f.status === "fechados") w.push("p.status IN ('concluido','cancelado')");
@@ -303,6 +313,7 @@ async function detalhe(acc, id) {
   const p = await papelDe(acc);
   const { raw, etapas, pausas, passagens, devolucoes } = await carregarUm(id);
   if (p.papel === "go" && raw.tipo !== "admissao") throw erro(403, "O seu perfil só acompanha admissões.");
+  await exigirLojaDaGo(p, raw.loja_id);
   audit(acc, "adm_ver", { papel: p.papel, alvo: raw.protocolo, detalhe: raw.colaborador }); // quem leu os dados pessoais (LGPD)
   const proc = monta(raw, etapas, pausas, new Date(), passagens, devolucoes);
   proc.cpf = p.papel === "go" ? null : cpfFmt(raw.cpf);
@@ -379,6 +390,7 @@ async function concluirEtapa(acc, id, etapaId, b = {}) {
     const e = await etapaAtual(c, id, etapaId);
     const a = e.atual;
     exigirPapelDaEtapa(p, a);
+    await exigirLojaDaGo(p, e.raw.loja_id, c);
     let formAprovar = null;
     if (a.acao === "validacao" && a.formulario) {
       const { rows: ff } = await c.query("SELECT id, status FROM adm_formularios WHERE processo_id = $1 AND tipo = $2 FOR UPDATE", [id, a.formulario]);
@@ -473,6 +485,7 @@ async function reprovarVaga(acc, id, etapaId, b = {}) {
     const e = await etapaAtual(c, id, etapaId);
     if (e.atual.acao !== "aprovacao") throw erro(409, "Essa etapa não é de aprovação.");
     exigirPapelDaEtapa(p, e.atual);
+    await exigirLojaDaGo(p, e.raw.loja_id, c);
     await c.query("UPDATE adm_passagens SET fim = now() WHERE etapa_id = $1 AND fim IS NULL", [e.atual.id]);
     await evento(c, id, "vaga_reprovada", p.email, { etapa: e.atual.nome, motivo });
     await encerrarInterno(c, id, p, "vaga_reprovada", motivo);
@@ -729,31 +742,59 @@ async function garantirAcesso(email, nome, senha) {
 }
 async function listarEquipe(acc) {
   const p = await papelDe(acc); exigirGestor(p);
-  const { rows } = await pool.query(`SELECT e.id::int AS id, e.email, e.nome, e.papel, e.ativo, (u.id IS NOT NULL AND ('admissao' = ANY(u.modules) OR u.role = 'admin')) AS tem_acesso
+  const { rows } = await pool.query(`SELECT e.id::int AS id, e.email, e.nome, e.papel, e.ativo, e.grupos, (u.id IS NOT NULL AND ('admissao' = ANY(u.modules) OR u.role = 'admin')) AS tem_acesso
     FROM adm_equipe e LEFT JOIN users u ON lower(u.email) = lower(e.email) ORDER BY e.ativo DESC, e.papel, e.nome NULLS LAST, e.email`);
   const { rows: ad } = await pool.query("SELECT email, nome FROM users WHERE role = 'admin' ORDER BY email");
-  return { equipe: rows, administradores: ad };
+  return { equipe: rows, administradores: ad, grupos_disponiveis: await gruposDisponiveis() };
+}
+// grupos de lojas = nomes das GOs no cadastro de lojas (coluna "regional"), com a lista de lojas de cada um
+async function gruposDisponiveis() {
+  const { rows } = await pool.query("SELECT regional, array_agg(nome ORDER BY nome) AS lojas FROM ch_lojas WHERE ativa AND coalesce(trim(regional), '') <> '' GROUP BY regional ORDER BY lower(regional)");
+  const vistos = new Map();
+  for (const r of rows) { const k = r.regional.trim().toLowerCase(); if (vistos.has(k)) vistos.get(k).lojas.push(...r.lojas); else vistos.set(k, { nome: r.regional.trim(), lojas: r.lojas.slice() }); }
+  return [...vistos.values()].map((g) => ({ nome: g.nome, total: g.lojas.length, lojas: g.lojas.sort() }));
+}
+async function gruposDe(email) {
+  const { rows } = await pool.query("SELECT grupos FROM adm_equipe WHERE lower(email) = $1", [em(email)]);
+  return rows[0] ? rows[0].grupos || [] : [];
+}
+async function gruposValidos(lista) {
+  const disp = await gruposDisponiveis(), out = [];
+  for (const g of Array.isArray(lista) ? lista : []) {
+    const k = txt(g).toLowerCase(); if (!k) continue;
+    const ach = disp.find((x) => x.nome.toLowerCase() === k);
+    if (!ach) throw erro(400, "O grupo \"" + txt(g).slice(0, 40) + "\" não existe no cadastro de lojas.");
+    if (!out.includes(ach.nome)) out.push(ach.nome);
+  }
+  return out;
 }
 async function criarEquipe(acc, b = {}) {
   const p = await papelDe(acc); exigirGestor(p);
   const email = em(b.email), nome = txt(b.nome).slice(0, 100) || null, papel = PAPEIS.includes(txt(b.papel)) ? txt(b.papel) : "analista";
   if (!emailValido(email)) throw erro(400, "Informe um e-mail válido.");
+  const grupos = papel === "go" ? await gruposValidos(b.grupos) : [];
+  if (papel === "go" && !grupos.length) throw erro(400, "Escolha o grupo de lojas desta GO. Ela só enxerga as lojas do grupo dela.");
   const ac = await garantirAcesso(email, nome, b.senha ? String(b.senha) : undefined);
-  await pool.query(`INSERT INTO adm_equipe (email, nome, papel, ativo) VALUES ($1,$2,$3,true)
-    ON CONFLICT (lower(email)) DO UPDATE SET papel = EXCLUDED.papel, ativo = true, nome = COALESCE(EXCLUDED.nome, adm_equipe.nome)`, [email, nome, papel]);
-  audit(acc, ac.criado ? "acesso_criado" : "acesso_liberado", { papel: p.papel, alvo: email, detalhe: "Admissão e Rescisão · " + papel });
+  await pool.query(`INSERT INTO adm_equipe (email, nome, papel, ativo, grupos) VALUES ($1,$2,$3,true,$4)
+    ON CONFLICT (lower(email)) DO UPDATE SET papel = EXCLUDED.papel, ativo = true, nome = COALESCE(EXCLUDED.nome, adm_equipe.nome), grupos = EXCLUDED.grupos`, [email, nome, papel, grupos]);
+  audit(acc, ac.criado ? "acesso_criado" : "acesso_liberado", { papel: p.papel, alvo: email, detalhe: "Admissão e Rescisão · " + papel + (grupos.length ? " · lojas de " + grupos.join(", ") : "") });
   return { ok: true, acesso_criado: ac.criado };
 }
 async function editarEquipe(acc, id, b = {}) {
   const p = await papelDe(acc); exigirGestor(p);
-  const { rows } = await pool.query("SELECT email FROM adm_equipe WHERE id = $1", [id]);
+  const { rows } = await pool.query("SELECT email, papel, grupos FROM adm_equipe WHERE id = $1", [id]);
   if (!rows[0]) throw erro(404, "Pessoa não encontrada.");
   const email = em(rows[0].email);
+  const papelFinal = b.papel ? (PAPEIS.includes(b.papel) ? b.papel : "analista") : rows[0].papel;
+  let grupos = rows[0].grupos || [];
+  if (papelFinal !== "go") grupos = [];
+  else if (b.grupos !== undefined) grupos = await gruposValidos(b.grupos);
+  if (papelFinal === "go" && b.ativo !== false && !grupos.length) throw erro(400, "Escolha o grupo de lojas desta GO. Ela só enxerga as lojas do grupo dela.");
   if (email === p.email && (b.ativo === false || (b.papel && b.papel !== "gestor"))) throw erro(400, "Você não pode tirar o seu próprio acesso de gestor.");
-  await pool.query("UPDATE adm_equipe SET nome = COALESCE($2, nome), papel = COALESCE($3, papel), ativo = COALESCE($4, ativo) WHERE id = $1", [id, b.nome === undefined ? null : txt(b.nome) || null, b.papel ? (PAPEIS.includes(b.papel) ? b.papel : "analista") : null, b.ativo === undefined ? null : !!b.ativo]);
+  await pool.query("UPDATE adm_equipe SET nome = COALESCE($2, nome), papel = COALESCE($3, papel), ativo = COALESCE($4, ativo), grupos = $5 WHERE id = $1", [id, b.nome === undefined ? null : txt(b.nome) || null, b.papel ? papelFinal : null, b.ativo === undefined ? null : !!b.ativo, grupos]);
   if (b.ativo === false) await pool.query("UPDATE users SET modules = array_remove(modules, 'admissao'), token_version = token_version + 1 WHERE lower(email) = $1 AND role <> 'admin'", [email]);
   if (b.ativo === true) await garantirAcesso(email, null, undefined);
-  audit(acc, b.ativo === false ? "acesso_bloqueado" : "acesso_alterado", { papel: p.papel, alvo: email, detalhe: "Admissão e Rescisão" });
+  audit(acc, b.ativo === false ? "acesso_bloqueado" : "acesso_alterado", { papel: p.papel, alvo: email, detalhe: "Admissão e Rescisão" + (papelFinal === "go" ? " · lojas de " + (grupos.join(", ") || "nenhum grupo") : "") });
   return { ok: true };
 }
 async function redefinirSenha(acc, b = {}) {
