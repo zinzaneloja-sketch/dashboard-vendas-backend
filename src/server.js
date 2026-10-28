@@ -35,6 +35,7 @@ app.use(seguranca.corsMiddleware()); // CORS_ORIGINS restringe os sites que pode
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 app.use("/api/chamados", express.json({ limit: "10mb" })); // anexos em base64
 app.use("/api/admissao/publico", express.json({ limit: "10mb" }));
+app.use("/api/estoque-lojas/importar", express.json({ limit: "10mb" })); // planilha de estoque por loja, enviada em lotes
 app.use("/api/admissao/colaboradores/importar", express.json({ limit: "10mb" })); // lista de colaboradores (planilha convertida em JSON) // documentos do formulário em base64
 const jsonPadrao = express.json();
 app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
@@ -399,7 +400,17 @@ app.delete("/api/auth/users/:id", requireAuth, requireAdmin, handle(async (req) 
 
 // ---- Vendas ----
 // Painel de vendas: só quem tem o módulo "vendas" (usuários antigos já nascem com ele).
-app.use(["/api/vendas", "/api/logistica", "/api/marketing", "/api/overview"], requireAuth, requireModule("vendas"));
+app.use(["/api/vendas", "/api/logistica", "/api/marketing", "/api/overview", "/api/estoque-lojas"], requireAuth, requireModule("vendas"));
+// ---- Estoque por loja (ruptura de grade e excesso a partir da planilha "Estoque Omni") ----
+const estoqueLojas = require("./estoque/estoqueLojas");
+app.get("/api/estoque-lojas/opcoes", requireAuth, handle(() => estoqueLojas.opcoes()));
+app.get("/api/estoque-lojas/mapa", requireAuth, handle((req) => estoqueLojas.mapa(req.query)));
+app.get("/api/estoque-lojas/itens", requireAuth, handle((req) => estoqueLojas.itens(req.query)));
+app.get("/api/estoque-lojas/filiais", requireAuth, requireAdmin, handle(() => estoqueLojas.filiais()));
+app.put("/api/estoque-lojas/filiais", requireAuth, requireAdmin, handle((req) => estoqueLojas.definirTipo(req.body || {})));
+app.post("/api/estoque-lojas/importar/inicio", requireAuth, requireAdmin, handle(() => estoqueLojas.iniciar()));
+app.post("/api/estoque-lojas/importar/lote", requireAuth, requireAdmin, handle((req) => estoqueLojas.lote(req.body || {})));
+app.post("/api/estoque-lojas/importar/concluir", requireAuth, requireAdmin, handle((req) => estoqueLojas.concluir(req.body || {}, req.access && req.access.email)));
 
 app.get("/api/vendas/receita-vs-meta", requireAuth, handle((req) => vendas.receitaVsMeta({ month: req.query.month, dateFrom: req.query.dateFrom, dateTo: req.query.dateTo, statuses: parseStatusFilter(req) })));
 app.post("/api/vendas/meta", requireAuth, handle(async (req) => {
