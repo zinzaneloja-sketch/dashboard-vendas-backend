@@ -1180,7 +1180,8 @@ async function migrarAdmissao() {
       ativo BOOLEAN NOT NULL DEFAULT true, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now());
     CREATE INDEX IF NOT EXISTS adm_colaboradores_nome_idx ON adm_colaboradores (lower(nome));
     ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS colaborador_chapa TEXT;
-    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS solicitante_chapa TEXT;`);
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS solicitante_chapa TEXT;
+    ALTER TABLE ch_chamados ADD COLUMN IF NOT EXISTS colaborador_chapa TEXT;`);
   // GO só enxerga as lojas do grupo dela: o grupo é o nome da GO na coluna "regional" do cadastro de lojas
   await pool.query("ALTER TABLE adm_equipe ADD COLUMN IF NOT EXISTS grupos TEXT[] NOT NULL DEFAULT '{}'");
   {
