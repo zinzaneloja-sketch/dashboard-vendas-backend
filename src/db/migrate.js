@@ -736,8 +736,6 @@ const SEED_ASSUNTOS = [
   ["Ajuste de ponto e banco de horas", "Ponto", "Esquecimento de batida, ponto errado, horas extras e saldo do banco de horas.", 240, 1200, true],
   ["Férias", "Férias", "Programação, pedido, recibo e dúvidas sobre férias.", 240, 1800, true],
   ["Atestado médico e afastamento", "Saúde", "Envio de atestado, afastamento, licença e retorno ao trabalho.", 120, 600, true],
-  ["Admissão (novo colaborador)", "Admissão", "Documentos e dados para admitir um novo colaborador.", 120, 1200, true],
-  ["Demissão e rescisão", "Desligamento", "Pedido de demissão, desligamento, homologação e rescisão.", 120, 1800, true],
   ["Vale-transporte", "Benefícios", "Solicitação, alteração ou problema com o vale-transporte.", 240, 1200, true],
   ["Vale-alimentação / refeição", "Benefícios", "Dúvidas ou problemas com o vale-alimentação ou refeição.", 240, 1200, true],
   ["Plano de saúde e outros benefícios", "Benefícios", "Inclusão, exclusão e dúvidas de plano de saúde e demais benefícios.", 240, 1800, true],
@@ -979,6 +977,15 @@ CREATE INDEX IF NOT EXISTS ch_chamados_dep_idx ON ch_chamados (departamento_id, 
     }
   }
   if (await semearAssuntos("manutencao", SEED_ASSUNTOS_MANUTENCAO)) console.log("[chamados] Assuntos iniciais de Manutenção criados.");
+  // Admissão e desligamento têm módulo próprio (Admissão e Rescisão): saem das opções do chamado de DP. Uma única vez; chamados já abertos mantêm o assunto e o gestor pode reativar em Cadastros.
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'dp_sem_adm_resc'");
+    if (!fl.length) {
+      const r = await pool.query("UPDATE ch_assuntos SET ativo = false WHERE departamento_id = $1 AND ativo AND (lower(nome) IN ('admissão (novo colaborador)', 'demissão e rescisão') OR categoria IN ('Admissão', 'Desligamento'))", [depId.dp]);
+      if (r.rowCount) console.log("[chamados] " + r.rowCount + " assunto(s) de admissão/desligamento desativados no DP (agora ficam no módulo Admissão e Rescisão).");
+      await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('dp_sem_adm_resc','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
   // Lojas: insere as que ainda não existem (pelo nome) e completa os dados de cadastro das que já existem.
   let novas = 0;
   for (const [nome, regional, regiao, uf, cidade, endereco, cep] of SEED_LOJAS) {
@@ -1196,6 +1203,26 @@ async function migrarAdmissao() {
   }
 }
 
+// Estoque por loja (planilha "Estoque Omni"): ruptura de grade e excesso no Painel de vendas.
+async function migrarEstoqueLojas() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS estoque_lojas_itens (
+      filial TEXT NOT NULL, ref_cor TEXT NOT NULL, qtd INTEGER NOT NULL DEFAULT 0, omni BOOLEAN NOT NULL DEFAULT false, g INTEGER[] NOT NULL,
+      PRIMARY KEY (filial, ref_cor));
+    CREATE INDEX IF NOT EXISTS estoque_lojas_itens_ref_idx ON estoque_lojas_itens (ref_cor);
+    CREATE TABLE IF NOT EXISTS estoque_lojas_produtos (
+      ref_cor TEXT PRIMARY KEY, produto TEXT, nome TEXT, preco NUMERIC(12,2), categoria TEXT, linha TEXT);
+    CREATE TABLE IF NOT EXISTS estoque_lojas_filiais (
+      filial TEXT PRIMARY KEY, tipo TEXT NOT NULL DEFAULT 'loja' CHECK (tipo IN ('loja','cd','apoio')));
+    CREATE TABLE IF NOT EXISTS estoque_lojas_meta (chave TEXT PRIMARY KEY, valor TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS estoque_lojas_stage_itens (
+      import_id TEXT NOT NULL, filial TEXT NOT NULL, ref_cor TEXT NOT NULL, qtd INTEGER NOT NULL, omni BOOLEAN NOT NULL, g INTEGER[] NOT NULL, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS estoque_lojas_stage_itens_idx ON estoque_lojas_stage_itens (import_id);
+    CREATE TABLE IF NOT EXISTS estoque_lojas_stage_produtos (
+      import_id TEXT NOT NULL, ref_cor TEXT NOT NULL, produto TEXT, nome TEXT, preco NUMERIC(12,2), categoria TEXT, linha TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS estoque_lojas_stage_produtos_idx ON estoque_lojas_stage_produtos (import_id);`);
+}
+
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
@@ -1205,6 +1232,7 @@ async function migrate() {
   await migrarFaturamento();
   await migrarChamados();
   await migrarAdmissao();
+  await migrarEstoqueLojas();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
