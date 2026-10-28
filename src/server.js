@@ -659,6 +659,7 @@ app.post(AD + "/lojas-go/importar", admAuth, handle((req) => admissao.importarLo
 app.get(AD + "/indicadores", admAuth, handle((req) => admissao.indicadores(req.access, req.query)));
 app.get(CH + "/emails/falhas", chamadosAuth, handle((req) => chamados.emailsFalhos(req.access)));
 app.post(CH + "/emails/:id/reenviar", chamadosAuth, handle((req) => chamados.reenviarEmail(req.access, nid(req))));
+app.get(CH + "/colaboradores", chamadosAuth, handle((req) => chamados.listarColaboradores(req.access)));
 app.get(CH + "/chamados", chamadosAuth, handle((req) => chamados.listar(req.access, req.query)));
 app.post(CH + "/chamados", chamadosAuth, handle((req) => chamados.abrir(req.access, req.body || {})));
 app.get(CH + "/chamados/:id", chamadosAuth, handle((req) => chamados.detalhe(req.access, nid(req))));
