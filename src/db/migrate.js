@@ -1067,7 +1067,7 @@ async function migrarAdmissao() {
   // fluxo do manual do DP (v2): tipo de ação da etapa, quem segura o tempo, checklist, voltas, devoluções, desfecho, perfil GO
   await pool.query(`
     ALTER TABLE adm_equipe DROP CONSTRAINT IF EXISTS adm_equipe_papel_check;
-    ALTER TABLE adm_equipe ADD CONSTRAINT adm_equipe_papel_check CHECK (papel IN ('analista','gestor','go'));
+    ALTER TABLE adm_equipe ADD CONSTRAINT adm_equipe_papel_check CHECK (papel IN ('analista','gestor','go','diretoria'));
     ALTER TABLE adm_processos ALTER COLUMN data_prevista DROP NOT NULL;
     ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS desfecho TEXT;
     ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS solicitante TEXT;
@@ -1204,6 +1204,112 @@ async function migrarAdmissao() {
 }
 
 // Estoque por loja (planilha "Estoque Omni"): ruptura de grade e excesso no Painel de vendas.
+// Admissão v3 e Rescisão v2: abertura da vaga pelo gerente (link da loja + VT assinado), link de admissão colado pelo RH,
+// aprovação do Regional na rescisão, custo da rescisão com anexo, aprovação da Diretoria Executiva e assunto de cálculo no DP.
+async function migrarAdmissaoV3() {
+  await pool.query(`
+    ALTER TABLE adm_equipe DROP CONSTRAINT IF EXISTS adm_equipe_papel_check;
+    ALTER TABLE adm_equipe ADD CONSTRAINT adm_equipe_papel_check CHECK (papel IN ('analista','gestor','go','diretoria'));
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS link_admissao TEXT;
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS custo_rescisao NUMERIC(14,2);
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS custo_por TEXT;
+    ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS custo_em TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS adm_loja_links (
+      loja_id BIGINT PRIMARY KEY REFERENCES ch_lojas(id) ON DELETE CASCADE, token TEXT NOT NULL UNIQUE, criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS adm_proc_anexos (
+      id BIGSERIAL PRIMARY KEY, processo_id BIGINT NOT NULL REFERENCES adm_processos(id) ON DELETE CASCADE, tipo TEXT NOT NULL DEFAULT 'calculo',
+      nome TEXT NOT NULL, mime TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS adm_proc_anexos_proc_idx ON adm_proc_anexos (processo_id);`);
+
+  // renumera as etapas ativas de um tipo na ordem recebida (lista de ids); as inativas ficam depois
+  async function ordenar(tipo, ids) {
+    const { rows: outras } = await pool.query("SELECT id FROM adm_etapas_modelo WHERE tipo = $1 AND NOT (id = ANY($2::bigint[])) ORDER BY ordem, id", [tipo, ids]);
+    let o = 0;
+    for (const id of ids) await pool.query("UPDATE adm_etapas_modelo SET ordem = $2 WHERE id = $1", [id, ++o]);
+    for (const r of outras) await pool.query("UPDATE adm_etapas_modelo SET ordem = $2 WHERE id = $1", [r.id, ++o]);
+  }
+  const achar = async (tipo, filtro, params = []) => (await pool.query(`SELECT id::int AS id FROM adm_etapas_modelo WHERE tipo = '${tipo}' AND ativo AND ${filtro} ORDER BY ordem, id LIMIT 1`, params)).rows[0];
+
+  // ---- admissão: abertura (gerente) -> aprovação da GO -> validação do RH -> link colado -> exame -> contrato -> boas-vindas
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'fluxo_adm_v3'");
+    if (!fl.length) {
+      const { rows: ativas } = await pool.query("SELECT id::int AS id, nome, acao, formulario FROM adm_etapas_modelo WHERE tipo = 'admissao' AND ativo ORDER BY ordem, id");
+      const pre = ativas.find((e) => e.formulario === "pre" && e.acao !== "validacao");
+      const go = ativas.find((e) => e.acao === "aprovacao");
+      const vpre = ativas.find((e) => e.formulario === "pre" && e.acao === "validacao");
+      const adm = ativas.find((e) => e.formulario === "adm" && e.acao !== "validacao");
+      const vadm = ativas.find((e) => e.formulario === "adm" && e.acao === "validacao");
+      if (pre && go && vpre) {
+        await pool.query("UPDATE adm_etapas_modelo SET nome = 'Abertura da vaga: VT assinado e pré-admissão (gerente)', descricao = 'O gerente abre a vaga pelo link da loja, anexa o documento do vale-transporte assinado pelo candidato (com o valor do VT) e preenche a pré-admissão no mesmo passo. Ao enviar, a etapa conclui sozinha e a vaga segue para a aprovação da GO.', area = 'Loja', externo = true, exige_candidato = true WHERE id = $1", [pre.id]);
+        if (adm) await pool.query("UPDATE adm_etapas_modelo SET nome = 'Admissão: link enviado ao candidato', descricao = 'O RH envia o link de admissão ao candidato por fora (WhatsApp ou e-mail) e cola o link aqui. Conclua a etapa quando o candidato terminar de preencher e anexar os documentos.', area = 'RH', acao = 'link', formulario = NULL, externo = false, mensagem = 'link_adm' WHERE id = $1", [adm.id]);
+        if (vadm) await pool.query("UPDATE adm_etapas_modelo SET ativo = false WHERE id = $1", [vadm.id]);
+        const resto = ativas.filter((e) => ![pre.id, go.id, vpre.id, adm && adm.id, vadm && vadm.id].includes(e.id)).map((e) => e.id);
+        await ordenar("admissao", [pre.id, go.id, vpre.id].concat(adm ? [adm.id] : []).concat(resto));
+        console.log("[admissao] Fluxo de admissão atualizado: abertura da vaga pelo gerente, aprovação da GO, validação do RH e link de admissão colado pelo RH.");
+      }
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('fluxo_adm_v3','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
+  // ---- formulário da pré-admissão ganha o campo fixo do VT assinado (modelo personalizado, se existir)
+  {
+    const { rows: m } = await pool.query("SELECT valor FROM adm_config WHERE chave = 'form_pre'");
+    if (m[0]) {
+      try {
+        const lista = JSON.parse(m[0].valor);
+        if (Array.isArray(lista) && !lista.some((x) => x.chave === "vt_assinado")) {
+          const i = Math.max(0, lista.findIndex((x) => x.chave === "data_inicio")) + 1;
+          lista.splice(i, 0, { chave: "vt_assinado", rotulo: "Documento do vale-transporte assinado pelo candidato (com o valor do VT)", kind: "arquivo", obrigatorio: true, fixo: true });
+          await pool.query("UPDATE adm_config SET valor = $1 WHERE chave = 'form_pre'", [JSON.stringify(lista)]);
+        }
+      } catch (e) { /* modelo ilegível: o padrão já traz o campo */ }
+    }
+  }
+  // ---- rescisão: Regional aprova -> DP -> cálculo do RH (custo + anexo) -> Diretoria Executiva -> pagamento
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'fluxo_res_v2'");
+    if (!fl.length) {
+      const ins = async (nome, desc, area, prazo, acao, externo) => {
+        const r = await pool.query("INSERT INTO adm_etapas_modelo (tipo, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem) VALUES ('rescisao',$1,$2,$3,$4,999,$5,$6,false,'[]'::jsonb,NULL) ON CONFLICT DO NOTHING RETURNING id::int AS id", [nome, desc, area, prazo, acao, externo]);
+        if (r.rows[0]) return r.rows[0].id;
+        return (await pool.query("SELECT id::int AS id FROM adm_etapas_modelo WHERE tipo = 'rescisao' AND lower(nome) = lower($1)", [nome])).rows[0].id;
+      };
+      const { rows: ativas } = await pool.query("SELECT id::int AS id, nome FROM adm_etapas_modelo WHERE tipo = 'rescisao' AND ativo ORDER BY ordem, id");
+      if (ativas.length) {
+        const idReg = await ins("Aprovação do desligamento pelo Regional", "O Regional (GO) da loja aprova ou reprova o desligamento antes de o processo seguir para o DP. Se reprovar, o processo é encerrado com justificativa.", "Regional (GO)", 600, "aprovacao", true);
+        const idDir = await ins("Aprovação da Diretoria Executiva", "A Diretoria Executiva confere o custo da rescisão informado pelo RH e aprova ou devolve ao RH. Só a Diretoria e o RH enxergam essa etapa e os valores.", "Diretoria", 600, "diretoria", true);
+        await pool.query("UPDATE adm_etapas_modelo SET ativo = true WHERE id = ANY($1::bigint[])", [[idReg, idDir]]);
+        const calc = ativas.find((e) => /c[aá]lculo das verbas/i.test(e.nome));
+        const conf = ativas.find((e) => /confer[eê]ncia e aprova[cç][aã]o do c[aá]lculo/i.test(e.nome));
+        if (calc) await pool.query("UPDATE adm_etapas_modelo SET acao = 'calculo', area = 'RH', descricao = 'O RH calcula as verbas rescisórias (TRCT), informa o custo da rescisão e, se quiser, anexa o cálculo. Em seguida o custo vai para a aprovação da Diretoria Executiva.' WHERE id = $1", [calc.id]);
+        if (conf) await pool.query("UPDATE adm_etapas_modelo SET ativo = false WHERE id = $1", [conf.id]);
+        const base = ativas.filter((e) => !(conf && e.id === conf.id)).map((e) => e.id);
+        const seq = [idReg].concat(base);
+        const ic = calc ? seq.indexOf(calc.id) : -1;
+        seq.splice(ic >= 0 ? ic + 1 : seq.length, 0, idDir);
+        await ordenar("rescisao", seq);
+        console.log("[admissao] Fluxo de rescisão atualizado: aprovação do Regional, custo da rescisão e aprovação da Diretoria Executiva.");
+      }
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('fluxo_res_v2','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
+  // ---- Chamados: assunto do DP para pedir o cálculo de uma rescisão (uma única vez; depois o gestor edita à vontade)
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'dp_calculo_rescisao'");
+    if (!fl.length) {
+      const { rows: dp } = await pool.query("SELECT id::int AS id FROM ch_departamentos WHERE codigo = 'dp'");
+      if (dp[0]) {
+        const { rows: mx } = await pool.query("SELECT coalesce(max(ordem),0)::int AS m FROM ch_assuntos WHERE departamento_id = $1 AND nome <> 'Outros assuntos de DP'", [dp[0].id]);
+        const r = await pool.query("INSERT INTO ch_assuntos (nome, categoria, descricao, sla_resposta_min, sla_resolucao_min, exige_colaborador, ordem, departamento_id) VALUES ($1,$2,$3,$4,$5,true,$6,$7) ON CONFLICT DO NOTHING",
+          ["Solicitação de cálculo de rescisão", "Rescisão", "Peça ao DP o cálculo da rescisão de um colaborador. Escolha o colaborador e, na descrição, informe a data do desligamento, o tipo (pedido de demissão, dispensa sem justa causa, término de contrato…), se o aviso prévio é trabalhado ou indenizado e se há férias a gozar.", 240, 1200, mx[0].m + 1, dp[0].id]);
+        await pool.query("UPDATE ch_assuntos SET ordem = $2 WHERE departamento_id = $1 AND nome = 'Outros assuntos de DP' AND ordem <= $2", [dp[0].id, mx[0].m + 2]);
+        if (r.rowCount) console.log("[chamados] Assunto \"Solicitação de cálculo de rescisão\" criado no DP.");
+      }
+      await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('dp_calculo_rescisao','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
+}
+
 async function migrarEstoqueLojas() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS estoque_lojas_itens (
@@ -1232,6 +1338,7 @@ async function migrate() {
   await migrarFaturamento();
   await migrarChamados();
   await migrarAdmissao();
+  await migrarAdmissaoV3();
   await migrarEstoqueLojas();
   await semearCores();
   await seedAdmin();
