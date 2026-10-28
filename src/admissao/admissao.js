@@ -1339,6 +1339,70 @@ async function importarColaboradores(acc, b = {}) {
   return { ok: true, previa: false, ...resumo };
 }
 
-module.exports = { listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
+// ---------- lojas x GO (planilha) ----------
+// A GO de cada loja fica na coluna "regional" do cadastro de lojas. A planilha traz o nome da loja e o nome da GO.
+function lojaDoNomeFlex(mapa, nome) {
+  let k = semAc(nome); if (!k) return null;
+  const tenta = (x) => mapa.get(x) || mapa.get(x.replace(/^sh /, "")) || mapa.get(LOCAL_PARA_LOJA[x] || "~") || null;
+  return tenta(k) || tenta(k.replace(/^zinzane /, "")) || null;
+}
+const nomeProprio = (g) => g.toLowerCase().replace(/(^|[\s-])([a-zà-ú])/g, (m, a, b) => a + b.toUpperCase());
+async function resumoLojasGo(acc) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const { rows } = await pool.query("SELECT id::int AS id, nome, coalesce(trim(regional), '') AS go, ativa FROM ch_lojas ORDER BY nome");
+  const grupos = await gruposDisponiveis();
+  const { rows: m } = await pool.query("SELECT valor FROM adm_config WHERE chave = 'lojas_go_importacao'");
+  let ultima = null; try { ultima = m[0] ? JSON.parse(m[0].valor) : null; } catch (e) { /* ignora */ }
+  const { rows: eq } = await pool.query("SELECT nome, email, grupos FROM adm_equipe WHERE papel = 'go' AND ativo");
+  const nomesGrupos = new Set(grupos.map((g) => g.nome.toLowerCase()));
+  return { grupos, sem_go: rows.filter((x) => x.ativa && !x.go).map((x) => x.nome), total_lojas: rows.filter((x) => x.ativa).length, ultima,
+    go_sem_loja: eq.filter((g) => !(g.grupos || []).some((n) => nomesGrupos.has(String(n).toLowerCase()))).map((g) => g.nome || g.email) };
+}
+// rows: [{loja, go}]. Sem confirmar, só mostra o que vai acontecer.
+async function importarLojasGo(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const linhas = Array.isArray(b.rows) ? b.rows : [];
+  if (!linhas.length) throw erro(400, "A planilha veio vazia.");
+  if (linhas.length > 2000) throw erro(413, "Planilha grande demais (máximo 2.000 linhas).");
+  const { rows: lojas } = await pool.query("SELECT id::int AS id, nome, coalesce(trim(regional), '') AS go, ativa FROM ch_lojas");
+  const mapa = new Map(); lojas.forEach((l) => { mapa.set(semAc(l.nome), l.id); mapa.set(semAc(l.nome).replace(/^sh /, ""), l.id); });
+  const porId = new Map(lojas.map((l) => [l.id, l]));
+  const grafia = new Map(); // grafia já usada no cadastro para cada GO
+  lojas.forEach((l) => { if (l.go && !grafia.has(l.go.toLowerCase())) grafia.set(l.go.toLowerCase(), l.go); });
+  const decididas = new Map(), nao_achadas = [], sem_go = [], conflitos = [];
+  linhas.forEach((r, i) => {
+    const nome = txt(r.loja).slice(0, 150), go0 = txt(r.go).replace(/\s+/g, " ").slice(0, 60);
+    if (!nome && !go0) return;
+    if (!nome) return;
+    if (!go0) { sem_go.push(nome); return; }
+    const id = lojaDoNomeFlex(mapa, nome);
+    if (!id) { nao_achadas.push({ linha: i + 2, loja: nome, go: go0 }); return; }
+    const go = grafia.get(go0.toLowerCase()) || nomeProprio(go0);
+    if (decididas.has(id) && decididas.get(id).go.toLowerCase() !== go.toLowerCase()) conflitos.push(nome + ": " + decididas.get(id).go + " e " + go);
+    decididas.set(id, { go, nome: porId.get(id).nome });
+  });
+  if (!decididas.size) throw erro(422, "Nenhuma loja da planilha foi encontrada no cadastro de lojas.", { nao_achadas: nao_achadas.slice(0, 20) });
+  let novas = 0, trocam = 0, iguais = 0; const exTroca = [], exNovas = [];
+  for (const [id, d] of decididas) {
+    const a = porId.get(id).go;
+    if (!a) { novas++; if (exNovas.length < 8) exNovas.push(d.nome + " → " + d.go); }
+    else if (a.toLowerCase() === d.go.toLowerCase() && a === d.go) iguais++;
+    else if (a.toLowerCase() === d.go.toLowerCase()) iguais++;
+    else { trocam++; if (exTroca.length < 12) exTroca.push(d.nome + ": " + a + " → " + d.go); }
+  }
+  const fora = lojas.filter((l) => l.ativa && !decididas.has(l.id));
+  const resumo = { total_planilha: decididas.size, novas_atribuicoes: novas, trocam_de_go: trocam, sem_mudanca: iguais, nao_achadas: nao_achadas.length, detalhe_nao_achadas: nao_achadas.slice(0, 30), sem_go_na_planilha: sem_go.length, fora_da_planilha: fora.length, exemplos_fora: fora.slice(0, 10).map((l) => l.nome + (l.go ? " (" + l.go + ")" : " (sem GO)")), exemplos_novas: exNovas, exemplos_troca: exTroca, conflitos: conflitos.slice(0, 10) };
+  if (!b.confirmar) return { ok: true, previa: true, ...resumo };
+  if (conflitos.length) throw erro(409, "A planilha traz a mesma loja com GOs diferentes (" + conflitos.slice(0, 3).join("; ") + "). Corrija a planilha e envie de novo.", { ...resumo });
+  await comTransacao(async (c) => {
+    const ids = [...decididas.keys()], gos = ids.map((id) => decididas.get(id).go);
+    await c.query("UPDATE ch_lojas l SET regional = u.go FROM unnest($1::bigint[], $2::text[]) AS u(id, go) WHERE l.id = u.id AND coalesce(l.regional, '') <> u.go", [ids, gos]);
+    await c.query("INSERT INTO adm_config (chave, valor) VALUES ('lojas_go_importacao', $1) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", [JSON.stringify({ em: new Date().toISOString(), por: p.email, arquivo: txt(b.arquivo).slice(0, 120) || null, total: decididas.size, novas, trocam })]);
+  });
+  audit(acc, "adm_lojas_go_importadas", { papel: p.papel, alvo: txt(b.arquivo).slice(0, 80) || "planilha", detalhe: `${decididas.size} lojas · ${novas} novas atribuições · ${trocam} trocas de GO` });
+  return { ok: true, previa: false, ...resumo };
+}
+
+module.exports = { resumoLojasGo, importarLojasGo, listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
   listarEtapasModelo, salvarEtapaModelo, salvarConfig, formulario, revisarItem, arquivoRH, formulariosModelo, salvarFormularioModelo, publicoVer, publicoSalvar, publicoArquivo, publicoRemoverArquivo, publicoEnviar, listarEquipe, criarEquipe, editarEquipe, redefinirSenha, indicadores,
   _t: { usado, monta, cpfValido, prazoData } };
