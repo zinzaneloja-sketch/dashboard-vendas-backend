@@ -34,7 +34,8 @@ app.use(seguranca.cabecalhos);
 app.use(seguranca.corsMiddleware()); // CORS_ORIGINS restringe os sites que podem chamar a API (ver seguranca.js)
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 app.use("/api/chamados", express.json({ limit: "10mb" })); // anexos em base64
-app.use("/api/admissao/publico", express.json({ limit: "10mb" })); // documentos do formulário em base64
+app.use("/api/admissao/publico", express.json({ limit: "10mb" }));
+app.use("/api/admissao/colaboradores/importar", express.json({ limit: "10mb" })); // lista de colaboradores (planilha convertida em JSON) // documentos do formulário em base64
 const jsonPadrao = express.json();
 app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
@@ -650,6 +651,9 @@ app.get(AD + "/equipe", admAuth, handle((req) => admissao.listarEquipe(req.acces
 app.post(AD + "/equipe", admAuth, handle((req) => admissao.criarEquipe(req.access, req.body || {})));
 app.put(AD + "/equipe/:id", admAuth, handle((req) => admissao.editarEquipe(req.access, nid(req), req.body || {})));
 app.post(AD + "/equipe/senha", admAuth, handle((req) => admissao.redefinirSenha(req.access, req.body || {})));
+app.get(AD + "/colaboradores", admAuth, handle((req) => admissao.listarColaboradores(req.access)));
+app.get(AD + "/colaboradores/resumo", admAuth, handle((req) => admissao.resumoColaboradores(req.access, req.query)));
+app.post(AD + "/colaboradores/importar", admAuth, handle((req) => admissao.importarColaboradores(req.access, req.body || {})));
 app.get(AD + "/indicadores", admAuth, handle((req) => admissao.indicadores(req.access, req.query)));
 app.get(CH + "/emails/falhas", chamadosAuth, handle((req) => chamados.emailsFalhos(req.access)));
 app.post(CH + "/emails/:id/reenviar", chamadosAuth, handle((req) => chamados.reenviarEmail(req.access, nid(req))));
