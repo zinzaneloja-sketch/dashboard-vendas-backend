@@ -416,6 +416,14 @@ async function salvarConfig(acc, b = {}) {
   return { ok: true };
 }
 
+// ---------- lista de colaboradores (a mesma planilha do módulo de Admissão) ----------
+// Só o necessário para o seletor de nome: chapa, nome e situação. Cargo, local e CNPJ não saem daqui.
+async function listarColaboradores(acc) {
+  await papelDe(acc);
+  const { rows } = await pool.query("SELECT chapa, nome, situacao FROM adm_colaboradores WHERE ativo ORDER BY nome");
+  return { colaboradores: rows, total: rows.length };
+}
+
 // ---------- chamados ----------
 async function abrir(acc, b = {}) {
   const p = await papelDe(acc);
@@ -433,14 +441,23 @@ async function abrir(acc, b = {}) {
     if (!a || !a.ativo || !a.depto_ativo) throw erro(400, "Escolha um departamento e um assunto da lista.");
     if (Number(b.departamento_id) && Number(b.departamento_id) !== Number(a.departamento_id)) throw erro(400, "Esse assunto não é do departamento escolhido.");
     if (p.papel !== "loja" && !p.admin && Number(p.deptId) !== Number(a.departamento_id)) throw erro(403, "Você só abre chamado, em nome da loja, para o seu departamento.");
-    const colab = txt(b.colaborador).slice(0, 120);
-    if (a.exige_colaborador && !colab) throw erro(400, "Informe o nome do colaborador a que o chamado se refere.");
+    let colab = txt(b.colaborador).slice(0, 120), colabChapa = null;
+    if (a.exige_colaborador && !colab && !txt(b.colaborador_chapa)) throw erro(400, "Informe o nome do colaborador a que o chamado se refere.");
+    // com a lista de colaboradores (planilha do RH) carregada, o nome vem dela: não vale digitar um nome qualquer
+    if (colab || txt(b.colaborador_chapa)) {
+      const { rows: tem } = await c.query("SELECT 1 FROM adm_colaboradores WHERE ativo LIMIT 1");
+      if (tem.length) {
+        const { rows: cl } = txt(b.colaborador_chapa) ? await c.query("SELECT chapa, nome FROM adm_colaboradores WHERE chapa = $1 AND ativo", [txt(b.colaborador_chapa)]) : { rows: [] };
+        if (!cl[0]) throw erro(400, "Escolha o colaborador na lista: digite o nome e clique no resultado. Se ele não aparece, peça ao RH para atualizar a lista de colaboradores.");
+        colab = cl[0].nome.slice(0, 120); colabChapa = cl[0].chapa;
+      }
+    }
     const dataRef = /^\d{4}-\d{2}-\d{2}$/.test(txt(b.data_ref)) ? txt(b.data_ref) : null;
     const { rows: lj } = await c.query("SELECT id, nome, ativa FROM ch_lojas WHERE id = $1", [lojaId]);
     if (!lj[0] || !lj[0].ativa) throw erro(400, "Loja não encontrada ou desativada.");
     const { rows } = await c.query(
-      `INSERT INTO ch_chamados (loja_id, assunto_id, assunto_nome, descricao, prioridade, colaborador, data_ref, aberto_por, sla_resposta_min, sla_resolucao_min, cc_emails, ultima_msg_autor, departamento_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'loja',$12) RETURNING id`, [lojaId, a.id, a.nome, descricao, b.prioridade === "urgente" ? "urgente" : "normal", colab || null, dataRef, p.email, a.sla_resposta_min, a.sla_resolucao_min, cc, a.departamento_id]);
+      `INSERT INTO ch_chamados (loja_id, assunto_id, assunto_nome, descricao, prioridade, colaborador, data_ref, aberto_por, sla_resposta_min, sla_resolucao_min, cc_emails, ultima_msg_autor, departamento_id, colaborador_chapa)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'loja',$12,$13) RETURNING id`, [lojaId, a.id, a.nome, descricao, b.prioridade === "urgente" ? "urgente" : "normal", colab || null, dataRef, p.email, a.sla_resposta_min, a.sla_resolucao_min, cc, a.departamento_id, colabChapa]);
     const id = Number(rows[0].id);
     const protocolo = `CH-${new Date().getFullYear()}-${String(id).padStart(5, "0")}`;
     await c.query("UPDATE ch_chamados SET protocolo = $2 WHERE id = $1", [id, protocolo]);
@@ -784,4 +801,4 @@ async function indicadores(acc, f = {}) {
       .map((x) => ({ id: x.id, protocolo: x.protocolo, loja_nome: x.loja_nome, assunto_nome: x.assunto_nome, status: x.status, relogio: x.relogio })) };
 }
 
-module.exports = { eu, listarDepartamentos, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAuditoria, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, excluir, editarSla, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
+module.exports = { listarColaboradores, eu, listarDepartamentos, listarAssuntos, salvarAssunto, listarLojas, salvarLoja, importarEmailsLojas, listarAuditoria, listarAcessos, criarAcesso, redefinirSenhaAcesso, removerAcesso, listarEquipe, salvarEquipe, config, salvarConfig, abrir, listar, detalhe, responder, assumir, cancelar, excluir, editarSla, baixarAnexo, reenviarEmail, emailsFalhos, indicadores, slaDe };
