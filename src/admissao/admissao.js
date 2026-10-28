@@ -236,7 +236,7 @@ async function criar(acc, b = {}) {
   let colabChapa = null, solChapa = null, solicitante = txt(b.solicitante).slice(0, 120);
   const listaOk = await temLista();
   const eleito = {};
-  if (tipo === "rescisao" && listaOk) { const c = await colaboradorDaLista(b.colaborador_chapa); eleito.colab = c; colaborador = c.nome; colabChapa = c.chapa; if (!cargo && c.cargo) cargo = c.cargo.slice(0, 100); }
+  if (tipo === "rescisao" && listaOk) { const c = await colaboradorDaLista(b.colaborador_chapa); eleito.colab = c; colaborador = c.nome; colabChapa = c.chapa; }
   if ((solicitante || txt(b.solicitante_chapa)) && tipo === "admissao" && listaOk) { const c = await colaboradorDaLista(b.solicitante_chapa, "Quem pediu a vaga"); solicitante = c.nome; solChapa = c.chapa; }
   // Admissão: o processo nasce na aprovação da vaga, quando o candidato ainda pode não existir. Rescisão sempre tem colaborador e data.
   if (tipo === "rescisao" && colaborador.length < 3) throw erro(400, "Informe o nome do colaborador.");
@@ -249,9 +249,7 @@ async function criar(acc, b = {}) {
   const subtipo = txt(b.subtipo).slice(0, 80);
   if (tipo === "rescisao" && !subtipo) throw erro(400, "Informe o tipo de rescisão.");
   let lojaId = Number(b.loja_id) || null, unidade = txt(b.unidade).slice(0, 120);
-  if (!lojaId && !unidade && eleito.colab && eleito.colab.loja_id) lojaId = Number(eleito.colab.loja_id);
   if (lojaId) { const { rows } = await pool.query("SELECT nome FROM ch_lojas WHERE id = $1", [lojaId]); if (!rows[0]) throw erro(400, "Loja não encontrada."); unidade = rows[0].nome; }
-  if (!unidade && eleito.colab && eleito.colab.local_trabalho) unidade = eleito.colab.local_trabalho.slice(0, 120);
   if (!unidade) throw erro(400, "Informe a loja ou o local de trabalho.");
   let resp = em(b.responsavel) || p.email;
   const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel <> 'go' UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [resp]);
