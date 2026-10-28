@@ -35,6 +35,7 @@ app.use(seguranca.corsMiddleware()); // CORS_ORIGINS restringe os sites que pode
 // o envio das NFs de saída (arquivo em base64) tem limite maior e tem o próprio parser na rota
 app.use("/api/chamados", express.json({ limit: "10mb" })); // anexos em base64
 app.use("/api/admissao/publico", express.json({ limit: "10mb" }));
+app.use("/api/admissao/processos/:id/calculo", express.json({ limit: "14mb" })); // anexo do cálculo da rescisão (até 8 MB, em base64)
 app.use("/api/estoque-lojas/importar", express.json({ limit: "10mb" })); // planilha de estoque por loja, enviada em lotes
 app.use("/api/admissao/colaboradores/importar", express.json({ limit: "10mb" })); // lista de colaboradores (planilha convertida em JSON) // documentos do formulário em base64
 const jsonPadrao = express.json();
@@ -644,6 +645,17 @@ app.put(AD + "/publico/:token/campos", handle((req) => admissao.publicoSalvar(re
 app.post(AD + "/publico/:token/arquivos", handle((req) => admissao.publicoArquivo(req.params.token, req.ip, req.body || {})));
 app.delete(AD + "/publico/:token/arquivos/:aid", handle((req) => admissao.publicoRemoverArquivo(req.params.token, req.ip, req.params.aid)));
 app.post(AD + "/publico/:token/enviar", handle((req) => admissao.publicoEnviar(req.params.token, req.ip)));
+// abertura da vaga pelo gerente (link da loja, sem login)
+app.get(AD + "/publico-vaga/:token", handle((req) => admissao.publicoVagaVer(req.params.token, req.ip)));
+app.post(AD + "/publico-vaga/:token/abrir", handle((req) => admissao.publicoVagaAbrir(req.params.token, req.ip, req.body || {})));
+app.get(AD + "/links-vaga", admAuth, handle((req) => admissao.linksVaga(req.access)));
+app.put(AD + "/links-vaga/responsavel", admAuth, handle((req) => admissao.definirRespPadrao(req.access, req.body || {})));
+app.post(AD + "/links-vaga/:lojaId/renovar", admAuth, handle((req) => admissao.renovarLinkVaga(req.access, Number(req.params.lojaId))));
+// link de admissão colado pelo RH; custo da rescisão e anexo do cálculo (só RH e Diretoria)
+app.put(AD + "/processos/:id/link-admissao", admAuth, handle((req) => admissao.salvarLinkAdmissao(req.access, nid(req), req.body || {})));
+app.post(AD + "/processos/:id/calculo", admAuth, handle((req) => admissao.registrarCalculo(req.access, nid(req), req.body || {})));
+app.get(AD + "/processos/:id/anexos/:aid", admAuth, handle((req) => admissao.anexoRH(req.access, nid(req), Number(req.params.aid))));
+app.delete(AD + "/processos/:id/anexos/:aid", admAuth, handle((req) => admissao.removerAnexo(req.access, nid(req), Number(req.params.aid))));
 app.get(AD + "/mensagens", admAuth, handle((req) => admissao.mensagens(req.access)));
 app.put(AD + "/mensagens/:chave", admAuth, handle((req) => admissao.salvarMensagem(req.access, String(req.params.chave), req.body || {})));
 app.post(AD + "/processos/:id/voltar-etapa", admAuth, handle((req) => admissao.reabrirEtapa(req.access, nid(req), req.body || {})));
