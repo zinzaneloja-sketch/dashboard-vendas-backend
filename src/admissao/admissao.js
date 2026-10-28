@@ -158,7 +158,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
   const dv = devolucoes.map((d) => ({ etapa: d.etapa_nome, motivo_cat: d.motivo_cat, detalhe: d.detalhe, por: d.usuario, em: d.criado_em }));
   return {
     id: proc.id, protocolo: proc.protocolo, tipo: proc.tipo, tipo_rotulo: TIPO_ROT[proc.tipo], colaborador: proc.colaborador || ("Vaga de " + (proc.cargo || "cargo a definir")), candidato_definido: !!proc.colaborador,
-    cpf_mascarado: cpfMasc(proc.cpf), cargo: proc.cargo, solicitante: proc.solicitante || null,
+    cpf_mascarado: cpfMasc(proc.cpf), cargo: proc.cargo, solicitante: proc.solicitante || null, colaborador_chapa: proc.colaborador_chapa || null, solicitante_chapa: proc.solicitante_chapa || null,
     loja_id: proc.loja_id, unidade: proc.unidade, subtipo: proc.subtipo, data_prevista: dstr(proc.data_prevista), observacao: proc.observacao,
     responsavel: proc.responsavel, responsavel_nome: proc.responsavel_nome || null, status: proc.status, criado_por: proc.criado_por, criado_em: proc.criado_em, concluido_em: proc.concluido_em, cancelado_motivo: proc.cancelado_motivo,
     desfecho: proc.desfecho || null, desfecho_rotulo: proc.status === "cancelado" ? (DESFECHOS[proc.desfecho] || DESFECHOS.outro) : null,
@@ -170,7 +170,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
 }
 
 const COLS = `p.id::int AS id, p.protocolo, p.tipo, p.colaborador, p.cpf, p.cargo, p.loja_id::int AS loja_id, p.unidade, p.subtipo, p.data_prevista, p.observacao, p.responsavel, p.status,
-  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, r.nome AS responsavel_nome`;
+  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, p.colaborador_chapa, p.solicitante_chapa, r.nome AS responsavel_nome`;
 const COLS_ET = "id::int AS id, nome, descricao, area, ordem, prazo_min, status, concluida_em, concluida_por, obs, acao, externo, exige_candidato, subtarefas, mensagem, formulario";
 const FROM = "FROM adm_processos p LEFT JOIN adm_equipe r ON lower(r.email) = lower(p.responsavel)";
 
@@ -230,8 +230,14 @@ async function criar(acc, b = {}) {
   const p = await papelDe(acc); exigirNaoGo(p);
   const tipo = txt(b.tipo);
   if (!TIPOS.includes(tipo)) throw erro(400, "Escolha se é admissão ou rescisão.");
-  const colaborador = txt(b.colaborador).slice(0, 120);
-  const cargo = txt(b.cargo).slice(0, 100);
+  let colaborador = txt(b.colaborador).slice(0, 120);
+  let cargo = txt(b.cargo).slice(0, 100);
+  // nomes de colaboradores vêm da lista da empresa (planilha do RH); só o candidato de uma admissão é pessoa nova e fica livre
+  let colabChapa = null, solChapa = null, solicitante = txt(b.solicitante).slice(0, 120);
+  const listaOk = await temLista();
+  const eleito = {};
+  if (tipo === "rescisao" && listaOk) { const c = await colaboradorDaLista(b.colaborador_chapa); eleito.colab = c; colaborador = c.nome; colabChapa = c.chapa; if (!cargo && c.cargo) cargo = c.cargo.slice(0, 100); }
+  if ((solicitante || txt(b.solicitante_chapa)) && tipo === "admissao" && listaOk) { const c = await colaboradorDaLista(b.solicitante_chapa, "Quem pediu a vaga"); solicitante = c.nome; solChapa = c.chapa; }
   // Admissão: o processo nasce na aprovação da vaga, quando o candidato ainda pode não existir. Rescisão sempre tem colaborador e data.
   if (tipo === "rescisao" && colaborador.length < 3) throw erro(400, "Informe o nome do colaborador.");
   if (tipo === "admissao" && colaborador && colaborador.length < 3) throw erro(400, "O nome do colaborador está muito curto.");
@@ -243,7 +249,9 @@ async function criar(acc, b = {}) {
   const subtipo = txt(b.subtipo).slice(0, 80);
   if (tipo === "rescisao" && !subtipo) throw erro(400, "Informe o tipo de rescisão.");
   let lojaId = Number(b.loja_id) || null, unidade = txt(b.unidade).slice(0, 120);
+  if (!lojaId && !unidade && eleito.colab && eleito.colab.loja_id) lojaId = Number(eleito.colab.loja_id);
   if (lojaId) { const { rows } = await pool.query("SELECT nome FROM ch_lojas WHERE id = $1", [lojaId]); if (!rows[0]) throw erro(400, "Loja não encontrada."); unidade = rows[0].nome; }
+  if (!unidade && eleito.colab && eleito.colab.local_trabalho) unidade = eleito.colab.local_trabalho.slice(0, 120);
   if (!unidade) throw erro(400, "Informe a loja ou o local de trabalho.");
   let resp = em(b.responsavel) || p.email;
   const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel <> 'go' UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [resp]);
@@ -256,9 +264,9 @@ async function criar(acc, b = {}) {
     const { rows: md } = await c.query("SELECT id, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem, formulario FROM adm_etapas_modelo WHERE tipo = $1 AND ativo ORDER BY ordem, id", [tipo]);
     if (!md.length) throw erro(400, "Não há etapas ativas para esse tipo. Cadastre as etapas em Cadastros.");
     const total = await totalPadrao(tipo, c);
-    const { rows } = await c.query(`INSERT INTO adm_processos (protocolo, tipo, colaborador, cpf, cargo, loja_id, unidade, subtipo, data_prevista, observacao, responsavel, sla_total_min, criado_por, solicitante)
-      VALUES ('tmp-' || nextval('adm_proto_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id::int AS id, criado_em`,
-      [tipo, colaborador, cpf || null, cargo || null, lojaId, unidade, subtipo || null, dataPrev || null, txt(b.observacao).slice(0, 1000) || null, resp, total, p.email, txt(b.solicitante).slice(0, 120) || null]);
+    const { rows } = await c.query(`INSERT INTO adm_processos (protocolo, tipo, colaborador, cpf, cargo, loja_id, unidade, subtipo, data_prevista, observacao, responsavel, sla_total_min, criado_por, solicitante, colaborador_chapa, solicitante_chapa)
+      VALUES ('tmp-' || nextval('adm_proto_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id::int AS id, criado_em`,
+      [tipo, colaborador, cpf || null, cargo || null, lojaId, unidade, subtipo || null, dataPrev || null, txt(b.observacao).slice(0, 1000) || null, resp, total, p.email, solicitante || null, colabChapa, solChapa]);
     const id = rows[0].id, protocolo = `${PREFIXO[tipo]}-${new Date().getFullYear()}-${String(id).padStart(5, "0")}`;
     await c.query("UPDATE adm_processos SET protocolo = $2 WHERE id = $1", [id, protocolo]);
     let o = 0;
@@ -336,8 +344,25 @@ async function editar(acc, id, b = {}) {
   if (raw.status === "cancelado") throw erro(409, "Processo cancelado não pode ser editado.");
   const sets = [], v = [id];
   const set = (col, val) => { v.push(val); sets.push(`${col} = $${v.length}`); };
-  if (b.colaborador !== undefined) { const n = txt(b.colaborador).slice(0, 120); if (n.length < 3 && !(raw.tipo === "admissao" && n === "")) throw erro(400, "Informe o nome do colaborador."); set("colaborador", n); }
-  if (b.solicitante !== undefined) set("solicitante", txt(b.solicitante).slice(0, 120) || null);
+  const listaOk = await temLista();
+  if (b.colaborador !== undefined) {
+    let n = txt(b.colaborador).slice(0, 120);
+    if (raw.tipo === "rescisao" && listaOk) { // na rescisão o nome vem da lista; mantém o atual se não mudou
+      if (txt(b.colaborador_chapa)) { const c = await colaboradorDaLista(b.colaborador_chapa); n = c.nome; set("colaborador_chapa", c.chapa); }
+      else if (n !== raw.colaborador) throw erro(400, "Escolha o colaborador na lista: digite o nome e clique no resultado. Se ele não aparece, peça ao gestor para atualizar a planilha em Cadastros > Colaboradores.");
+    }
+    if (n.length < 3 && !(raw.tipo === "admissao" && n === "")) throw erro(400, "Informe o nome do colaborador.");
+    set("colaborador", n);
+  }
+  if (b.solicitante !== undefined) {
+    let n = txt(b.solicitante).slice(0, 120);
+    if (n && listaOk) {
+      if (txt(b.solicitante_chapa)) { const c = await colaboradorDaLista(b.solicitante_chapa, "Quem pediu a vaga"); n = c.nome; set("solicitante_chapa", c.chapa); }
+      else if (n !== (raw.solicitante || "")) throw erro(400, "Escolha quem pediu a vaga na lista: digite o nome e clique no resultado.");
+    }
+    if (!n) set("solicitante_chapa", null);
+    set("solicitante", n || null);
+  }
   if (b.cpf !== undefined) { const c = cpfDigitos(b.cpf); if (c && !cpfValido(c)) throw erro(400, "CPF inválido. Confira os números."); set("cpf", c || null); }
   if (b.cargo !== undefined) set("cargo", txt(b.cargo).slice(0, 100) || null);
   if (b.subtipo !== undefined) set("subtipo", txt(b.subtipo).slice(0, 80) || null);
@@ -1228,6 +1253,94 @@ async function publicoEnviar(token, ip) {
   return { ok: r };
 }
 
-module.exports = { eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
+
+// ---------- lista de colaboradores (planilha do RH) ----------
+// Alimenta os seletores de nome (rescisão, quem pediu a vaga). O candidato de uma admissão é pessoa nova e fica fora da regra.
+const semAc = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+// nome do local na planilha do RH -> nome da loja no cadastro (quando são escritos de outro jeito)
+const LOCAL_PARA_LOJA = { "sh sulacap": "sulacap t", "sh park jpa": "park shopping jpa", "sh ilha plaza rj": "ilha plaza", "sh top shopping rj": "top shopping", "sh ananindeua": "metropole ananindeua", "sh rio mar recife": "shopping rio mar", "sh ilha ma": "shopping ilha", "sh vila velha": "vila velha 2", "sh serrasul": "serrasul shopping", "sh ribeirao preto": "ribeirao preto shopping", "sh santa ursula": "santa ursula ribeirao", "sh park shopping scs": "park shopping sao caetano", "sh minas": "minas shopping", "sh park campo grande rj": "park campo grande", "sh west shopping rj": "west shopping", "sh campo grande ms": "campo grande", "sh americas": "americas shopping", "sh caxias rj": "caxias", "outlet premium sao paulo itupeva": "outlet premium sao paulo", "outlet premium grande sao paulo itaqua": "outlet premium itaqua", "sh barra rj": "barra sh", "sh brasilia": "brasilia sh", "sh park bsb": "park shopping bsb", "sh patio brasil": "patio df", "outlet premium alexania": "outlet premium", "sh salvador": "salvador shopping", "sh terraco bsb": "terraco shopping bsb", "sh barra salvador": "shopping barra salvador", "sh paralela bahia": "shopping paralela bahia", "outlet premium salvador": "outlet salvador", "sh parque bahia": "parque shopping bahia", "sh da bahia": "iguatemi salvador", "sh tijuca": "shopping tijuca 2", "sh boulevard rj iguatemi": "iguatemi", "sh jockey curitiba": "jockey plaza" };
+async function lojasPorNome() {
+  const { rows } = await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa");
+  const m = new Map(); rows.forEach((l) => { m.set(semAc(l.nome), l.id); m.set(semAc(l.nome).replace(/^sh /, ""), l.id); });
+  return m;
+}
+function lojaDoLocal(mapa, local) {
+  const k = semAc(local); if (!k) return null;
+  return mapa.get(k) || mapa.get(k.replace(/^sh /, "")) || mapa.get(LOCAL_PARA_LOJA[k] || "~") || null;
+}
+async function temLista() { const { rows } = await pool.query("SELECT 1 FROM adm_colaboradores WHERE ativo LIMIT 1"); return rows.length > 0; }
+async function colaboradorDaLista(chapa, rotulo = "o colaborador") {
+  const c = txt(chapa);
+  const { rows } = c ? await pool.query("SELECT chapa, nome, cargo, situacao, local_trabalho, loja_id FROM adm_colaboradores WHERE chapa = $1 AND ativo", [c]) : { rows: [] };
+  if (!rows[0]) throw erro(400, "Escolha " + rotulo.replace(/^o /, "o ") + " na lista: digite o nome e clique no resultado. Se ele não aparece, peça ao gestor para atualizar a planilha em Cadastros > Colaboradores.");
+  return rows[0];
+}
+async function listarColaboradores(acc) {
+  const p = await papelDe(acc); exigirNaoGo(p);
+  const { rows } = await pool.query("SELECT chapa, nome, cargo, situacao, local_trabalho AS local, loja_id::int AS loja_id FROM adm_colaboradores WHERE ativo ORDER BY nome");
+  return { colaboradores: rows, total: rows.length };
+}
+async function resumoColaboradores(acc, f = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const { rows: n } = await pool.query("SELECT count(*) FILTER (WHERE ativo)::int AS ativos, count(*) FILTER (WHERE NOT ativo)::int AS inativos, count(*) FILTER (WHERE ativo AND loja_id IS NOT NULL)::int AS com_loja FROM adm_colaboradores");
+  const { rows: m } = await pool.query("SELECT valor FROM adm_config WHERE chave = 'colab_importacao'");
+  let ultima = null; try { ultima = m[0] ? JSON.parse(m[0].valor) : null; } catch (e) { /* ignora */ }
+  const q = semAc(f.q); let amostra = [];
+  const { rows: todos } = await pool.query("SELECT chapa, nome, cargo, situacao, local_trabalho AS local, ativo FROM adm_colaboradores ORDER BY nome");
+  amostra = (q ? todos.filter((x) => semAc(x.nome + " " + x.chapa + " " + (x.cargo || "") + " " + (x.local || "")).includes(q)) : todos).slice(0, 40);
+  return { ...n[0], ultima, amostra };
+}
+const SITUACOES_IMPORT = 20;
+// rows: [{chapa, nome, cargo, situacao, centro_custo, local, cnpj}]. Sem confirmar, só mostra o que vai acontecer.
+async function importarColaboradores(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const linhas = Array.isArray(b.rows) ? b.rows : [];
+  if (!linhas.length) throw erro(400, "A planilha veio vazia.");
+  if (linhas.length > 20000) throw erro(413, "Planilha grande demais (máximo 20.000 linhas).");
+  const ok = new Map(), ignoradas = [];
+  linhas.forEach((r, i) => {
+    const chapa = txt(r.chapa).slice(0, 30), nome = txt(r.nome).replace(/\s+/g, " ").slice(0, 150);
+    if (!nome) { ignoradas.push({ linha: i + 2, motivo: "Sem nome." }); return; }
+    if (!chapa) { ignoradas.push({ linha: i + 2, motivo: "Sem chapa (" + nome + ")." }); return; }
+    if (ok.has(chapa)) ignoradas.push({ linha: i + 2, motivo: "Chapa repetida " + chapa + " (vale a última linha)." });
+    ok.set(chapa, { chapa, nome, cargo: txt(r.cargo).slice(0, 120) || null, situacao: txt(r.situacao).slice(0, 5) || null, centro_custo: txt(r.centro_custo).slice(0, 80) || null, local_trabalho: txt(r.local).slice(0, 120) || null, cnpj: txt(r.cnpj).slice(0, 25) || null });
+  });
+  if (!ok.size) throw erro(422, "Nenhuma linha válida (cada linha precisa de chapa e nome).", { ignoradas: ignoradas.slice(0, 20) });
+  const { rows: atuais } = await pool.query("SELECT chapa, nome, cargo, situacao, centro_custo, local_trabalho, cnpj, ativo FROM adm_colaboradores");
+  const mapaAtual = new Map(atuais.map((x) => [x.chapa, x]));
+  let novos = 0, mudaram = 0, iguais = 0, reativados = 0; const exemplosNovos = [], exemplosMudaram = [];
+  for (const c of ok.values()) {
+    const a = mapaAtual.get(c.chapa);
+    if (!a) { novos++; if (exemplosNovos.length < 8) exemplosNovos.push(c.nome + " · " + (c.cargo || "sem cargo")); continue; }
+    const igual = a.nome === c.nome && (a.cargo || null) === c.cargo && (a.situacao || null) === c.situacao && (a.local_trabalho || null) === c.local_trabalho && (a.centro_custo || null) === c.centro_custo && (a.cnpj || null) === c.cnpj;
+    if (!a.ativo) reativados++;
+    if (igual && a.ativo) iguais++; else if (a.ativo) { mudaram++; if (exemplosMudaram.length < 8) exemplosMudaram.push(a.nome + (a.nome !== c.nome ? " → " + c.nome : "") + (a.cargo !== c.cargo ? " · cargo: " + (a.cargo || "—") + " → " + (c.cargo || "—") : "") + (a.local_trabalho !== c.local_trabalho ? " · local: " + (a.local_trabalho || "—") + " → " + (c.local_trabalho || "—") : "")); }
+  }
+  const saem = atuais.filter((x) => x.ativo && !ok.has(x.chapa));
+  const ativosAntes = atuais.filter((x) => x.ativo).length;
+  const reducaoGrande = ativosAntes >= 30 && saem.length > Math.max(20, ativosAntes * 0.3);
+  const resumo = { total_planilha: ok.size, novos, atualizados: mudaram, sem_mudanca: iguais, reativados, saem: saem.length, ignoradas: ignoradas.length, detalhe_ignoradas: ignoradas.slice(0, SITUACOES_IMPORT), exemplos_novos: exemplosNovos, exemplos_atualizados: exemplosMudaram, exemplos_saem: saem.slice(0, 8).map((x) => x.nome), reducao_grande: reducaoGrande, ativos_antes: ativosAntes };
+  if (!b.confirmar) return { ok: true, previa: true, ...resumo };
+  if (reducaoGrande && !b.aceitar_reducao) throw erro(409, "A planilha tira " + saem.length + " das " + ativosAntes + " pessoas da lista atual. Confira se é o arquivo certo; se for, confirme de novo aceitando a redução.", { ...resumo });
+  const mapaLojas = await lojasPorNome();
+  await comTransacao(async (c) => {
+    const lista = [...ok.values()];
+    for (let i = 0; i < lista.length; i += 500) {
+      const parte = lista.slice(i, i + 500), col = (k) => parte.map((x) => x[k]);
+      const lojas = parte.map((x) => lojaDoLocal(mapaLojas, x.local_trabalho));
+      await c.query(`INSERT INTO adm_colaboradores (chapa, nome, cargo, situacao, centro_custo, local_trabalho, cnpj, loja_id, ativo, atualizado_em)
+        SELECT chapa, nome, cargo, situacao, centro_custo, local_trabalho, cnpj, loja_id, true, now() FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[]) AS u(chapa, nome, cargo, situacao, centro_custo, local_trabalho, cnpj, loja_id)
+        ON CONFLICT (chapa) DO UPDATE SET nome = EXCLUDED.nome, cargo = EXCLUDED.cargo, situacao = EXCLUDED.situacao, centro_custo = EXCLUDED.centro_custo, local_trabalho = EXCLUDED.local_trabalho, cnpj = EXCLUDED.cnpj, loja_id = EXCLUDED.loja_id, ativo = true, atualizado_em = now()`,
+        [col("chapa"), col("nome"), col("cargo"), col("situacao"), col("centro_custo"), col("local_trabalho"), col("cnpj"), lojas]);
+    }
+    // quem não está mais na planilha sai dos seletores (o histórico dos processos continua com o nome gravado)
+    await c.query("UPDATE adm_colaboradores SET ativo = false, atualizado_em = now() WHERE ativo AND NOT (chapa = ANY($1::text[]))", [[...ok.keys()]]);
+    await c.query("INSERT INTO adm_config (chave, valor) VALUES ('colab_importacao', $1) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", [JSON.stringify({ em: new Date().toISOString(), por: p.email, arquivo: txt(b.arquivo).slice(0, 120) || null, total: ok.size, novos, atualizados: mudaram, saem: saem.length })]);
+  });
+  audit(acc, "adm_colaboradores_importados", { papel: p.papel, alvo: txt(b.arquivo).slice(0, 80) || "planilha", detalhe: `${ok.size} pessoas · ${novos} novas · ${mudaram} atualizadas · ${saem.length} saíram` });
+  return { ok: true, previa: false, ...resumo };
+}
+
+module.exports = { listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
   listarEtapasModelo, salvarEtapaModelo, salvarConfig, formulario, revisarItem, arquivoRH, formulariosModelo, salvarFormularioModelo, publicoVer, publicoSalvar, publicoArquivo, publicoRemoverArquivo, publicoEnviar, listarEquipe, criarEquipe, editarEquipe, redefinirSenha, indicadores,
   _t: { usado, monta, cpfValido, prazoData } };
