@@ -25,9 +25,10 @@ const DIA_MIN = 600;                // 1 dia útil = 10 h de expediente
 const PRAZO_LEGAL_DIAS = 10;        // art. 477, §6º da CLT: pagamento das verbas e documentos até 10 dias corridos do término do contrato
 const RISCO = 0.8;                  // 80% do prazo usado = em risco
 const ABERTOS = ["em_andamento", "pausado"];
-const PAPEIS = ["analista", "gestor", "go"];
-const ACOES = ["normal", "aprovacao", "validacao", "aso"];
-const DESFECHOS = { vaga_reprovada: "Vaga reprovada pela GO", inapto: "Candidato inapto no exame admissional", desistencia: "Candidato desistiu", outro: "Cancelado" };
+const PAPEIS = ["analista", "gestor", "go", "diretoria"];
+const ACOES = ["normal", "aprovacao", "validacao", "aso", "link", "calculo", "diretoria"];
+const ACOES_DIRETORIA = ["calculo", "diretoria"]; // etapas com valores: só RH e Diretoria enxergam
+const DESFECHOS = { vaga_reprovada: "Vaga reprovada pela GO", desligamento_reprovado: "Desligamento não aprovado pelo Regional", inapto: "Candidato inapto no exame admissional", desistencia: "Candidato desistiu", outro: "Cancelado" };
 const MOTIVOS_DEVOLUCAO = ["Documento ilegível", "Documento faltando", "Dado incorreto ou divergente", "Documento vencido", "Outro"];
 const MSG_PADRAO = [
   { chave: "link_pre", titulo: "Link da pré-admissão (para o gerente)", destino: "Gerente da loja", texto: "Olá! Para dar andamento na contratação de {nome} ({cargo}) na {loja}, preencha o formulário de pré-admissão e anexe os documentos iniciais neste link: {link}" },
@@ -63,7 +64,12 @@ async function exigirLojaDaGo(p, lojaId, c = pool) {
   if (!ok) throw erro(403, "Essa vaga é de uma loja que não está sob a sua responsabilidade.");
 }
 function exigirGestor(p) { if (p.papel !== "gestor") throw erro(403, "Só o gestor pode fazer isso."); }
-function exigirNaoGo(p) { if (p.papel === "go") throw erro(403, "O seu perfil (GO) só aprova ou reprova vagas."); }
+function exigirNaoGo(p) {
+  if (p.papel === "go") throw erro(403, "O seu perfil (GO) só aprova ou reprova as vagas e os desligamentos da sua região.");
+  if (p.papel === "diretoria") throw erro(403, "O seu perfil (Diretoria) só aprova ou devolve o custo das rescisões.");
+}
+const ehRH = (p) => p.papel === "analista" || p.papel === "gestor";
+const podeDiretoria = (p) => p.papel === "diretoria" || p.papel === "gestor";
 const podeAprovar = (p) => p.papel === "gestor" || p.papel === "go";
 function exigirAdmin(p) { if (!p.admin) throw erro(403, "Só o administrador pode fazer isso."); }
 
@@ -160,6 +166,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
     id: proc.id, protocolo: proc.protocolo, tipo: proc.tipo, tipo_rotulo: TIPO_ROT[proc.tipo], colaborador: proc.colaborador || ("Vaga de " + (proc.cargo || "cargo a definir")), candidato_definido: !!proc.colaborador,
     cpf_mascarado: cpfMasc(proc.cpf), cargo: proc.cargo, solicitante: proc.solicitante || null, colaborador_chapa: proc.colaborador_chapa || null, solicitante_chapa: proc.solicitante_chapa || null,
     loja_id: proc.loja_id, unidade: proc.unidade, subtipo: proc.subtipo, data_prevista: dstr(proc.data_prevista), observacao: proc.observacao,
+    link_admissao: proc.link_admissao || null,
     responsavel: proc.responsavel, responsavel_nome: proc.responsavel_nome || null, status: proc.status, criado_por: proc.criado_por, criado_em: proc.criado_em, concluido_em: proc.concluido_em, cancelado_motivo: proc.cancelado_motivo,
     desfecho: proc.desfecho || null, desfecho_rotulo: proc.status === "cancelado" ? (DESFECHOS[proc.desfecho] || DESFECHOS.outro) : null,
     sla_total_min: proc.sla_total_min, total, prazo_data: pd, situacao, progresso: { feitas, total: lista.length },
@@ -170,7 +177,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
 }
 
 const COLS = `p.id::int AS id, p.protocolo, p.tipo, p.colaborador, p.cpf, p.cargo, p.loja_id::int AS loja_id, p.unidade, p.subtipo, p.data_prevista, p.observacao, p.responsavel, p.status,
-  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, p.colaborador_chapa, p.solicitante_chapa, r.nome AS responsavel_nome`;
+  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, p.colaborador_chapa, p.solicitante_chapa, p.link_admissao, r.nome AS responsavel_nome`;
 const COLS_ET = "id::int AS id, nome, descricao, area, ordem, prazo_min, status, concluida_em, concluida_por, obs, acao, externo, exige_candidato, subtarefas, mensagem, formulario";
 const FROM = "FROM adm_processos p LEFT JOIN adm_equipe r ON lower(r.email) = lower(p.responsavel)";
 
@@ -203,7 +210,7 @@ async function evento(c, processoId, tipo, usuario, detalhe) {
 
 // ---------- /eu ----------
 async function responsaveis() {
-  const { rows } = await pool.query(`SELECT email, coalesce(nome, email) AS nome FROM adm_equipe WHERE ativo AND papel <> 'go'
+  const { rows } = await pool.query(`SELECT email, coalesce(nome, email) AS nome FROM adm_equipe WHERE ativo AND papel NOT IN ('go','diretoria')
     UNION SELECT email, coalesce(nome, email) FROM users WHERE role = 'admin' ORDER BY 2`);
   const vistos = new Set();
   return rows.filter((r) => (vistos.has(r.email.toLowerCase()) ? false : vistos.add(r.email.toLowerCase())));
@@ -213,7 +220,7 @@ async function eu(acc) {
   const { rows: lj } = p.papel === "go"
     ? await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa AND lower(regional) = ANY($1::text[]) ORDER BY nome", [p.grupos && p.grupos.length ? p.grupos : []])
     : await pool.query("SELECT id::int AS id, nome FROM ch_lojas WHERE ativa ORDER BY nome");
-  return { nome: p.nome, email: p.email, papel: p.papel, admin: !!p.admin, go: p.papel === "go", grupos_go: p.papel === "go" ? (await gruposDe(p.email)) : undefined, tipos: p.papel === "go" ? { admissao: TIPO_ROT.admissao } : TIPO_ROT, subtipos: SUBTIPOS, prazo_legal_dias: PRAZO_LEGAL_DIAS,
+  return { nome: p.nome, email: p.email, papel: p.papel, admin: !!p.admin, go: p.papel === "go", grupos_go: p.papel === "go" ? (await gruposDe(p.email)) : undefined, tipos: p.papel === "diretoria" ? { rescisao: TIPO_ROT.rescisao } : TIPO_ROT, diretoria: p.papel === "diretoria", rh: ehRH(p), subtipos: SUBTIPOS, prazo_legal_dias: PRAZO_LEGAL_DIAS,
     acoes: ACOES, desfechos: DESFECHOS, motivos_devolucao: MOTIVOS_DEVOLUCAO,
     expediente: { inicio_min: expediente.inicioMin, fim_min: expediente.fimMin, dias: expediente.dias }, lojas: lj, responsaveis: await responsaveis(), trocar_senha: !!acc.trocar_senha };
 }
@@ -225,6 +232,35 @@ async function totalPadrao(tipo, c = pool) {
   if (v > 0) return Math.round(v);
   const { rows } = await c.query("SELECT coalesce(sum(prazo_min),0)::int AS s FROM adm_etapas_modelo WHERE tipo = $1 AND ativo", [tipo]);
   return rows[0].s;
+}
+// Cria o processo com as etapas ativas do modelo. Usada pelo RH (criar) e pelo link da loja (gerente abre a vaga).
+async function inserirProcesso(d) {
+  return comTransacao(async (c) => {
+    const { rows: md } = await c.query("SELECT id, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem, formulario FROM adm_etapas_modelo WHERE tipo = $1 AND ativo ORDER BY ordem, id", [d.tipo]);
+    if (!md.length) throw erro(400, "Não há etapas ativas para esse tipo. Cadastre as etapas em Cadastros.");
+    const total = await totalPadrao(d.tipo, c);
+    const { rows } = await c.query(`INSERT INTO adm_processos (protocolo, tipo, colaborador, cpf, cargo, loja_id, unidade, subtipo, data_prevista, observacao, responsavel, sla_total_min, criado_por, solicitante, colaborador_chapa, solicitante_chapa)
+      VALUES ('tmp-' || nextval('adm_proto_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id::int AS id, criado_em`,
+      [d.tipo, d.colaborador, d.cpf || null, d.cargo || null, d.lojaId, d.unidade, d.subtipo || null, d.dataPrev || null, d.observacao || null, d.resp, total, d.criadoPor, d.solicitante || null, d.colabChapa || null, d.solChapa || null]);
+    const id = rows[0].id, protocolo = `${PREFIXO[d.tipo]}-${new Date().getFullYear()}-${String(id).padStart(5, "0")}`;
+    await c.query("UPDATE adm_processos SET protocolo = $2 WHERE id = $1", [id, protocolo]);
+    let o = 0;
+    for (const m of md) {
+      const sub = (Array.isArray(m.subtarefas) ? m.subtarefas : []).map((nome) => ({ nome: String(nome) }));
+      const { rows: ne } = await c.query(`INSERT INTO adm_proc_etapas (processo_id, modelo_id, nome, descricao, area, ordem, prazo_min, acao, externo, exige_candidato, subtarefas, mensagem, formulario)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13) RETURNING id`, [id, m.id, m.nome, m.descricao, m.area, ++o, m.prazo_min, m.acao || "normal", !!m.externo, !!m.exige_candidato, JSON.stringify(sub), m.mensagem || null, m.formulario || null]);
+      if (o === 1) await abrirPassagem(c, id, ne[0].id, rows[0].criado_em);
+    }
+    await evento(c, id, "criado", d.criadoPor, { tipo: d.tipo, responsavel: d.resp, via: d.via || undefined });
+    // se a primeira etapa é de um formulário (abertura da vaga pelo gerente), o link já nasce com o processo
+    let formToken = null;
+    if (d.tipo === "admissao" && md[0].formulario && md[0].acao !== "validacao") {
+      const fid = await garantirForm(c, id, md[0].formulario, d.criadoPor);
+      const { rows: ft } = await c.query("SELECT token FROM adm_formularios WHERE id = $1", [fid]);
+      formToken = ft[0].token;
+    }
+    return { id, protocolo, formToken };
+  });
 }
 async function criar(acc, b = {}) {
   const p = await papelDe(acc); exigirNaoGo(p);
@@ -249,34 +285,17 @@ async function criar(acc, b = {}) {
   const subtipo = txt(b.subtipo).slice(0, 80);
   if (tipo === "rescisao" && !subtipo) throw erro(400, "Informe o tipo de rescisão.");
   let lojaId = Number(b.loja_id) || null, unidade = txt(b.unidade).slice(0, 120);
+  if (!lojaId && !unidade && tipo === "rescisao" && eleito.colab) { lojaId = eleito.colab.loja_id ? Number(eleito.colab.loja_id) : null; unidade = txt(eleito.colab.local_trabalho).slice(0, 120); } // a loja vem do cadastro do colaborador
   if (lojaId) { const { rows } = await pool.query("SELECT nome FROM ch_lojas WHERE id = $1", [lojaId]); if (!rows[0]) throw erro(400, "Loja não encontrada."); unidade = rows[0].nome; }
   if (!unidade) throw erro(400, "Informe a loja ou o local de trabalho.");
   let resp = em(b.responsavel) || p.email;
-  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel <> 'go' UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [resp]);
+  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel NOT IN ('go','diretoria') UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [resp]);
   if (!rr[0]) throw erro(400, "O responsável precisa ser da equipe do RH.");
   if (cpf) {
     const { rows: dup } = await pool.query("SELECT protocolo FROM adm_processos WHERE cpf = $1 AND tipo = $2 AND status IN ('em_andamento','pausado') LIMIT 1", [cpf, tipo]);
     if (dup[0]) throw erro(409, `Já existe um processo de ${TIPO_ROT[tipo].toLowerCase()} em andamento para esse CPF (${dup[0].protocolo}).`);
   }
-  const info = await comTransacao(async (c) => {
-    const { rows: md } = await c.query("SELECT id, nome, descricao, area, prazo_min, ordem, acao, externo, exige_candidato, subtarefas, mensagem, formulario FROM adm_etapas_modelo WHERE tipo = $1 AND ativo ORDER BY ordem, id", [tipo]);
-    if (!md.length) throw erro(400, "Não há etapas ativas para esse tipo. Cadastre as etapas em Cadastros.");
-    const total = await totalPadrao(tipo, c);
-    const { rows } = await c.query(`INSERT INTO adm_processos (protocolo, tipo, colaborador, cpf, cargo, loja_id, unidade, subtipo, data_prevista, observacao, responsavel, sla_total_min, criado_por, solicitante, colaborador_chapa, solicitante_chapa)
-      VALUES ('tmp-' || nextval('adm_proto_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id::int AS id, criado_em`,
-      [tipo, colaborador, cpf || null, cargo || null, lojaId, unidade, subtipo || null, dataPrev || null, txt(b.observacao).slice(0, 1000) || null, resp, total, p.email, solicitante || null, colabChapa, solChapa]);
-    const id = rows[0].id, protocolo = `${PREFIXO[tipo]}-${new Date().getFullYear()}-${String(id).padStart(5, "0")}`;
-    await c.query("UPDATE adm_processos SET protocolo = $2 WHERE id = $1", [id, protocolo]);
-    let o = 0;
-    for (const m of md) {
-      const sub = (Array.isArray(m.subtarefas) ? m.subtarefas : []).map((nome) => ({ nome: String(nome) }));
-      const { rows: ne } = await c.query(`INSERT INTO adm_proc_etapas (processo_id, modelo_id, nome, descricao, area, ordem, prazo_min, acao, externo, exige_candidato, subtarefas, mensagem, formulario)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13) RETURNING id`, [id, m.id, m.nome, m.descricao, m.area, ++o, m.prazo_min, m.acao || "normal", !!m.externo, !!m.exige_candidato, JSON.stringify(sub), m.mensagem || null, m.formulario || null]);
-      if (o === 1) await abrirPassagem(c, id, ne[0].id, rows[0].criado_em);
-    }
-    await evento(c, id, "criado", p.email, { tipo, responsavel: resp });
-    return { id, protocolo };
-  });
+  const info = await inserirProcesso({ tipo, colaborador, cpf, cargo, lojaId, unidade, subtipo, dataPrev, observacao: txt(b.observacao).slice(0, 1000) || null, resp, criadoPor: p.email, solicitante, colabChapa, solChapa });
   audit(acc, "adm_criado", { papel: p.papel, alvo: info.protocolo, detalhe: TIPO_ROT[tipo] + " · " + unidade });
   return { ok: true, id: info.id, protocolo: info.protocolo };
 }
@@ -285,7 +304,8 @@ async function listar(acc, f = {}) {
   const pp = await papelDe(acc);
   const w = [], v = [];
   const add = (x) => { v.push(x); return "$" + v.length; };
-  if (pp.papel === "go") { w.push(`p.tipo = ${add("admissao")}`); w.push(filtroLojasGo(pp, add)); }
+  if (pp.papel === "go") { w.push(filtroLojasGo(pp, add)); if (TIPOS.includes(f.tipo)) w.push(`p.tipo = ${add(f.tipo)}`); }
+  else if (pp.papel === "diretoria") w.push(`p.tipo = ${add("rescisao")}`);
   else if (TIPOS.includes(f.tipo)) w.push(`p.tipo = ${add(f.tipo)}`);
   if (f.status === "abertos" || !f.status) w.push("p.status IN ('em_andamento','pausado')");
   else if (f.status === "fechados") w.push("p.status IN ('concluido','cancelado')");
@@ -298,6 +318,8 @@ async function listar(acc, f = {}) {
   if (dataOk(txt(f.ate))) w.push(`p.criado_em < ${add(f.ate + "T00:00:00-03:00")}::timestamptz + interval '1 day'`);
   if (txt(f.q)) { const q = add("%" + txt(f.q).toLowerCase() + "%"); w.push(`(lower(p.protocolo) LIKE ${q} OR lower(p.colaborador) LIKE ${q} OR lower(coalesce(p.cargo,'')) LIKE ${q} OR lower(p.unidade) LIKE ${q})`); }
   let lista = await carregarLista(w.join(" AND "), v);
+  // a Diretoria só vê a rescisão quando ela chega na etapa de aprovação dela (ou já passou por ela)
+  if (pp.papel === "diretoria") lista = lista.filter((x) => x.etapas.some((e) => e.acao === "diretoria" && (e.status !== "pendente" || e.atual)));
   if (f.sla === "estourado") lista = lista.filter((x) => x.situacao === "estourado");
   else if (f.sla === "risco") lista = lista.filter((x) => x.situacao === "risco");
   else if (f.sla === "atencao") lista = lista.filter((x) => x.situacao === "estourado" || x.situacao === "risco");
@@ -305,6 +327,7 @@ async function listar(acc, f = {}) {
   if (f.com === "rh") lista = lista.filter((x) => x.etapa_atual && !x.etapa_atual.externo);
   else if (f.com === "fora") lista = lista.filter((x) => x.etapa_atual && x.etapa_atual.externo);
   else if (f.com === "go") lista = lista.filter((x) => x.etapa_atual && x.etapa_atual.acao === "aprovacao");
+  else if (f.com === "diretoria") lista = lista.filter((x) => x.etapa_atual && x.etapa_atual.acao === "diretoria");
   else if (f.com === "devolvidos") lista = lista.filter((x) => x.etapa_atual && x.etapas.some((e) => e.atual && e.voltas > 0));
   const ab = lista.filter((x) => ABERTOS.includes(x.status));
   const fe = lista.filter((x) => !ABERTOS.includes(x.status));
@@ -312,27 +335,36 @@ async function listar(acc, f = {}) {
   const ordenada = ab.concat(fe);
   const contagem = {}; lista.forEach((x) => { contagem[x.status] = (contagem[x.status] || 0) + 1; });
   const lim = Math.min(Number(f.limite) || 300, 1000);
-  return { processos: ordenada.slice(0, lim).map((x) => ({ ...x, etapas: undefined, devolucoes: undefined, lados: undefined, por_area: undefined })), total: ordenada.length, contagem };
+  return { processos: ordenada.slice(0, lim).map((x) => { const y = pp.papel === "go" ? mascararParaGo(x) : x; return { ...y, etapas: undefined, devolucoes: undefined, lados: undefined, por_area: undefined }; }), total: ordenada.length, contagem };
 }
 
 async function detalhe(acc, id) {
   const p = await papelDe(acc);
   const { raw, etapas, pausas, passagens, devolucoes } = await carregarUm(id);
-  if (p.papel === "go" && raw.tipo !== "admissao") throw erro(403, "O seu perfil só acompanha admissões.");
+  if (p.papel === "diretoria") {
+    const vis = raw.tipo === "rescisao" && etapas.some((e) => e.acao === "diretoria" && (e.status !== "pendente" || (e.status === "pendente" && etapas.filter((x) => x.status === "pendente").sort((a, b) => a.ordem - b.ordem)[0] === e)));
+    if (!vis) throw erro(403, "Você vê a rescisão quando ela chega na aprovação da Diretoria.");
+  }
   await exigirLojaDaGo(p, raw.loja_id);
   audit(acc, "adm_ver", { papel: p.papel, alvo: raw.protocolo, detalhe: raw.colaborador }); // quem leu os dados pessoais (LGPD)
   const proc = monta(raw, etapas, pausas, new Date(), passagens, devolucoes);
-  proc.cpf = p.papel === "go" ? null : cpfFmt(raw.cpf);
-  if (raw.tipo === "admissao" && p.papel !== "go" && proc.etapa_atual) {
+  proc.cpf = p.papel === "go" || p.papel === "diretoria" ? null : cpfFmt(raw.cpf);
+  if (raw.tipo === "admissao" && ehRH(p) && proc.etapa_atual) {
     const ea = proc.etapas.find((x) => x.atual);
     if (ea && ea.formulario && ea.acao !== "validacao" && ABERTOS.includes(raw.status)) await comTransacao((c) => garantirForm(c, id, ea.formulario, p.email));
   }
-  proc.formularios = raw.tipo === "admissao" ? await resumoFormularios(id, p.papel !== "go") : {};
-  proc.candidato_telefone = raw.tipo === "admissao" && p.papel !== "go" ? await telefoneCandidato(id) : null;
-  if (p.papel === "go") proc.cpf_mascarado = null;
-  const { rows: ev } = await pool.query("SELECT tipo, usuario, detalhe, criado_em FROM adm_eventos WHERE processo_id = $1 ORDER BY criado_em, id", [id]);
+  proc.formularios = raw.tipo === "admissao" && p.papel !== "diretoria" ? await resumoFormularios(id, ehRH(p)) : {};
+  proc.candidato_telefone = raw.tipo === "admissao" && ehRH(p) ? await telefoneCandidato(id) : null;
+  if (p.papel === "go" || p.papel === "diretoria") proc.cpf_mascarado = null;
+  // custo da rescisão e anexos: só RH e Diretoria
+  proc.calculo = raw.tipo === "rescisao" && (ehRH(p) || p.papel === "diretoria") ? await calculoDo(id) : null;
+  let proc2 = proc;
+  if (p.papel === "go") proc2 = mascararParaGo(proc);
+  const { rows: ev0 } = await pool.query("SELECT tipo, usuario, detalhe, criado_em FROM adm_eventos WHERE processo_id = $1 ORDER BY criado_em, id", [id]);
+  const nomesOcultos = new Set(proc.etapas.filter((e) => ACOES_DIRETORIA.includes(e.acao)).map((e) => e.nome));
+  const ev = p.papel === "go" ? ev0.filter((x) => !["calculo_registrado", "anexo_calculo", "anexo_removido"].includes(x.tipo) && !(x.detalhe && nomesOcultos.has(x.detalhe.etapa)) && !(x.detalhe && nomesOcultos.has(x.detalhe.para))) : ev0;
   const { rows: ps } = await pool.query("SELECT inicio, fim, motivo, usuario FROM adm_pausas WHERE processo_id = $1 ORDER BY inicio", [id]);
-  return { processo: proc, eventos: ev, pausas: ps };
+  return { processo: proc2, eventos: ev, pausas: ps };
 }
 
 async function editar(acc, id, b = {}) {
@@ -392,7 +424,8 @@ async function etapaAtual(c, id, etapaId) {
   if (!atual || atual.id !== Number(etapaId)) throw erro(409, "Só a etapa atual pode ser alterada. Atualize a tela.");
   const idx = ord.indexOf(atual);
   const { rows: pg } = await c.query("SELECT inicio FROM adm_passagens WHERE etapa_id = $1 AND fim IS NULL ORDER BY inicio DESC LIMIT 1", [atual.id]);
-  return { raw, ord, atual, idx, proximo: ord[idx + 1] || null, anterior: ord[idx - 1] || null, ini: pg[0] ? pg[0].inicio : raw.criado_em, ultima: idx === ord.length - 1, pausas };
+  const proximo = ord.slice(idx + 1).find((x) => x.status === "pendente") || null; // etapas já feitas (ex.: aprovação da GO, depois de uma devolução) não repetem
+  return { raw, ord, atual, idx, proximo, anterior: ord[idx - 1] || null, ini: pg[0] ? pg[0].inicio : raw.criado_em, ultima: !proximo, pausas };
 }
 // encerra o processo sem contratação (vaga reprovada, inapto, desistência ou cancelamento)
 async function encerrarInterno(c, id, p, desfecho, motivo) {
@@ -402,7 +435,8 @@ async function encerrarInterno(c, id, p, desfecho, motivo) {
   await evento(c, id, "cancelado", p.email, { motivo, desfecho });
 }
 function exigirPapelDaEtapa(p, etapa) {
-  if (etapa.acao === "aprovacao") { if (!podeAprovar(p)) throw erro(403, "Só a GO ou o gestor aprovam ou reprovam a vaga."); }
+  if (etapa.acao === "aprovacao") { if (!podeAprovar(p)) throw erro(403, "Só a GO ou o gestor aprovam ou reprovam essa etapa."); }
+  else if (etapa.acao === "diretoria") { if (!podeDiretoria(p)) throw erro(403, "Só a Diretoria (ou o gestor) aprova o custo da rescisão."); }
   else exigirNaoGo(p);
 }
 function quando() { return new Date(); } // data e hora da conclusão são sempre automáticas (o momento do clique); ninguém informa nem altera
@@ -423,6 +457,11 @@ async function concluirEtapa(acc, id, etapaId, b = {}) {
         formAprovar = ff[0].id;
       }
     }
+    if (a.acao === "link" && !txt(e.raw.link_admissao)) throw erro(400, "Cole o link de admissão que você enviou ao candidato antes de concluir a etapa.");
+    if (a.acao === "calculo" || a.acao === "diretoria") {
+      const { rows: cu } = await c.query("SELECT custo_rescisao FROM adm_processos WHERE id = $1", [id]);
+      if (cu[0].custo_rescisao === null) throw erro(400, a.acao === "calculo" ? "Informe o custo da rescisão antes de concluir (o anexo do cálculo é opcional)." : "O RH ainda não informou o custo da rescisão.");
+    }
     if (a.exige_candidato && (!e.raw.colaborador || !e.raw.data_prevista)) throw erro(400, "Antes de concluir, informe o nome do candidato e a data de início (botão Editar dados).");
     const falta = (Array.isArray(a.subtarefas) ? a.subtarefas : []).filter((t) => !t.feita_em);
     if (falta.length) throw erro(400, "Marque todas as tarefas da etapa antes de concluir. Falta: " + falta.map((t) => t.nome).join("; ") + ".");
@@ -437,7 +476,7 @@ async function concluirEtapa(acc, id, etapaId, b = {}) {
     await c.query("UPDATE adm_proc_etapas SET status = 'concluida', concluida_em = $2, concluida_por = $3, obs = $4 WHERE id = $1", [a.id, quand, p.email, obsFinal]);
     await fecharPassagem(c, a.id, quand);
     if (formAprovar) await c.query("UPDATE adm_formularios SET status = 'aprovado' WHERE id = $1", [formAprovar]);
-    await evento(c, id, "etapa_concluida", p.email, { etapa: a.nome, ordem: a.ordem, quando: quand, obs: obsFinal, final: e.ultima, resultado, aprovacao: a.acao === "aprovacao" || undefined });
+    await evento(c, id, "etapa_concluida", p.email, { etapa: a.nome, ordem: a.ordem, quando: quand, obs: obsFinal, final: e.ultima, resultado, aprovacao: a.acao === "aprovacao" || a.acao === "diretoria" || undefined });
     if (resultado === "inapto") {
       await encerrarInterno(c, id, p, "inapto", "Resultado do exame admissional: inapto" + (obs ? " · " + obs : ""));
       return { protocolo: e.raw.protocolo, final: false, encerrado: true, etapa: a.nome };
@@ -510,8 +549,8 @@ async function reprovarVaga(acc, id, etapaId, b = {}) {
     exigirPapelDaEtapa(p, e.atual);
     await exigirLojaDaGo(p, e.raw.loja_id, c);
     await c.query("UPDATE adm_passagens SET fim = now() WHERE etapa_id = $1 AND fim IS NULL", [e.atual.id]);
-    await evento(c, id, "vaga_reprovada", p.email, { etapa: e.atual.nome, motivo });
-    await encerrarInterno(c, id, p, "vaga_reprovada", motivo);
+    await evento(c, id, "vaga_reprovada", p.email, { etapa: e.atual.nome, motivo, tipo: e.raw.tipo });
+    await encerrarInterno(c, id, p, e.raw.tipo === "rescisao" ? "desligamento_reprovado" : "vaga_reprovada", motivo);
     return e.raw.protocolo;
   });
   audit(acc, "adm_vaga_reprovada", { papel: p.papel, alvo: r, detalhe: motivo });
@@ -519,23 +558,27 @@ async function reprovarVaga(acc, id, etapaId, b = {}) {
 }
 // O RH não aprova os documentos: devolve para a etapa anterior (loja ou candidato corrige) e a etapa de validação volta para a fila.
 async function devolverEtapa(acc, id, etapaId, b = {}) {
-  const p = await papelDe(acc); exigirNaoGo(p);
+  const p = await papelDe(acc);
   const cat = MOTIVOS_DEVOLUCAO.includes(txt(b.motivo_cat)) ? txt(b.motivo_cat) : "Outro";
   const detalhe = txt(b.detalhe).slice(0, 500);
   if (detalhe.length < 5) throw erro(400, "Descreva o que está incorreto ou faltando (mínimo 5 letras).");
   const r = await comTransacao(async (c) => {
     await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
     const e = await etapaAtual(c, id, etapaId);
-    if (e.atual.acao !== "validacao") throw erro(409, "Só etapas de validação podem ser devolvidas.");
-    if (!e.anterior) throw erro(409, "Não há etapa anterior para devolver.");
+    if (e.atual.acao === "diretoria") { if (!podeDiretoria(p)) throw erro(403, "Só a Diretoria (ou o gestor) devolve o custo ao RH."); }
+    else { exigirNaoGo(p); if (e.atual.acao !== "validacao") throw erro(409, "Só etapas de validação ou a aprovação da Diretoria podem ser devolvidas."); }
+    // validação de formulário: volta para a etapa em que o formulário é preenchido (a aprovação da GO, já feita, não se repete); Diretoria: volta ao cálculo do RH
+    const destino = e.atual.formulario ? (e.ord.find((x) => x.formulario === e.atual.formulario && x.acao !== "validacao" && x.ordem < e.atual.ordem) || e.anterior) : (e.atual.acao === "diretoria" ? (e.ord.slice(0, e.idx).reverse().find((x) => x.acao === "calculo") || e.anterior) : e.anterior);
+    if (!destino) throw erro(409, "Não há etapa anterior para devolver.");
     await c.query("UPDATE adm_passagens SET fim = now() WHERE etapa_id = $1 AND fim IS NULL", [e.atual.id]);
-    await c.query("UPDATE adm_proc_etapas SET status = 'pendente', concluida_em = NULL, concluida_por = NULL, obs = NULL WHERE id = $1", [e.anterior.id]);
-    await abrirPassagem(c, id, e.anterior.id, new Date());
+    // as etapas entre o destino e a atual que já estavam concluídas continuam concluídas; só o destino reabre
+    await c.query("UPDATE adm_proc_etapas SET status = 'pendente', concluida_em = NULL, concluida_por = NULL, obs = NULL WHERE id = $1", [destino.id]);
+    await abrirPassagem(c, id, destino.id, new Date());
     if (e.atual.formulario) await c.query("UPDATE adm_formularios SET status = 'devolvido' WHERE processo_id = $1 AND tipo = $2", [id, e.atual.formulario]);
-    await c.query("INSERT INTO adm_devolucoes (processo_id, etapa_validacao_id, etapa_destino_id, etapa_nome, motivo_cat, detalhe, usuario) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, e.atual.id, e.anterior.id, e.anterior.nome, cat, detalhe, p.email]);
+    await c.query("INSERT INTO adm_devolucoes (processo_id, etapa_validacao_id, etapa_destino_id, etapa_nome, motivo_cat, detalhe, usuario) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, e.atual.id, destino.id, destino.nome, cat, detalhe, p.email]);
     await c.query("UPDATE adm_processos SET atualizado_em = now() WHERE id = $1", [id]);
-    await evento(c, id, "devolvida", p.email, { etapa: e.atual.nome, para: e.anterior.nome, motivo_cat: cat, detalhe });
-    return { protocolo: e.raw.protocolo, de: e.atual.nome, para: e.anterior.nome };
+    await evento(c, id, "devolvida", p.email, { etapa: e.atual.nome, para: destino.nome, motivo_cat: cat, detalhe });
+    return { protocolo: e.raw.protocolo, de: e.atual.nome, para: destino.nome };
   });
   audit(acc, "adm_devolvida", { papel: p.papel, alvo: r.protocolo, detalhe: cat + " · " + r.para });
   return { ok: true, voltou_para: r.para };
@@ -606,7 +649,7 @@ async function retomar(acc, id) {
 async function atribuir(acc, id, b = {}) {
   const p = await papelDe(acc); exigirNaoGo(p);
   const email = em(b.responsavel);
-  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel <> 'go' UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [email]);
+  const { rows: rr } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel NOT IN ('go','diretoria') UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [email]);
   if (!rr[0]) throw erro(400, "O responsável precisa ser da equipe.");
   const { raw } = await carregarUm(id);
   if (!ABERTOS.includes(raw.status)) throw erro(409, "Processo encerrado.");
@@ -938,6 +981,7 @@ const FORM_PADRAO = {
   pre: [
     { chave: "nome_candidato", rotulo: "Nome completo do candidato", kind: "texto", obrigatorio: true, fixo: true },
     { chave: "data_inicio", rotulo: "Data prevista de início", kind: "data", obrigatorio: true, fixo: true },
+    { chave: "vt_assinado", rotulo: "Documento do vale-transporte assinado pelo candidato (com o valor do VT)", kind: "arquivo", obrigatorio: true, fixo: true },
     { chave: "telefone", rotulo: "WhatsApp do candidato (com DDD)", kind: "telefone", obrigatorio: true },
     { chave: "email", rotulo: "E-mail do candidato", kind: "email", obrigatorio: false },
     { chave: "escala", rotulo: "Horário ou escala de trabalho", kind: "texto", obrigatorio: false },
@@ -1040,7 +1084,7 @@ async function salvarFormularioModelo(acc, tipo, b = {}) {
     vistos.add(chave);
     const opcoes = kind === "selecao" ? (Array.isArray(x.opcoes) ? x.opcoes : []).map((o) => txt(o).slice(0, 60)).filter(Boolean).slice(0, 40) : undefined;
     if (kind === "selecao" && opcoes.length < 2) throw erro(400, "Campo de lista \"" + rotulo + "\": informe pelo menos 2 opções.");
-    lista.push({ chave, rotulo, kind, ...(opcoes ? { opcoes } : {}), obrigatorio: !!x.obrigatorio, ...(["nome_candidato", "data_inicio"].includes(chave) && tipo === "pre" ? { fixo: true, obrigatorio: true } : {}) });
+    lista.push({ chave, rotulo, kind, ...(opcoes ? { opcoes } : {}), obrigatorio: !!x.obrigatorio, ...(["nome_candidato", "data_inicio", "vt_assinado"].includes(chave) && tipo === "pre" ? { fixo: true, obrigatorio: true } : {}) });
   }
   if (tipo === "pre") for (const f of FORM_PADRAO.pre.filter((x) => x.fixo)) if (!lista.some((x) => x.chave === f.chave)) lista.unshift(f);
   if (!lista.length) throw erro(400, "O formulário precisa de pelo menos um campo.");
@@ -1403,6 +1447,198 @@ async function importarLojasGo(acc, b = {}) {
   return { ok: true, previa: false, ...resumo };
 }
 
-module.exports = { resumoLojasGo, importarLojasGo, listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
+// ====================================================================================
+// VISÕES RESTRITAS: o que a GO vê das rescisões; custo e anexos (só RH e Diretoria)
+// ====================================================================================
+// A GO aprova o desligamento, mas não enxerga o cálculo nem a aprovação da Diretoria (esses passos aparecem como "em análise pelo RH").
+function mascararParaGo(x) {
+  if (!x || x.tipo !== "rescisao" || !Array.isArray(x.etapas)) return x;
+  const etapas = x.etapas.filter((e) => !ACOES_DIRETORIA.includes(e.acao));
+  let ea = x.etapa_atual;
+  if (ea && ACOES_DIRETORIA.includes(ea.acao)) ea = { ...ea, nome: "Em análise pelo RH", area: "RH", acao: "normal", externo: false };
+  return { ...x, etapas, etapa_atual: ea, progresso: { feitas: etapas.filter((e) => e.status !== "pendente").length, total: etapas.length } };
+}
+async function calculoDo(id) {
+  const { rows } = await pool.query("SELECT custo_rescisao, custo_por, custo_em FROM adm_processos WHERE id = $1", [id]);
+  const { rows: an } = await pool.query("SELECT id::int AS id, nome, mime, tamanho, criado_por, criado_em FROM adm_proc_anexos WHERE processo_id = $1 AND tipo = 'calculo' ORDER BY id", [id]);
+  return { custo: rows[0] && rows[0].custo_rescisao !== null ? Number(rows[0].custo_rescisao) : null, por: rows[0] ? rows[0].custo_por : null, em: rows[0] ? rows[0].custo_em : null, anexos: an };
+}
+const MIMES_ANEXO = {
+  "application/pdf": (b) => b.slice(0, 4).toString() === "%PDF",
+  "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8,
+  "image/png": (b) => b.slice(1, 4).toString() === "PNG",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": (b) => b.slice(0, 2).toString() === "PK",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (b) => b.slice(0, 2).toString() === "PK",
+  "application/vnd.ms-excel": (b) => b[0] === 0xd0 && b[1] === 0xcf,
+};
+const MAX_ANEXO = 8 * 1024 * 1024, MAX_ANEXOS_PROC = 3;
+function numeroBR(v) {
+  if (typeof v === "number") return v;
+  let t = txt(v).replace(/[R$\s]/g, "");
+  if (!t) return NaN;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", "."); // 1.234,56
+  return Number(t);
+}
+// RH informa o custo da rescisão (e, se quiser, anexa o cálculo). Só enquanto a etapa de cálculo é a atual.
+async function registrarCalculo(acc, id, b = {}) {
+  const p = await papelDe(acc); if (!ehRH(p)) exigirNaoGo(p);
+  const custo = b.custo === undefined || b.custo === "" ? null : numeroBR(b.custo);
+  if (custo !== null && (!(custo >= 0) || custo > 99999999.99)) throw erro(400, "Informe o custo da rescisão em reais (ex.: 12.345,67).");
+  const arq = b.arquivo && typeof b.arquivo === "object" ? b.arquivo : null;
+  let buf = null, mime = "", nome = "";
+  if (arq) {
+    mime = txt(arq.mime).toLowerCase();
+    if (!MIMES_ANEXO[mime]) throw erro(400, "Anexe o cálculo em PDF, Excel, Word, JPG ou PNG.");
+    buf = Buffer.from(String(arq.base64 || ""), "base64");
+    if (!buf.length) throw erro(400, "Arquivo vazio.");
+    if (buf.length > MAX_ANEXO) throw erro(400, "O arquivo passa de " + MAX_ANEXO / 1024 / 1024 + " MB.");
+    if (!MIMES_ANEXO[mime](buf)) throw erro(400, "O arquivo não parece ser do tipo informado.");
+    nome = txt(arq.nome).replace(/[^\w.\- ()À-ÿ]/g, "_").slice(0, 120) || "calculo";
+  }
+  if (custo === null && !buf) throw erro(400, "Informe o custo da rescisão ou anexe o cálculo.");
+  const r = await comTransacao(async (c) => {
+    await c.query("SELECT id FROM adm_processos WHERE id = $1 FOR UPDATE", [id]);
+    const { raw, etapas } = await carregarUm(id, c);
+    if (raw.tipo !== "rescisao") throw erro(400, "O custo da rescisão só existe em rescisões.");
+    if (!ABERTOS.includes(raw.status)) throw erro(409, "Processo encerrado.");
+    const atual = etapas.slice().sort((a, x) => a.ordem - x.ordem || a.id - x.id).find((e) => e.status === "pendente");
+    if (!atual || atual.acao !== "calculo") throw erro(409, "O custo só pode ser informado na etapa de cálculo das verbas rescisórias.");
+    if (custo !== null) {
+      await c.query("UPDATE adm_processos SET custo_rescisao = $2, custo_por = $3, custo_em = now(), atualizado_em = now() WHERE id = $1", [id, custo, p.email]);
+      await evento(c, id, "calculo_registrado", p.email, { custo });
+    }
+    if (buf) {
+      const { rows: n } = await c.query("SELECT count(*)::int AS n FROM adm_proc_anexos WHERE processo_id = $1 AND tipo = 'calculo'", [id]);
+      if (n[0].n >= MAX_ANEXOS_PROC) throw erro(400, "No máximo " + MAX_ANEXOS_PROC + " anexos. Remova um para enviar outro.");
+      await c.query("INSERT INTO adm_proc_anexos (processo_id, tipo, nome, mime, tamanho, dados, criado_por) VALUES ($1,'calculo',$2,$3,$4,$5,$6)", [id, nome, mime, buf.length, buf, p.email]);
+      await evento(c, id, "anexo_calculo", p.email, { nome });
+    }
+    return raw.protocolo;
+  });
+  audit(acc, "adm_calculo_registrado", { papel: p.papel, alvo: r, detalhe: custo !== null ? "custo informado" : "anexo" });
+  return { ok: true };
+}
+async function visivelParaDiretoria(c, p, id) {
+  if (p.papel !== "diretoria") return;
+  const { raw, etapas } = await carregarUm(id, c);
+  const ord = etapas.slice().sort((a, x) => a.ordem - x.ordem || a.id - x.id);
+  const pend = ord.find((e) => e.status === "pendente");
+  if (!(raw.tipo === "rescisao" && ord.some((e) => e.acao === "diretoria" && (e.status !== "pendente" || e === pend)))) throw erro(403, "Você vê a rescisão quando ela chega na aprovação da Diretoria.");
+}
+async function anexoRH(acc, id, aid) {
+  const p = await papelDe(acc); if (!ehRH(p) && p.papel !== "diretoria") exigirNaoGo(p);
+  await visivelParaDiretoria(pool, p, id);
+  const { rows } = await pool.query("SELECT a.nome, a.mime, a.dados, p.protocolo FROM adm_proc_anexos a JOIN adm_processos p ON p.id = a.processo_id WHERE a.id = $1 AND a.processo_id = $2", [aid, id]);
+  if (!rows[0]) throw erro(404, "Arquivo não encontrado.");
+  audit(acc, "adm_ver_anexo", { papel: p.papel, alvo: rows[0].protocolo, detalhe: rows[0].nome });
+  return { nome: rows[0].nome, mime: rows[0].mime, base64: rows[0].dados.toString("base64") };
+}
+async function removerAnexo(acc, id, aid) {
+  const p = await papelDe(acc); if (!ehRH(p)) exigirNaoGo(p);
+  const { raw, etapas } = await carregarUm(id);
+  const atual = etapas.slice().sort((a, x) => a.ordem - x.ordem || a.id - x.id).find((e) => e.status === "pendente");
+  if (!ABERTOS.includes(raw.status) || !atual || atual.acao !== "calculo") throw erro(409, "O anexo só pode ser removido na etapa de cálculo.");
+  const { rows } = await pool.query("DELETE FROM adm_proc_anexos WHERE id = $1 AND processo_id = $2 RETURNING nome", [aid, id]);
+  if (!rows[0]) throw erro(404, "Arquivo não encontrado.");
+  await evento(pool, id, "anexo_removido", p.email, { nome: rows[0].nome });
+  return { ok: true };
+}
+
+// ====================================================================================
+// LINK DE ADMISSÃO (colado pelo RH) e LINK DA LOJA (o gerente abre a vaga)
+// ====================================================================================
+async function salvarLinkAdmissao(acc, id, b = {}) {
+  const p = await papelDe(acc); exigirNaoGo(p);
+  const link = txt(b.link).slice(0, 500);
+  if (link && !/^https?:\/\/[^\s]+$/i.test(link)) throw erro(400, "Cole o link completo, começando com http:// ou https://.");
+  const { raw } = await carregarUm(id);
+  if (raw.tipo !== "admissao") throw erro(400, "Só admissões têm link de admissão.");
+  if (!ABERTOS.includes(raw.status)) throw erro(409, "Processo encerrado.");
+  await pool.query("UPDATE adm_processos SET link_admissao = $2, atualizado_em = now() WHERE id = $1", [id, link || null]);
+  await evento(pool, id, "link_admissao", p.email, { definido: !!link });
+  audit(acc, "adm_link_admissao", { papel: p.papel, alvo: raw.protocolo, detalhe: link ? "link informado" : "link removido" });
+  return { ok: true };
+}
+async function respPadrao() {
+  const { rows: c } = await pool.query("SELECT valor FROM adm_config WHERE chave = 'resp_padrao_vagas'");
+  if (c[0]) { const { rows: ok } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel IN ('gestor','analista') UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [em(c[0].valor)]); if (ok[0]) return em(c[0].valor); }
+  const { rows } = await pool.query("SELECT email FROM adm_equipe WHERE ativo AND papel IN ('gestor','analista') ORDER BY (papel = 'gestor') DESC, id LIMIT 1");
+  if (rows[0]) return em(rows[0].email);
+  const { rows: a } = await pool.query("SELECT email FROM users WHERE role = 'admin' ORDER BY id LIMIT 1");
+  if (a[0]) return em(a[0].email);
+  throw erro(503, "O RH ainda não está configurado para receber vagas. Avise o gestor.");
+}
+async function linksVaga(acc) {
+  const p = await papelDe(acc); if (!ehRH(p)) exigirNaoGo(p);
+  const { rows: sem } = await pool.query("SELECT l.id FROM ch_lojas l WHERE l.ativa AND NOT EXISTS (SELECT 1 FROM adm_loja_links k WHERE k.loja_id = l.id)");
+  for (const l of sem) await pool.query("INSERT INTO adm_loja_links (loja_id, token, criado_por) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING", [l.id, crypto.randomBytes(24).toString("hex"), p.email]);
+  const { rows } = await pool.query("SELECT l.id::int AS loja_id, l.nome AS loja, coalesce(trim(l.regional), '') AS go, k.token FROM ch_lojas l JOIN adm_loja_links k ON k.loja_id = l.id WHERE l.ativa ORDER BY l.nome");
+  return { links: rows, responsavel_padrao: await respPadrao().catch(() => null), responsaveis: await responsaveis() };
+}
+async function renovarLinkVaga(acc, lojaId) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const { rows: l } = await pool.query("SELECT nome FROM ch_lojas WHERE id = $1", [Number(lojaId) || 0]);
+  if (!l[0]) throw erro(404, "Loja não encontrada.");
+  const token = crypto.randomBytes(24).toString("hex");
+  await pool.query("INSERT INTO adm_loja_links (loja_id, token, criado_por) VALUES ($1,$2,$3) ON CONFLICT (loja_id) DO UPDATE SET token = EXCLUDED.token, criado_por = EXCLUDED.criado_por, criado_em = now()", [Number(lojaId), token, p.email]);
+  audit(acc, "adm_link_vaga_renovado", { papel: p.papel, alvo: l[0].nome });
+  return { ok: true, token };
+}
+async function definirRespPadrao(acc, b = {}) {
+  const p = await papelDe(acc); exigirGestor(p);
+  const email = em(b.responsavel);
+  const { rows: ok } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel IN ('gestor','analista') UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [email]);
+  if (!ok[0]) throw erro(400, "Escolha alguém da equipe do RH.");
+  await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('resp_padrao_vagas', $1) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", [email]);
+  audit(acc, "adm_resp_padrao_vagas", { papel: p.papel, alvo: email });
+  return { ok: true };
+}
+// parte pública: o gerente abre pelo link da loja
+const aberturasPorIp = new Map();
+function freioAbertura(ip) {
+  const agora = Date.now(), k = ip || "", x = aberturasPorIp.get(k) || { n: 0, desde: agora };
+  if (agora - x.desde > 3600000) { x.n = 0; x.desde = agora; }
+  aberturasPorIp.set(k, x);
+  if (x.n >= 15) throw erro(429, "Muitas vagas abertas por aqui em pouco tempo. Tente de novo em uma hora ou fale com o RH.");
+  return x;
+}
+setInterval(() => { const agora = Date.now(); for (const [k, x] of aberturasPorIp) if (agora - x.desde > 7200000) aberturasPorIp.delete(k); }, 30 * 60000).unref();
+async function lojaDoLinkVaga(token, ip) {
+  const espera = freioLink(ip);
+  if (espera) throw seguranca.erroBloqueio(espera);
+  token = txt(token);
+  const invalido = () => { falhaLink(ip); return erro(404, "Este link não existe ou foi desativado. Peça o link atualizado ao RH."); };
+  if (!/^[a-f0-9]{48}$/.test(token)) throw invalido();
+  const { rows } = await pool.query("SELECT l.id::int AS id, l.nome FROM adm_loja_links k JOIN ch_lojas l ON l.id = k.loja_id WHERE k.token = $1 AND l.ativa", [token]);
+  if (!rows[0]) throw invalido();
+  return rows[0];
+}
+async function publicoVagaVer(token, ip) {
+  const l = await lojaDoLinkVaga(token, ip);
+  return { loja: l.nome, subtipos: SUBTIPOS.admissao };
+}
+async function publicoVagaAbrir(token, ip, b = {}) {
+  const l = await lojaDoLinkVaga(token, ip);
+  const gerente = txt(b.gerente).replace(/\s+/g, " ").slice(0, 120), cargo = txt(b.cargo).replace(/\s+/g, " ").slice(0, 100);
+  if (gerente.length < 3) throw erro(400, "Informe o seu nome (gerente que está abrindo a vaga).");
+  if (cargo.length < 2) throw erro(400, "Informe o cargo da vaga.");
+  const subtipo = txt(b.subtipo).slice(0, 80);
+  if (subtipo && !SUBTIPOS.admissao.includes(subtipo)) throw erro(400, "Escolha o tipo de contrato na lista.");
+  const dataPrev = txt(b.data_prevista);
+  if (dataPrev && !dataOk(dataPrev)) throw erro(400, "Data de início inválida.");
+  // clique duplo ou volta à página: reaproveita a vaga que o mesmo gerente acabou de abrir e ainda não enviou
+  const { rows: dup } = await pool.query(`SELECT p.protocolo, f.token FROM adm_processos p JOIN adm_formularios f ON f.processo_id = p.id AND f.tipo = 'pre'
+    WHERE p.loja_id = $1 AND p.tipo = 'admissao' AND p.status = 'em_andamento' AND lower(coalesce(p.cargo, '')) = lower($2) AND lower(coalesce(p.solicitante, '')) = lower($3)
+      AND f.status IN ('rascunho','devolvido') AND p.criado_em > now() - interval '12 hours' AND p.criado_por LIKE 'Link da loja%' ORDER BY p.id DESC LIMIT 1`, [l.id, cargo, gerente]);
+  if (dup[0]) return { ok: true, form_token: dup[0].token, protocolo: dup[0].protocolo, reaproveitada: true };
+  const freio = freioAbertura(ip);
+  const resp = await respPadrao();
+  const info = await inserirProcesso({ tipo: "admissao", colaborador: "", cpf: null, cargo, lojaId: l.id, unidade: l.nome, subtipo, dataPrev: dataPrev || null, observacao: null, resp, criadoPor: ("Link da loja: " + gerente).slice(0, 120), solicitante: gerente, colabChapa: null, solChapa: null, via: "link_da_loja" });
+  freio.n++;
+  audit({ email: "link da loja", ip }, "adm_vaga_aberta_pelo_gerente", { papel: "publico", alvo: info.protocolo, detalhe: l.nome + " · " + cargo });
+  return { ok: true, form_token: info.formToken, protocolo: info.protocolo };
+}
+
+module.exports = { registrarCalculo, anexoRH, removerAnexo, salvarLinkAdmissao, linksVaga, renovarLinkVaga, definirRespPadrao, publicoVagaVer, publicoVagaAbrir, resumoLojasGo, importarLojasGo, listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
   listarEtapasModelo, salvarEtapaModelo, salvarConfig, formulario, revisarItem, arquivoRH, formulariosModelo, salvarFormularioModelo, publicoVer, publicoSalvar, publicoArquivo, publicoRemoverArquivo, publicoEnviar, listarEquipe, criarEquipe, editarEquipe, redefinirSenha, indicadores,
   _t: { usado, monta, cpfValido, prazoData } };
