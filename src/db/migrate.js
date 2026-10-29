@@ -1308,6 +1308,17 @@ async function migrarAdmissaoV3() {
       await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('dp_calculo_rescisao','1') ON CONFLICT (chave) DO NOTHING");
     }
   }
+  // ---- Chamados: Logística e Manutenção ficam ocultas por enquanto (uma única vez).
+  // Departamento inativo some da abertura de chamados e da lista de departamentos; os chamados antigos continuam guardados.
+  // Para voltar: UPDATE ch_departamentos SET ativo = true WHERE codigo IN ('logistica','manutencao');
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'ocultar_logistica_manutencao'");
+    if (!fl.length) {
+      const r = await pool.query("UPDATE ch_departamentos SET ativo = false WHERE codigo IN ('logistica','manutencao') AND ativo");
+      if (r.rowCount) console.log("[chamados] Logística e Manutenção ocultadas do módulo de Chamados.");
+      await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('ocultar_logistica_manutencao','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
 }
 
 async function migrarEstoqueLojas() {
