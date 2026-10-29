@@ -148,8 +148,10 @@ const destinosLoja = (ch) => [ch.loja_email, ...(ch.emails_copia || []), ...(ch.
 function dispara(fn) { setImmediate(() => { fn().catch((e) => console.error("[chamados:email]", e.message)); }); }
 
 // ---------- eu / cadastros ----------
+// Departamentos ocultos por enquanto (não aparecem na abertura de chamados). Para voltar: esvazie a lista.
+const DEPTS_OCULTOS = ["logistica", "manutencao"];
 async function listarDepartamentos(soAtivos = true) {
-  const { rows } = await pool.query(`SELECT id::int AS id, codigo, nome, emails, ativo, ordem FROM ch_departamentos ${soAtivos ? "WHERE ativo" : ""} ORDER BY ordem, nome`);
+  const { rows } = await pool.query(`SELECT id::int AS id, codigo, nome, emails, ativo, ordem FROM ch_departamentos ${soAtivos ? "WHERE ativo AND codigo <> ALL($1::text[])" : ""} ORDER BY ordem, nome`, soAtivos ? [DEPTS_OCULTOS] : []);
   return rows;
 }
 async function eu(acc) {
@@ -166,7 +168,7 @@ async function listarAssuntos(acc, { todos, departamento_id } = {}) {
   const p = await papelDe(acc);
   const ver = todos && p.papel === "gestor";
   const w = [], v = [];
-  if (!ver) w.push("a.ativo AND d.ativo");
+  if (!ver) { v.push(DEPTS_OCULTOS); w.push(`a.ativo AND d.ativo AND d.codigo <> ALL($${v.length}::text[])`); }
   if (ehDp(p) && !p.admin) { v.push(p.deptId); w.push(`a.departamento_id = $${v.length}`); }          // a equipe só enxerga os assuntos do próprio departamento
   else if (Number(departamento_id)) { v.push(Number(departamento_id)); w.push(`a.departamento_id = $${v.length}`); }
   const { rows } = await pool.query(`SELECT a.id::int AS id, a.nome, a.categoria, a.descricao, a.sla_resposta_min, a.sla_resolucao_min, a.exige_colaborador, a.ativo, a.ordem,
@@ -436,7 +438,7 @@ async function abrir(acc, b = {}) {
   const anexos = limparAnexos(b.anexos);
   const cc = listaEmails(b.cc_emails).slice(0, 3);
   const info = await comTransacao(async (c) => {
-    const { rows: as } = await c.query("SELECT a.*, d.ativo AS depto_ativo FROM ch_assuntos a JOIN ch_departamentos d ON d.id = a.departamento_id WHERE a.id = $1", [Number(b.assunto_id) || 0]);
+    const { rows: as } = await c.query("SELECT a.*, (d.ativo AND d.codigo <> ALL($2::text[])) AS depto_ativo FROM ch_assuntos a JOIN ch_departamentos d ON d.id = a.departamento_id WHERE a.id = $1", [Number(b.assunto_id) || 0, DEPTS_OCULTOS]);
     const a = as[0];
     if (!a || !a.ativo || !a.depto_ativo) throw erro(400, "Escolha um departamento e um assunto da lista.");
     if (Number(b.departamento_id) && Number(b.departamento_id) !== Number(a.departamento_id)) throw erro(400, "Esse assunto não é do departamento escolhido.");
