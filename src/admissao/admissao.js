@@ -22,11 +22,11 @@ const SUBTIPOS = {
   rescisao: ["Dispensa sem justa causa", "Pedido de demissão", "Término de contrato de experiência", "Acordo entre as partes (art. 484-A)", "Dispensa por justa causa", "Término de contrato temporário ou aprendiz", "Outros"],
 };
 const DIA_MIN = 600;                // 1 dia útil = 10 h de expediente
-const PRAZO_LEGAL_DIAS = 10;        // art. 477, §6º da CLT: pagamento das verbas e documentos até 10 dias corridos do término do contrato
+const PRAZO_LEGAL_DIAS = 10;        // rescisão: o DP tem 10 dias corridos, contados do envio da carta de rescisão, para efetuar o pagamento
 const RISCO = 0.8;                  // 80% do prazo usado = em risco
 const ABERTOS = ["em_andamento", "pausado"];
 const PAPEIS = ["analista", "gestor", "go", "diretoria"];
-const ACOES = ["normal", "aprovacao", "validacao", "aso", "link", "calculo", "diretoria"];
+const ACOES = ["normal", "aprovacao", "validacao", "aso", "link", "calculo", "diretoria", "carta", "pagamento"];
 const ACOES_DIRETORIA = ["calculo", "diretoria"]; // etapas com valores: só RH e Diretoria enxergam
 const DESFECHOS = { vaga_reprovada: "Vaga reprovada pela GO", desligamento_reprovado: "Desligamento não aprovado pelo Regional", inapto: "Candidato inapto no exame admissional", desistencia: "Candidato desistiu", outro: "Cancelado" };
 const MOTIVOS_DEVOLUCAO = ["Documento ilegível", "Documento faltando", "Dado incorreto ou divergente", "Documento vencido", "Outro"];
@@ -107,11 +107,28 @@ function situacaoRelogio(dec, meta, { pausado = false } = {}) {
 const GRAV = { estourado: 0, risco: 1, ok: 2, pausado: 3 };
 const pior = (...s) => s.filter((x) => x in GRAV).sort((a, b) => GRAV[a] - GRAV[b])[0] || "ok";
 
-// Prazo "de calendário": admissão = data de início do colaborador; rescisão = 10 dias corridos do fim do contrato (CLT art. 477 §6º).
-function prazoData(proc, agora) {
-  const rotulo = proc.tipo === "admissao" ? "Início do colaborador" : "Prazo legal de pagamento";
+// Prazo "de calendário": admissão = data de início do colaborador.
+// Rescisão = 10 dias corridos contados do envio da carta de rescisão; termina quando a etapa de pagamento é concluída.
+function etapaPagamento(etapas) {
+  const ativas = (etapas || []).filter((e) => e.status !== "dispensada");
+  return ativas.find((e) => e.acao === "pagamento") || ativas.find((e) => /pagamento/i.test(e.nome || ""));
+}
+function prazoPagamento(proc, agora, etapas) {
+  const rotulo = "Prazo de pagamento (10 dias da carta)";
+  const carta = dstr(proc.carta_enviada_em), limite = carta ? somaDias(carta, PRAZO_LEGAL_DIAS) : null;
+  if (proc.status === "cancelado") return { rotulo, limite, carta, situacao: "cancelado", dias: null };
+  const pag = etapaPagamento(etapas);
+  const pago = pag && pag.status === "concluida" && pag.concluida_em ? diaLocal(pag.concluida_em) : proc.status === "concluido" ? diaLocal(proc.concluido_em) : null;
+  if (pago) return limite ? { rotulo, limite, carta, situacao: pago <= limite ? "cumprido" : "descumprido", dias: diasEntre(pago, limite), pago_em: pago } : { rotulo, limite: null, carta: null, situacao: "cumprido", dias: null, pago_em: pago };
+  if (!limite) return { rotulo, limite: null, carta: null, situacao: "sem_data", dias: null };
+  const dias = diasEntre(diaLocal(agora), limite);
+  return { rotulo, limite, carta, situacao: dias < 0 ? "estourado" : dias <= 3 ? "risco" : "ok", dias };
+}
+function prazoData(proc, agora, etapas) {
+  if (proc.tipo === "rescisao") return prazoPagamento(proc, agora, etapas);
+  const rotulo = "Início do colaborador";
   if (!proc.data_prevista) return { rotulo, limite: null, situacao: proc.status === "cancelado" ? "cancelado" : proc.status === "concluido" ? "cumprido" : "sem_data", dias: null };
-  const limite = proc.tipo === "admissao" ? dstr(proc.data_prevista) : somaDias(dstr(proc.data_prevista), PRAZO_LEGAL_DIAS);
+  const limite = dstr(proc.data_prevista);
   const hoje = diaLocal(agora);
   if (proc.status === "cancelado") return { rotulo, limite, situacao: "cancelado", dias: null };
   if (proc.status === "concluido") {
@@ -152,7 +169,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
   if (proc.status === "concluido") total.situacao = decTot <= proc.sla_total_min ? "cumprido" : "descumprido";
   else if (proc.status === "cancelado") total.situacao = "cancelado";
   else total.situacao = situacaoRelogio(decTot, proc.sla_total_min, { pausado: proc.status === "pausado" });
-  const pd = prazoData(proc, agora);
+  const pd = prazoData(proc, agora, etapas);
   const ea = lista.find((e) => e.atual);
   const situacao = aberto ? pior(total.situacao, ea ? ea.situacao : "ok", pd.situacao === "estourado" ? "estourado" : pd.situacao === "risco" ? "risco" : null) : proc.status;
   const feitas = lista.filter((e) => e.status !== "pendente").length;
@@ -166,7 +183,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
     id: proc.id, protocolo: proc.protocolo, tipo: proc.tipo, tipo_rotulo: TIPO_ROT[proc.tipo], colaborador: proc.colaborador || ("Vaga de " + (proc.cargo || "cargo a definir")), candidato_definido: !!proc.colaborador,
     cpf_mascarado: cpfMasc(proc.cpf), cargo: proc.cargo, solicitante: proc.solicitante || null, colaborador_chapa: proc.colaborador_chapa || null, solicitante_chapa: proc.solicitante_chapa || null,
     loja_id: proc.loja_id, unidade: proc.unidade, subtipo: proc.subtipo, data_prevista: dstr(proc.data_prevista), observacao: proc.observacao,
-    link_admissao: proc.link_admissao || null,
+    link_admissao: proc.link_admissao || null, carta_enviada_em: dstr(proc.carta_enviada_em),
     responsavel: proc.responsavel, responsavel_nome: proc.responsavel_nome || null, status: proc.status, criado_por: proc.criado_por, criado_em: proc.criado_em, concluido_em: proc.concluido_em, cancelado_motivo: proc.cancelado_motivo,
     desfecho: proc.desfecho || null, desfecho_rotulo: proc.status === "cancelado" ? (DESFECHOS[proc.desfecho] || DESFECHOS.outro) : null,
     sla_total_min: proc.sla_total_min, total, prazo_data: pd, situacao, progresso: { feitas, total: lista.length },
@@ -177,7 +194,7 @@ function monta(proc, etapasRows, pausas, agora = new Date(), passagens = [], dev
 }
 
 const COLS = `p.id::int AS id, p.protocolo, p.tipo, p.colaborador, p.cpf, p.cargo, p.loja_id::int AS loja_id, p.unidade, p.subtipo, p.data_prevista, p.observacao, p.responsavel, p.status,
-  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, p.colaborador_chapa, p.solicitante_chapa, p.link_admissao, r.nome AS responsavel_nome`;
+  p.sla_total_min, p.criado_por, p.criado_em, p.concluido_em, p.cancelado_motivo, p.atualizado_em, p.desfecho, p.solicitante, p.colaborador_chapa, p.solicitante_chapa, p.link_admissao, p.carta_enviada_em, r.nome AS responsavel_nome`;
 const COLS_ET = "id::int AS id, nome, descricao, area, ordem, prazo_min, status, concluida_em, concluida_por, obs, acao, externo, exige_candidato, subtarefas, mensagem, formulario";
 const FROM = "FROM adm_processos p LEFT JOIN adm_equipe r ON lower(r.email) = lower(p.responsavel)";
 
@@ -457,6 +474,7 @@ async function concluirEtapa(acc, id, etapaId, b = {}) {
         formAprovar = ff[0].id;
       }
     }
+    if (a.acao === "carta" && !e.raw.carta_enviada_em) throw erro(400, "Informe a data em que a carta de rescisão foi enviada antes de concluir a etapa.");
     if (a.acao === "link" && !txt(e.raw.link_admissao)) throw erro(400, "Cole o link de admissão que você enviou ao candidato antes de concluir a etapa.");
     if (a.acao === "calculo" || a.acao === "diretoria") {
       const { rows: cu } = await c.query("SELECT custo_rescisao FROM adm_processos WHERE id = $1", [id]);
@@ -1559,6 +1577,22 @@ async function salvarLinkAdmissao(acc, id, b = {}) {
   audit(acc, "adm_link_admissao", { papel: p.papel, alvo: raw.protocolo, detalhe: link ? "link informado" : "link removido" });
   return { ok: true };
 }
+// RH informa (ou corrige) o dia em que a carta de rescisão foi enviada: daí contam os 10 dias para o DP pagar
+async function salvarCarta(acc, id, b = {}) {
+  const p = await papelDe(acc); exigirNaoGo(p);
+  const dia = txt(b.data);
+  if (!dataOk(dia)) throw erro(400, "Informe a data de envio da carta.");
+  if (dia > diaLocal(new Date())) throw erro(400, "A data de envio da carta não pode ser no futuro.");
+  if (dia < somaDias(diaLocal(new Date()), -120)) throw erro(400, "Confira a data: ela é de mais de 120 dias atrás.");
+  const { raw } = await carregarUm(id);
+  if (raw.tipo !== "rescisao") throw erro(400, "A carta de rescisão só existe em rescisões.");
+  if (!ABERTOS.includes(raw.status)) throw erro(409, "Processo encerrado.");
+  const antes = dstr(raw.carta_enviada_em);
+  await pool.query("UPDATE adm_processos SET carta_enviada_em = $2::date, atualizado_em = now() WHERE id = $1", [id, dia]);
+  await evento(pool, id, "carta_enviada", p.email, { data: dia, limite: somaDias(dia, PRAZO_LEGAL_DIAS), antes });
+  audit(acc, "adm_carta_rescisao", { papel: p.papel, alvo: raw.protocolo, detalhe: dia });
+  return { ok: true, limite: somaDias(dia, PRAZO_LEGAL_DIAS) };
+}
 async function respPadrao() {
   const { rows: c } = await pool.query("SELECT valor FROM adm_config WHERE chave = 'resp_padrao_vagas'");
   if (c[0]) { const { rows: ok } = await pool.query("SELECT 1 FROM adm_equipe WHERE lower(email) = $1 AND ativo AND papel IN ('gestor','analista') UNION SELECT 1 FROM users WHERE lower(email) = $1 AND role = 'admin'", [em(c[0].valor)]); if (ok[0]) return em(c[0].valor); }
@@ -1639,6 +1673,6 @@ async function publicoVagaAbrir(token, ip, b = {}) {
   return { ok: true, form_token: info.formToken, protocolo: info.protocolo };
 }
 
-module.exports = { registrarCalculo, anexoRH, removerAnexo, salvarLinkAdmissao, linksVaga, renovarLinkVaga, definirRespPadrao, publicoVagaVer, publicoVagaAbrir, resumoLojasGo, importarLojasGo, listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
+module.exports = { salvarCarta, registrarCalculo, anexoRH, removerAnexo, salvarLinkAdmissao, linksVaga, renovarLinkVaga, definirRespPadrao, publicoVagaVer, publicoVagaAbrir, resumoLojasGo, importarLojasGo, listarColaboradores, resumoColaboradores, importarColaboradores, eu, criar, listar, detalhe, editar, concluirEtapa, dispensarEtapa, reabrirEtapa, reprovarVaga, devolverEtapa, marcarSubtarefa, encerrar, mensagens, salvarMensagem, pausar, retomar, atribuir, nota, cancelar, excluir, ajustarPrazos,
   listarEtapasModelo, salvarEtapaModelo, salvarConfig, formulario, revisarItem, arquivoRH, formulariosModelo, salvarFormularioModelo, publicoVer, publicoSalvar, publicoArquivo, publicoRemoverArquivo, publicoEnviar, listarEquipe, criarEquipe, editarEquipe, redefinirSenha, indicadores,
   _t: { usado, monta, cpfValido, prazoData } };
