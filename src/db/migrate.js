@@ -1293,6 +1293,20 @@ async function migrarAdmissaoV3() {
       await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('fluxo_res_v2','1') ON CONFLICT (chave) DO NOTHING");
     }
   }
+  // ---- rescisão: prazo de 10 dias para o DP pagar, contado do envio da carta de rescisão
+  {
+    await pool.query("ALTER TABLE adm_processos ADD COLUMN IF NOT EXISTS carta_enviada_em DATE");
+    const { rows: fl } = await pool.query("SELECT 1 FROM adm_config WHERE chave = 'fluxo_res_v3'");
+    if (!fl.length) {
+      const { rows: et } = await pool.query("SELECT id::int AS id, nome, acao FROM adm_etapas_modelo WHERE tipo = 'rescisao' AND ativo ORDER BY ordem, id");
+      const carta = et.find((e) => e.acao === "normal" && /comunica[cç][aã]o/i.test(e.nome));
+      const pagto = et.find((e) => e.acao === "normal" && /pagamento/i.test(e.nome));
+      if (carta) await pool.query("UPDATE adm_etapas_modelo SET acao = 'carta', descricao = 'Registre o dia em que a carta de rescisão foi enviada ao colaborador. A partir dele o DP tem 10 dias corridos para efetuar o pagamento, e o sistema avisa quando o prazo estiver perto de vencer. ' || coalesce(descricao, '') WHERE id = $1", [carta.id]);
+      if (pagto) await pool.query("UPDATE adm_etapas_modelo SET acao = 'pagamento', descricao = 'PRAZO LEGAL: o pagamento precisa ser feito em até 10 dias corridos do envio da carta de rescisão. ' || coalesce(descricao, '') WHERE id = $1", [pagto.id]);
+      await pool.query("INSERT INTO adm_config (chave, valor) VALUES ('fluxo_res_v3','1') ON CONFLICT (chave) DO NOTHING");
+      if (carta || pagto) console.log("[admissao] Rescisão: prazo de 10 dias para o pagamento, contado da carta de rescisão.");
+    }
+  }
   // ---- Chamados: assunto do DP para pedir o cálculo de uma rescisão (uma única vez; depois o gestor edita à vontade)
   {
     const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'dp_calculo_rescisao'");
