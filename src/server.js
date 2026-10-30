@@ -653,6 +653,7 @@ app.put(AD + "/links-vaga/responsavel", admAuth, handle((req) => admissao.defini
 app.post(AD + "/links-vaga/:lojaId/renovar", admAuth, handle((req) => admissao.renovarLinkVaga(req.access, Number(req.params.lojaId))));
 // link de admissão colado pelo RH; custo da rescisão e anexo do cálculo (só RH e Diretoria)
 app.put(AD + "/processos/:id/link-admissao", admAuth, handle((req) => admissao.salvarLinkAdmissao(req.access, nid(req), req.body || {})));
+app.put(AD + "/processos/:id/carta", admAuth, handle((req) => admissao.salvarCarta(req.access, nid(req), req.body || {})));
 app.post(AD + "/processos/:id/calculo", admAuth, handle((req) => admissao.registrarCalculo(req.access, nid(req), req.body || {})));
 app.get(AD + "/processos/:id/anexos/:aid", admAuth, handle((req) => admissao.anexoRH(req.access, nid(req), Number(req.params.aid))));
 app.delete(AD + "/processos/:id/anexos/:aid", admAuth, handle((req) => admissao.removerAnexo(req.access, nid(req), Number(req.params.aid))));
