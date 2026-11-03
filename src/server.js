@@ -38,6 +38,9 @@ app.use("/api/admissao/publico", express.json({ limit: "10mb" }));
 app.use("/api/admissao/processos/:id/calculo", express.json({ limit: "14mb" })); // anexo do cálculo da rescisão (até 8 MB, em base64)
 app.use("/api/estoque-lojas/importar", express.json({ limit: "10mb" })); // planilha de estoque por loja, enviada em lotes
 app.use("/api/admissao/colaboradores/importar", express.json({ limit: "10mb" })); // lista de colaboradores (planilha convertida em JSON) // documentos do formulário em base64
+app.use("/api/vm/manuais/:id/pdf", express.json({ limit: "36mb" })); // PDF do manual em base64 (até 25 MB)
+app.use("/api/vm/manuais/:id/paginas", express.json({ limit: "12mb" })); // páginas do manual já lidas no navegador (texto + JPEG)
+app.use("/api/vm/fotos", express.json({ limit: "9mb" })); // foto do ambiente (reduzida no celular, até 4 MB)
 const jsonPadrao = express.json();
 app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
@@ -591,7 +594,7 @@ app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
 // só libera /eu (para a tela saber que precisa trocar). A troca em si é POST /api/auth/trocar-senha.
 const exigeTrocaSenha = (req, res, next) => {
   req.access.ip = req.ip;
-  if (req.access.trocar_senha && !/\/api\/(chamados|admissao)\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
+  if (req.access.trocar_senha && !/\/api\/(chamados|admissao|vm)\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
   next();
 };
 const chamadosAuth = [requireAuth, requireModule("chamados"), exigeTrocaSenha];
@@ -731,6 +734,52 @@ app.post("/api/cd/notas/:id/comentarios", cdAuth, handle((req) => cd.comentar(re
 app.get("/api/sync/status", requireAuth, requireAdmin, handle(async () => ({ jobs: await getAllJobStatuses() })));
 
 const PORT = process.env.PORT || 8080;
+const vm = require("./vm");
+const vmAuth = [requireAuth, requireModule("vm"), exigeTrocaSenha];
+// ---- Visual Merchandising (auditor inteligente de VM) ----
+const VMR = "/api/vm";
+const vmBin = async (res, f) => { res.set({ "Content-Type": f.mime || "application/octet-stream", "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" }); res.send(f.dados); };
+const vmFile = (fn) => async (req, res) => { try { await vmBin(res, await fn(req)); } catch (err) { res.status(err.status || 500).json({ error: err.message }); } };
+app.get(VMR + "/eu", vmAuth, handle((req) => vm.eu(req.access)));
+app.put(VMR + "/config", vmAuth, handle((req) => vm.salvarConfig(req.access, req.body || {})));
+app.get(VMR + "/clusters", vmAuth, handle((req) => vm.listarClusters(req.access)));
+app.post(VMR + "/clusters", vmAuth, handle((req) => vm.salvarCluster(req.access, null, req.body || {})));
+app.put(VMR + "/clusters/:id", vmAuth, handle((req) => vm.salvarCluster(req.access, nid(req), req.body || {})));
+app.put(VMR + "/clusters/:id/checklist", vmAuth, handle((req) => vm.salvarChecklist(req.access, nid(req), req.body || {})));
+app.get(VMR + "/lojas", vmAuth, handle((req) => vm.listarLojas(req.access)));
+app.put(VMR + "/lojas/:id", vmAuth, handle((req) => vm.configurarLoja(req.access, nid(req), req.body || {})));
+app.get(VMR + "/equipe", vmAuth, handle((req) => vm.listarEquipe(req.access)));
+app.post(VMR + "/equipe", vmAuth, handle((req) => vm.salvarMembro(req.access, req.body || {})));
+app.put(VMR + "/equipe/:id/ativo", vmAuth, handle((req) => vm.ativarMembro(req.access, nid(req), (req.body || {}).ativo)));
+app.get(VMR + "/manuais", vmAuth, handle((req) => vm.listarManuais(req.access, req.query)));
+app.post(VMR + "/manuais", vmAuth, handle((req) => vm.criarManual(req.access, req.body || {})));
+app.get(VMR + "/manuais/:id", vmAuth, handle((req) => vm.detalheManual(req.access, nid(req))));
+app.put(VMR + "/manuais/:id", vmAuth, handle((req) => vm.editarManual(req.access, nid(req), req.body || {})));
+app.delete(VMR + "/manuais/:id", vmAuth, handle((req) => vm.excluirManual(req.access, nid(req))));
+app.put(VMR + "/manuais/:id/pdf", vmAuth, handle((req) => vm.salvarPdf(req.access, nid(req), req.body || {})));
+app.get(VMR + "/manuais/:id/pdf", vmAuth, async (req, res) => { try { const f = await vm.baixarPdf(req.access, nid(req)); res.set({ "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${String(f.nome).replace(/[^\w.\- ]/g, "_")}"` }); res.send(f.dados); } catch (err) { res.status(err.status || 500).json({ error: err.message }); } });
+app.post(VMR + "/manuais/:id/paginas", vmAuth, handle((req) => vm.receberPaginas(req.access, nid(req), req.body || {})));
+app.get(VMR + "/manuais/:id/paginas/:n/imagem", vmAuth, vmFile((req) => vm.paginaImagem(req.access, nid(req), Number(req.params.n))));
+app.post(VMR + "/manuais/:id/extrair", vmAuth, handle((req) => vm.extrair(req.access, nid(req))));
+app.post(VMR + "/manuais/:id/publicar", vmAuth, handle((req) => vm.publicar(req.access, nid(req))));
+app.post(VMR + "/manuais/:id/criterios", vmAuth, handle((req) => vm.criarCriterio(req.access, nid(req), req.body || {})));
+app.post(VMR + "/manuais/:id/homologar", vmAuth, handle((req) => vm.homologar(req.access, nid(req), req.body || {})));
+app.put(VMR + "/criterios/:id", vmAuth, handle((req) => vm.editarCriterio(req.access, nid(req), req.body || {})));
+app.delete(VMR + "/criterios/:id", vmAuth, handle((req) => vm.excluirCriterio(req.access, nid(req))));
+app.get(VMR + "/hoje", vmAuth, handle((req) => vm.hoje(req.access)));
+app.get(VMR + "/historico", vmAuth, handle((req) => vm.historico(req.access)));
+app.post(VMR + "/fotos", vmAuth, handle((req) => vm.enviarFoto(req.access, req.body || {})));
+app.get(VMR + "/fotos/:id/imagem", vmAuth, vmFile((req) => vm.fotoImagem(req.access, nid(req))));
+app.get(VMR + "/auditorias", vmAuth, handle((req) => vm.listarAuditorias(req.access, req.query)));
+app.get(VMR + "/auditorias/:id", vmAuth, handle((req) => vm.detalheAuditoria(req.access, nid(req))));
+app.post(VMR + "/auditorias/:id/decidir", vmAuth, handle((req) => vm.decidir(req.access, nid(req), req.body || {})));
+app.post(VMR + "/auditorias/:id/reprocessar", vmAuth, handle((req) => vm.reprocessar(req.access, nid(req))));
+app.put(VMR + "/avaliacoes/:id/revisar", vmAuth, handle((req) => vm.revisarAvaliacao(req.access, nid(req), req.body || {})));
+app.get(VMR + "/dashboard", vmAuth, handle((req) => vm.dashboard(req.access, req.query)));
+app.get(VMR + "/ia/uso", vmAuth, handle((req) => vm.usoIA(req.access)));
+app.post(VMR + "/varrer", vmAuth, handle((req) => vm.varrer(req.access, { forcar: req.query.forcar === "1" })));
+setTimeout(() => vm.varrer(null).catch((e) => console.error("[vm] varredura", e.message)), 30000);
+setInterval(() => vm.varrer(null).catch((e) => console.error("[vm] varredura", e.message)), 120000);
 app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
 
 // Libera qualquer job que ficou marcado "running" de um processo anterior (deploy/restart no
