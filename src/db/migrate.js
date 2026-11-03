@@ -1354,6 +1354,72 @@ async function migrarEstoqueLojas() {
     CREATE INDEX IF NOT EXISTS estoque_lojas_stage_produtos_idx ON estoque_lojas_stage_produtos (import_id);`);
 }
 
+// ---------- Visual Merchandising (auditor inteligente de VM) ----------
+async function migrarVM() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vm_clusters (
+      id BIGSERIAL PRIMARY KEY, nome TEXT NOT NULL, descricao TEXT, ativo BOOLEAN NOT NULL DEFAULT true, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS vm_clusters_nome_uq ON vm_clusters (lower(nome));
+    ALTER TABLE ch_lojas ADD COLUMN IF NOT EXISTS vm_cluster_id BIGINT;
+    ALTER TABLE ch_lojas ADD COLUMN IF NOT EXISTS vm_ativo BOOLEAN NOT NULL DEFAULT false;
+    CREATE TABLE IF NOT EXISTS vm_equipe (
+      id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL, nome TEXT, papel TEXT NOT NULL DEFAULT 'vm',
+      ativo BOOLEAN NOT NULL DEFAULT true, grupos TEXT[] NOT NULL DEFAULT '{}', criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS vm_equipe_email_uq ON vm_equipe (lower(email));
+    CREATE TABLE IF NOT EXISTS vm_checklists (
+      id BIGSERIAL PRIMARY KEY, cluster_id BIGINT NOT NULL REFERENCES vm_clusters(id) ON DELETE CASCADE,
+      ambiente TEXT NOT NULL, descricao TEXT, obrigatorio BOOLEAN NOT NULL DEFAULT true, ordem INTEGER NOT NULL DEFAULT 0,
+      ativo BOOLEAN NOT NULL DEFAULT true, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS vm_checklists_uq ON vm_checklists (cluster_id, lower(ambiente));
+    CREATE TABLE IF NOT EXISTS vm_manuais (
+      id BIGSERIAL PRIMARY KEY, cluster_id BIGINT NOT NULL REFERENCES vm_clusters(id) ON DELETE CASCADE,
+      titulo TEXT NOT NULL, versao TEXT NOT NULL, vigencia_inicio DATE, vigencia_fim DATE, responsavel TEXT,
+      status TEXT NOT NULL DEFAULT 'rascunho', paginas INTEGER NOT NULL DEFAULT 0, pdf BYTEA, pdf_nome TEXT, pdf_tamanho INTEGER,
+      erro TEXT, progresso INTEGER NOT NULL DEFAULT 0, ia_modelo TEXT, ia_prompt_versao TEXT,
+      criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now(), publicado_por TEXT, publicado_em TIMESTAMPTZ);
+    ALTER TABLE vm_manuais ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now();
+    CREATE INDEX IF NOT EXISTS vm_manuais_cluster_idx ON vm_manuais (cluster_id, status);
+    CREATE TABLE IF NOT EXISTS vm_manual_paginas (
+      manual_id BIGINT NOT NULL REFERENCES vm_manuais(id) ON DELETE CASCADE, pagina INTEGER NOT NULL,
+      texto TEXT, imagem BYTEA, PRIMARY KEY (manual_id, pagina));
+    CREATE TABLE IF NOT EXISTS vm_criterios (
+      id BIGSERIAL PRIMARY KEY, manual_id BIGINT NOT NULL REFERENCES vm_manuais(id) ON DELETE CASCADE,
+      cluster_id BIGINT NOT NULL, ambiente TEXT NOT NULL, descricao TEXT NOT NULL, tipo TEXT NOT NULL DEFAULT 'visual',
+      peso INTEGER NOT NULL DEFAULT 10, critico BOOLEAN NOT NULL DEFAULT false, pagina INTEGER, referencia_pagina INTEGER,
+      excecoes TEXT, status TEXT NOT NULL DEFAULT 'pendente_homologacao', origem TEXT NOT NULL DEFAULT 'ia',
+      homologado_por TEXT, homologado_em TIMESTAMPTZ, motivo_rejeicao TEXT, ordem INTEGER NOT NULL DEFAULT 0,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS vm_criterios_manual_idx ON vm_criterios (manual_id, status);
+    CREATE TABLE IF NOT EXISTS vm_auditorias (
+      id BIGSERIAL PRIMARY KEY, loja_id BIGINT NOT NULL, data DATE NOT NULL, cluster_id BIGINT, manual_id BIGINT,
+      status TEXT NOT NULL DEFAULT 'pendente', score NUMERIC(5,1), motivos JSONB NOT NULL DEFAULT '[]',
+      limiar NUMERIC(5,1), decidido_por TEXT, decidido_em TIMESTAMPTZ, justificativa TEXT,
+      criada_em TIMESTAMPTZ NOT NULL DEFAULT now(), atualizada_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS vm_auditorias_uq ON vm_auditorias (loja_id, data);
+    CREATE INDEX IF NOT EXISTS vm_auditorias_data_idx ON vm_auditorias (data, status);
+    CREATE TABLE IF NOT EXISTS vm_fotos (
+      id BIGSERIAL PRIMARY KEY, auditoria_id BIGINT NOT NULL REFERENCES vm_auditorias(id) ON DELETE CASCADE,
+      checklist_id BIGINT, ambiente TEXT NOT NULL, rodada INTEGER NOT NULL DEFAULT 1, atual BOOLEAN NOT NULL DEFAULT true,
+      mime TEXT NOT NULL, tamanho INTEGER NOT NULL, dados BYTEA NOT NULL, enviado_por TEXT, enviado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'recebida', qualidade TEXT, observacao_ia TEXT, ia_modelo TEXT, ia_prompt_versao TEXT, analisada_em TIMESTAMPTZ);
+    CREATE INDEX IF NOT EXISTS vm_fotos_aud_idx ON vm_fotos (auditoria_id, ambiente, atual);
+    CREATE TABLE IF NOT EXISTS vm_avaliacoes (
+      id BIGSERIAL PRIMARY KEY, foto_id BIGINT NOT NULL REFERENCES vm_fotos(id) ON DELETE CASCADE,
+      auditoria_id BIGINT NOT NULL, criterio_id BIGINT NOT NULL, resultado TEXT NOT NULL, evidencia TEXT, orientacao TEXT,
+      revisado_resultado TEXT, revisado_por TEXT, revisado_em TIMESTAMPTZ, revisado_justificativa TEXT, criada_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS vm_avaliacoes_foto_idx ON vm_avaliacoes (foto_id);
+    CREATE INDEX IF NOT EXISTS vm_avaliacoes_aud_idx ON vm_avaliacoes (auditoria_id);
+    CREATE TABLE IF NOT EXISTS vm_eventos (
+      id BIGSERIAL PRIMARY KEY, auditoria_id BIGINT, manual_id BIGINT, tipo TEXT NOT NULL, usuario TEXT, detalhe JSONB, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS vm_eventos_aud_idx ON vm_eventos (auditoria_id);
+    CREATE TABLE IF NOT EXISTS vm_ia_log (
+      id BIGSERIAL PRIMARY KEY, tipo TEXT NOT NULL, ref_id BIGINT, modelo TEXT, prompt_versao TEXT, tokens_in INTEGER, tokens_out INTEGER,
+      custo_usd NUMERIC(10,5), latencia_ms INTEGER, ok BOOLEAN NOT NULL DEFAULT true, erro TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS vm_ia_log_data_idx ON vm_ia_log (criado_em);
+    CREATE TABLE IF NOT EXISTS vm_config (chave TEXT PRIMARY KEY, valor TEXT NOT NULL);
+    INSERT INTO vm_config (chave, valor) VALUES ('limiar_aprovacao','90'),('max_nv_pct','25'),('max_reenvios','2'),('teto_dia_usd','20'),('retencao_dias','180') ON CONFLICT (chave) DO NOTHING;`);
+}
+
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
@@ -1365,6 +1431,7 @@ async function migrate() {
   await migrarAdmissao();
   await migrarAdmissaoV3();
   await migrarEstoqueLojas();
+  await migrarVM();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
