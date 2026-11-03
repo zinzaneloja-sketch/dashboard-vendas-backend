@@ -149,7 +149,7 @@ function dispara(fn) { setImmediate(() => { fn().catch((e) => console.error("[ch
 
 // ---------- eu / cadastros ----------
 // Departamentos ocultos por enquanto (não aparecem na abertura de chamados). Para voltar: esvazie a lista.
-const DEPTS_OCULTOS = ["logistica", "manutencao"];
+const DEPTS_OCULTOS = ["logistica"];
 async function listarDepartamentos(soAtivos = true) {
   const { rows } = await pool.query(`SELECT id::int AS id, codigo, nome, emails, ativo, ordem FROM ch_departamentos ${soAtivos ? "WHERE ativo AND codigo <> ALL($1::text[])" : ""} ORDER BY ordem, nome`, soAtivos ? [DEPTS_OCULTOS] : []);
   return rows;
