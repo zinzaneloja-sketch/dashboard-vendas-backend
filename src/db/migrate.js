@@ -1328,9 +1328,18 @@ async function migrarAdmissaoV3() {
   {
     const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'ocultar_logistica_manutencao'");
     if (!fl.length) {
-      const r = await pool.query("UPDATE ch_departamentos SET ativo = false WHERE codigo IN ('logistica','manutencao') AND ativo");
-      if (r.rowCount) console.log("[chamados] Logística e Manutenção ocultadas do módulo de Chamados.");
+      const r = await pool.query("UPDATE ch_departamentos SET ativo = false WHERE codigo IN ('logistica') AND ativo");
+      if (r.rowCount) console.log("[chamados] Logística ocultada do módulo de Chamados.");
       await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('ocultar_logistica_manutencao','1') ON CONFLICT (chave) DO NOTHING");
+    }
+  }
+  // Manutenção volta a aparecer ao lado do DP (uma vez só). Quem ocultou antes tem o departamento inativo no banco.
+  {
+    const { rows: fl } = await pool.query("SELECT 1 FROM ch_config WHERE chave = 'manutencao_reativada'");
+    if (!fl.length) {
+      const r = await pool.query("UPDATE ch_departamentos SET ativo = true WHERE codigo = 'manutencao' AND NOT ativo");
+      if (r.rowCount) console.log("[chamados] Manutenção reativada no módulo de Chamados.");
+      await pool.query("INSERT INTO ch_config (chave, valor) VALUES ('manutencao_reativada','1') ON CONFLICT (chave) DO NOTHING");
     }
   }
 }
