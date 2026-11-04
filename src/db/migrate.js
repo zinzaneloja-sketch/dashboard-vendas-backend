@@ -1451,7 +1451,7 @@ async function migrarPerformance() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cd_perf_lancamentos (
       data DATE NOT NULL,
-      etapa TEXT NOT NULL CHECK (etapa IN ('separacao','etiquetagem','picking','checkout','faturamento')),
+      etapa TEXT NOT NULL CHECK (etapa IN ('separacao','etiquetagem','picking','checkout','faturamento','expedicao')),
       pecas INTEGER NOT NULL CHECK (pecas >= 0),
       pessoas INTEGER NOT NULL CHECK (pessoas >= 0),
       obs TEXT,
@@ -1460,9 +1460,48 @@ async function migrarPerformance() {
       PRIMARY KEY (data, etapa));
     CREATE INDEX IF NOT EXISTS cd_perf_lanc_data_idx ON cd_perf_lancamentos (data);
     CREATE TABLE IF NOT EXISTS cd_perf_metas (
-      etapa TEXT PRIMARY KEY CHECK (etapa IN ('separacao','etiquetagem','picking','checkout','faturamento')),
+      etapa TEXT PRIMARY KEY CHECK (etapa IN ('separacao','etiquetagem','picking','checkout','faturamento','expedicao')),
       meta_dia INTEGER, meta_pessoa NUMERIC(10,2),
       atualizado_por TEXT, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now());`);
+  // bancos que já tinham as 5 etapas: troca a trava (CHECK) para aceitar também a Expedição
+  await pool.query(`
+    DO $$
+    DECLARE t TEXT; c RECORD;
+    BEGIN
+      FOREACH t IN ARRAY ARRAY['cd_perf_lancamentos','cd_perf_metas'] LOOP
+        FOR c IN SELECT conname FROM pg_constraint
+                  WHERE conrelid = t::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%etapa%'
+                    AND pg_get_constraintdef(oid) NOT ILIKE '%expedicao%' LOOP
+          EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', t, c.conname);
+          EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I CHECK (etapa IN (''separacao'',''etiquetagem'',''picking'',''checkout'',''faturamento'',''expedicao''))', t, t || '_etapa_check');
+        END LOOP;
+      END LOOP;
+    END $$;`);
+}
+
+// ---------- Primeiro acesso (a pessoa pede o acesso; o gestor do módulo aprova) ----------
+async function migrarPrimeiroAcesso() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acesso_solicitacoes (
+      id BIGSERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      modulo TEXT NOT NULL CHECK (modulo IN ('chamados','admissao')),
+      obs TEXT,
+      status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente','aprovada','recusada')),
+      perfil JSONB,
+      motivo TEXT,
+      decidido_por TEXT, decidido_em TIMESTAMPTZ,
+      ip TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS acesso_sol_pendente_uq ON acesso_solicitacoes (lower(email), modulo) WHERE status = 'pendente';
+    CREATE INDEX IF NOT EXISTS acesso_sol_status_idx ON acesso_solicitacoes (status, modulo);
+    CREATE TABLE IF NOT EXISTS acesso_aprovadores (
+      modulo TEXT NOT NULL CHECK (modulo IN ('chamados','admissao')),
+      email TEXT NOT NULL,
+      criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (modulo, email));`);
 }
 
 async function migrate() {
@@ -1479,6 +1518,7 @@ async function migrate() {
   await migrarVM();
   await migrarVendasGO();
   await migrarPerformance();
+  await migrarPrimeiroAcesso();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
