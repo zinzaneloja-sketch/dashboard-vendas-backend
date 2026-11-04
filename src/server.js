@@ -594,7 +594,7 @@ app.get(T + "/nfs/:id/arquivo", cdAuth, async (req, res) => {
 // só libera /eu (para a tela saber que precisa trocar). A troca em si é POST /api/auth/trocar-senha.
 const exigeTrocaSenha = (req, res, next) => {
   req.access.ip = req.ip;
-  if (req.access.trocar_senha && !/\/api\/(chamados|admissao|vm)\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
+  if (req.access.trocar_senha && !/\/api\/(chamados|admissao|vm|go-vendas)\/eu\/?$/.test(req.path)) return res.status(403).json({ error: "Troque a sua senha provisória para continuar.", codigo: "trocar_senha" });
   next();
 };
 const chamadosAuth = [requireAuth, requireModule("chamados"), exigeTrocaSenha];
@@ -778,6 +778,21 @@ app.put(VMR + "/avaliacoes/:id/revisar", vmAuth, handle((req) => vm.revisarAvali
 app.get(VMR + "/dashboard", vmAuth, handle((req) => vm.dashboard(req.access, req.query)));
 app.get(VMR + "/ia/uso", vmAuth, handle((req) => vm.usoIA(req.access)));
 app.post(VMR + "/varrer", vmAuth, handle((req) => vm.varrer(req.access, { forcar: req.query.forcar === "1" })));
+// ---- Vendas por GO (painel de acompanhamento + relatórios de WhatsApp) ----
+const gv = require("./vendasgo");
+const gvAuth = [requireAuth, requireModule("govendas"), exigeTrocaSenha];
+const GVR = "/api/go-vendas";
+app.get(GVR + "/eu", gvAuth, handle((req) => gv.eu(req.access)));
+app.get(GVR + "/painel", gvAuth, handle((req) => gv.painel(req.access, req.query)));
+app.put(GVR + "/lojas/:cod/whatsapp", gvAuth, handle((req) => gv.salvarWhats(req.access, String(req.params.cod), req.body || {})));
+app.get(GVR + "/relatorio/geral", gvAuth, handle((req) => gv.relatorioGeral(req.access, req.query)));
+app.get(GVR + "/relatorio/lojas", gvAuth, handle((req) => gv.relatorioLojas(req.access, req.query)));
+app.post(GVR + "/envios", gvAuth, handle((req) => gv.registrarEnvio(req.access, req.body || {})));
+app.post(GVR + "/sincronizar", gvAuth, handle(async (req) => { const p = await gv.papelDe(req.access); gv.exigirDiretoria(p); return gv.sincronizar({ completa: req.query.completa === "1" }); }));
+app.get(GVR + "/esquema", gvAuth, handle(async (req) => { const p = await gv.papelDe(req.access); if (!p.admin) throw gv.erro(403, "Somente o administrador."); return gv.esquema(req.query.q); }));
+const gvSync = (completa) => gv.sincronizar({ completa }).catch((e) => { if (e.status !== 503 && e.status !== 409) console.error("[govendas] sincronização", e.message); });
+setTimeout(() => gvSync(false), 60000);
+setInterval(() => gvSync(false), 30 * 60000);
 setTimeout(() => vm.varrer(null).catch((e) => console.error("[vm] varredura", e.message)), 30000);
 setInterval(() => vm.varrer(null).catch((e) => console.error("[vm] varredura", e.message)), 120000);
 app.listen(PORT, () => console.log(`[server] rodando na porta ${PORT}`));
