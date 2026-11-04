@@ -24,6 +24,7 @@ const {
   requireModule,
 } = require("./auth");
 const auth = require("./auth");
+const solicitacoes = require("./acessos/solicitacoes");
 const cd = require("./cd/cd");
 
 const app = express();
@@ -346,7 +347,9 @@ app.get("/api/debug/sample-product-stock", requireAuth, requireAdmin, handle(asy
 app.post("/api/auth/login", handle(async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    return await auth.fazerLogin(email, password, req.ip);
+    const r = await auth.fazerLogin(email, password, req.ip);
+    r.user.aprovador = await solicitacoes.modulosQueAprova(r.user); // o portal mostra o painel de aprovações
+    return r;
   } catch (err) { if (err.retryAfter) res.set("Retry-After", String(err.retryAfter)); throw err; }
 }));
 // O próprio usuário troca a senha (também usada na troca obrigatória do primeiro acesso).
@@ -358,6 +361,7 @@ app.get("/api/auth/me", requireAuth, handle(async (req) => {
   if (!user) { const err = new Error("Usuário não encontrado."); err.status = 401; throw err; }
   if ((req.user.tv || 0) !== user.token_version) { const err = new Error("Sessão encerrada. Entre novamente."); err.status = 401; throw err; }
   delete user.token_version;
+  user.aprovador = await solicitacoes.modulosQueAprova(user);
   return { user };
 }));
 
@@ -814,6 +818,22 @@ const acAdmin = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 const acAuth = [requireAuth, acAdmin, exigeTrocaSenha];
+// ---- Primeiro acesso: a pessoa pede (público) e o gestor do módulo aprova ----
+app.post("/api/auth/primeiro-acesso", handle((req) => solicitacoes.solicitar(req.body || {}, req.ip)));
+// quem aprova = administrador ou quem o administrador marcou em Acessos (por módulo); o acesso vem fresco do banco
+const aprAuth = [requireAuth, async (req, res, next) => {
+  try {
+    const acc = await auth.loadAccess(req.user.sub);
+    if (!acc) return res.status(401).json({ error: "Usuário não encontrado." });
+    if ((req.user.tv || 0) !== acc.token_version) return res.status(401).json({ error: "Sessão encerrada. Entre novamente." });
+    acc.ip = req.ip; req.access = acc; next();
+  } catch (err) { next(err); }
+}, exigeTrocaSenha];
+app.get("/api/acesso/solicitacoes", aprAuth, handle((req) => solicitacoes.listar(req.access)));
+app.post("/api/acesso/solicitacoes/aprovar", aprAuth, handle((req) => solicitacoes.aprovar(req.access, req.body || {})));
+app.post("/api/acesso/solicitacoes/recusar", aprAuth, handle((req) => solicitacoes.recusar(req.access, req.body || {})));
+app.get("/api/acessos/aprovadores", acAuth, handle(() => solicitacoes.listarAprovadores()));
+app.put("/api/acessos/aprovadores", acAuth, handle((req) => solicitacoes.salvarAprovadores(Object.assign({}, req.access, { ip: req.ip }), req.body || {})));
 app.get("/api/acessos/pessoas", acAuth, handle(() => acessos.listar()));
 app.post("/api/acessos/pessoas", acAuth, handle((req) => acessos.salvar(req.access, req.body || {})));
 app.post("/api/acessos/pessoas/senha", acAuth, handle((req) => acessos.redefinirSenha(req.access, req.body || {})));
