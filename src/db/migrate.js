@@ -1496,6 +1496,8 @@ async function migrarPrimeiroAcesso() {
       ip TEXT,
       criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
     CREATE UNIQUE INDEX IF NOT EXISTS acesso_sol_pendente_uq ON acesso_solicitacoes (lower(email), modulo) WHERE status = 'pendente';
+    ALTER TABLE acesso_solicitacoes ADD COLUMN IF NOT EXISTS loja_id INTEGER;
+    ALTER TABLE acesso_solicitacoes ADD COLUMN IF NOT EXISTS loja_nome TEXT;
     CREATE INDEX IF NOT EXISTS acesso_sol_status_idx ON acesso_solicitacoes (status, modulo);
     CREATE TABLE IF NOT EXISTS acesso_aprovadores (
       modulo TEXT NOT NULL CHECK (modulo IN ('chamados','admissao')),
