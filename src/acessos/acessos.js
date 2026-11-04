@@ -181,4 +181,4 @@ async function excluir(acc, b = {}) {
   return { ok: true };
 }
 
-module.exports = { listar, salvar, redefinirSenha, bloquear, excluir, opcoes };
+module.exports = { listar, salvar, redefinirSenha, bloquear, excluir, opcoes, gruposValidos };
