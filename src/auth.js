@@ -162,6 +162,11 @@ async function fazerLogin(email, password, ip) {
   // compara sempre (mesmo sem usuário) para não revelar por tempo de resposta se o e-mail existe
   const hash = user ? user.password_hash : "$2a$10$CwTycUXWue0Thq9StjUM0uJ8e1x0wV0y2oYb9uG0v1o3kz8m8Jr1u";
   const ok = await bcrypt.compare(String(password), hash);
+  if (!user) {
+    // sem login ainda: se a senha confere com a de um pedido de primeiro acesso, avisa em que pé ele está
+    const msg = await require("./acessos/solicitacoes").mensagemLogin(email, password);
+    if (msg) throw httpErro(403, msg);
+  }
   if (!user || !ok) {
     const bloqueou = seg.falhaLogin(ip, email);
     auditoria.registrar({ usuario: String(email).toLowerCase(), acao: bloqueou ? "login_bloqueado" : "login_falhou", ip, detalhe: bloqueou ? "limite de tentativas atingido" : null });
