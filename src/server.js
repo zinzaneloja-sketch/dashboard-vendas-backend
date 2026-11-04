@@ -726,6 +726,15 @@ app.delete(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.limpar
 app.post(T + "/simular/lote", cdAuth, grande, handle((req) => trn.simularLote(req.access, req.body || {})));
 app.post(T + "/simular/divisao", cdAuth, grande, handle((req) => trn.simularDivisao(req.access, req.body || {})));
 app.post(T + "/simular/divisao/manual", cdAuth, handle((req) => trn.simularDivisaoManual(req.access, req.body || {})));
+// Performance do CD: lançamento diário (peças + pessoas por etapa) e dashboard
+const perf = require("./cd/performance");
+const P = "/api/cd/performance";
+app.get(P + "/dia", cdAuth, handle((req) => perf.obterDia(req.access, { data: req.query.data })));
+app.put(P + "/dia", cdAuth, handle((req) => perf.salvarDia(req.access, req.body || {})));
+app.get(P + "/historico", cdAuth, handle((req) => perf.historico(req.access, { de: req.query.de, ate: req.query.ate })));
+app.get(P + "/dashboard", cdAuth, handle((req) => perf.dashboard(req.access, { de: req.query.de, ate: req.query.ate })));
+app.get(P + "/metas", cdAuth, handle((req) => perf.obterMetas(req.access)));
+app.put(P + "/metas", cdAuth, handle((req) => perf.salvarMetas(req.access, req.body || {})));
 app.get(T + "/transportadoras/:id/prazos", cdAuth, handle((req) => trn.listarPrazos(req.access, nid(req))));
 app.put(T + "/transportadoras/:id/prazos", cdAuth, grandeTabela, handle((req) => trn.salvarPrazos(req.access, nid(req), req.body || {})));
 app.post(T + "/simular", cdAuth, handle((req) => trn.simular(req.access, req.body || {})));
