@@ -42,7 +42,7 @@ app.use("/api/vm/manuais/:id/pdf", express.json({ limit: "36mb" })); // PDF do m
 app.use("/api/vm/manuais/:id/paginas", express.json({ limit: "12mb" })); // páginas do manual já lidas no navegador (texto + JPEG)
 app.use("/api/vm/fotos", express.json({ limit: "9mb" })); // foto do ambiente (reduzida no celular, até 4 MB)
 const jsonPadrao = express.json();
-app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/lote|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
+app.use((req, res, next) => (/^\/api\/cd\/transito\/(nfs|simular\/(lote|divisao)|transportadoras\/\d+\/(tabela|prazos))$/.test(req.path) && (req.method === "POST" || req.method === "PUT") ? next() : jsonPadrao(req, res, next)));
 
 function parseDateRange(req) {
   const { dateFrom, dateTo } = req.query;
@@ -724,6 +724,8 @@ app.post(T + "/transportadoras/:id/tabela", cdAuth, grandeTabela, handle((req) =
 app.get(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.verTabela(req.access, nid(req), { uf: req.query.uf, modal: req.query.modal })));
 app.delete(T + "/transportadoras/:id/tabela", cdAuth, handle((req) => trn.limparTabela(req.access, nid(req), { modal: req.query.modal })));
 app.post(T + "/simular/lote", cdAuth, grande, handle((req) => trn.simularLote(req.access, req.body || {})));
+app.post(T + "/simular/divisao", cdAuth, grande, handle((req) => trn.simularDivisao(req.access, req.body || {})));
+app.post(T + "/simular/divisao/manual", cdAuth, handle((req) => trn.simularDivisaoManual(req.access, req.body || {})));
 app.get(T + "/transportadoras/:id/prazos", cdAuth, handle((req) => trn.listarPrazos(req.access, nid(req))));
 app.put(T + "/transportadoras/:id/prazos", cdAuth, grandeTabela, handle((req) => trn.salvarPrazos(req.access, nid(req), req.body || {})));
 app.post(T + "/simular", cdAuth, handle((req) => trn.simular(req.access, req.body || {})));
