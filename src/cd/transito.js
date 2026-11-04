@@ -1083,9 +1083,224 @@ async function resumo(acc) {
   return { kpis: q.kpis };
 }
 
-const VERSAO = "2026-10-22.1";
+// ---------- simulador de divisão de carga ----------
+// Dividir uma carga em mais de um envio pode sair mais barato quando o excedente por kg é caro (ex.: aéreo acima de 100 kg).
+// Para cada destino, testa de 1 a N envios (com os volumes distribuídos de todas as formas) usando as tabelas de frete cadastradas.
+const DIV_VOL_PADRAO = { c: 50, l: 40, a: 30 }; // cm — o mesmo volume padrão da planilha de comparação
+const arr2 = (x) => Math.round(x * 100) / 100;
+
+// linha da tabela (em memória) que atende cidade/peso: a mesma regra de linhaDaTabela
+function acharLinhaMem(linhas, cidadeNorm, peso) {
+  let melhor = null;
+  for (const r of linhas) {
+    if (Number(r.peso_de) > peso) continue;
+    if (r.peso_ate !== null && r.peso_ate !== undefined && Number(r.peso_ate) < peso) continue;
+    if (r.cidade_norm && r.cidade_norm !== cidadeNorm) continue;
+    if (!melhor) { melhor = r; continue; }
+    const ga = !r.cidade_norm, gb = !melhor.cidade_norm; // cidade específica vence a regra geral da UF
+    if (ga !== gb) { if (!ga) melhor = r; continue; }
+    if (Number(r.peso_de) > Number(melhor.peso_de)) melhor = r;
+  }
+  return melhor;
+}
+function opcoesDivisao(b = {}) {
+  const v = b.volume_cm || {};
+  const dim = { c: numBR(v.c) || DIV_VOL_PADRAO.c, l: numBR(v.l) || DIV_VOL_PADRAO.l, a: numBR(v.a) || DIV_VOL_PADRAO.a };
+  if ([dim.c, dim.l, dim.a].some((x) => !(x > 0 && x <= 500))) throw erro(400, "As medidas do volume padrão devem ser em centímetros (entre 1 e 500).");
+  const maxEnvios = Math.min(Math.max(Math.round(numBR(b.max_envios) || 3), 2), 6);
+  const taxa = Math.max(0, numBR(b.taxa_envio) || 0);
+  const min = Math.max(0, b.economia_min === undefined || b.economia_min === "" || b.economia_min === null ? 200 : (numBR(b.economia_min) || 0));
+  return { dim, m3_volume: (dim.c * dim.l * dim.a) / 1e6, maxEnvios, taxa, min };
+}
+
+// carrega (uma vez) as transportadoras ativas e as linhas da tabela por UF/modal
+async function opsDivisao(db) {
+  const { rows: ts } = await db.query("SELECT id::int AS id, nome, prazo_corridos, prazo_padrao, fator_cub_rod::float AS fator_cub_rod, fator_cub_aereo::float AS fator_cub_aereo, seguro_pct::float AS seguro_pct FROM cd_transportadoras WHERE ativa ORDER BY nome");
+  const ops = [];
+  for (const t of ts) for (const m of await modaisDaTransp(db, t.id)) ops.push({ id: t.id, nome: t.nome, modal: m, t, fator: Number(m === "aereo" ? t.fator_cub_aereo : t.fator_cub_rod) || (m === "aereo" ? FATOR_AEREO : FATOR_RODOVIARIO), cache: new Map() });
+  return ops;
+}
+async function linhasOp(db, op, uf) {
+  if (!op.cache.has(uf)) {
+    const { rows } = await db.query("SELECT cidade_norm, peso_de::float AS peso_de, peso_ate::float AS peso_ate, frete::float AS frete, frete_kg::float AS frete_kg, excedente_kg::float AS excedente_kg, adv_pct::float AS adv_pct, gris_pct::float AS gris_pct, taxa_fixa::float AS taxa_fixa, frete_minimo::float AS frete_minimo, prazo_dias, cidade FROM cd_frete_tabela WHERE transportadora_id = $1 AND uf = $2 AND modal = $3", [op.id, uf, op.modal]);
+    op.cache.set(uf, rows);
+  }
+  return op.cache.get(uf);
+}
+
+// custo de um envio com `v` volumes (peso e valor proporcionais) em uma opção; null se a tabela não cobre
+function custoEnvio(op, linhas, cidadeNorm, c, v) {
+  const pesoReal = c.pesoVol * v, m3 = c.m3Vol * v, pesoCub = m3 > 0 ? arr2(m3 * op.fator) : 0, taxado = Math.max(pesoReal, pesoCub);
+  const row = acharLinhaMem(linhas, cidadeNorm, taxado);
+  if (!row) return null;
+  const k = calcFrete(row, taxado, c.valorVol * v, op.t.seguro_pct);
+  return { volumes: v, peso_real: arr2(pesoReal), peso_cubado: pesoCub ? pesoCub : null, peso_taxado: arr2(taxado), frete: k.total, frete_peso: k.frete_peso, ad_valorem: k.ad_valorem, gris: k.gris, taxa_fixa: k.taxa_fixa };
+}
+
+// melhor divisão de N volumes em até K envios (programação dinâmica). custo[v] = {valor, op?} ou null. Empate: menos envios.
+function melhorDivisao(N, K, custo, taxa) {
+  const INF = 1e18, g = [], pai = [];
+  for (let k = 0; k <= K; k++) { g.push(new Array(N + 1).fill(INF)); pai.push(new Array(N + 1).fill(0)); }
+  g[0][0] = 0;
+  for (let k = 1; k <= K; k++) for (let n = k; n <= N; n++) for (let v = 1; v <= n - (k - 1); v++) {
+    const c = custo[v]; if (!c || g[k - 1][n - v] >= INF) continue;
+    const tot = g[k - 1][n - v] + c.valor + (k > 1 ? taxa : 0);
+    if (tot < g[k][n] - 1e-9) { g[k][n] = tot; pai[k][n] = v; }
+  }
+  let bk = 0; for (let k = 1; k <= K; k++) if (g[k][N] < INF && (bk === 0 || g[k][N] < g[bk][N] - 1e-9)) bk = k;
+  if (!bk) return null;
+  const partes = []; let n = N;
+  for (let k = bk; k >= 1; k--) { const v = pai[k][n]; partes.push(v); n -= v; }
+  partes.sort((a, z) => z - a); // maiores primeiro
+  return { k: bk, partes, total: g[bk][N] };
+}
+
+function montaEnvios(partes, op, linhas, cidadeNorm, c, cust) {
+  return partes.map((v) => ({ ...(cust ? cust[v].det : custoEnvio(op, linhas, cidadeNorm, c, v)), transportadora_id: op.id, nome: op.nome, modal: op.modal }));
+}
+
+async function prazoOp(db, op, uf, cidade, linhas, cidadeNorm, pesoRef) {
+  const row = acharLinhaMem(linhas, cidadeNorm, Math.max(pesoRef, 0.01)) || linhas[0];
+  const cad = op.modal === "rodoviario" ? await prazoCadastrado(db, op.id, uf, cidade) : null;
+  let prazo = null;
+  if (cad) prazo = cad.prazo; else if (row && row.prazo_dias !== null && row.prazo_dias !== undefined) prazo = Number(row.prazo_dias); else if (op.modal === "rodoviario" && op.t.prazo_padrao !== null && op.t.prazo_padrao !== undefined) prazo = Number(op.t.prazo_padrao);
+  return prazo;
+}
+
+async function dividirItem(db, ops, it, o) {
+  const N = it.volumes, K = Math.min(o.maxEnvios, N);
+  const m3Total = it.cubagem && it.cubagem > 0 ? it.cubagem : N * o.m3_volume;
+  const c = { pesoVol: it.peso / N, m3Vol: m3Total / N, valorVol: (it.valor || 0) / N };
+  const cidadeNorm = semAcento(it.cidade);
+  const out = { cubagem_m3: arr2(m3Total), cubagem_origem: it.cubagem && it.cubagem > 0 ? "informada" : "volume padrão", opcoes: [] };
+  const base = { melhor: null };
+  const porOp = [], parciais = [];
+  for (const op of ops) {
+    const linhas = await linhasOp(db, op, it.uf);
+    if (!linhas.length) { out.opcoes.push({ id: op.id, nome: op.nome, modal: op.modal, ok: false, motivo: "Sem tabela para " + it.uf }); continue; }
+    const cust = new Array(N + 1).fill(null);
+    for (let v = 1; v <= N; v++) { const d = custoEnvio(op, linhas, cidadeNorm, c, v); if (d) cust[v] = { valor: d.frete, det: d }; }
+    const unicoDet = cust[N] ? cust[N].det : null;
+    const div = melhorDivisao(N, K, cust, o.taxa);
+    if (!div) {
+      out.opcoes.push({ id: op.id, nome: op.nome, modal: op.modal, ok: false, motivo: "A tabela não cobre os pesos desse destino" });
+      // cobre só envios menores (ex.: tabela até 60 kg): ainda pode entrar no cenário misto
+      const vmax = cust.reduce((m, x, v) => (x ? v : m), 0);
+      if (vmax > 0) { const pz = await prazoOp(db, op, it.uf, it.cidade, linhas, cidadeNorm, cust[vmax].det.peso_taxado); parciais.push({ op, linhas, cust, opc: { prazo_dias: pz } }); }
+      continue;
+    }
+    const envios = montaEnvios(div.partes, op, linhas, cidadeNorm, c, cust);
+    const prazo = await prazoOp(db, op, it.uf, it.cidade, linhas, cidadeNorm, unicoDet ? unicoDet.peso_taxado : envios[0].peso_taxado);
+    const opc = { id: op.id, nome: op.nome, modal: op.modal, ok: true, prazo_dias: prazo, prazo_corridos: !!op.t.prazo_corridos,
+      unico: unicoDet ? { frete: unicoDet.frete, peso_taxado: unicoDet.peso_taxado, peso_cubado: unicoDet.peso_cubado } : null,
+      divisao: { k: div.k, envios, total: arr2(div.total), taxa_envios: arr2((div.k - 1) * o.taxa) } };
+    if (unicoDet) { opc.divisao.economia = arr2(unicoDet.frete - div.total); opc.divisao.economia_pct = unicoDet.frete > 0 ? (unicoDet.frete - div.total) / unicoDet.frete : 0; }
+    out.opcoes.push(opc); porOp.push({ op, linhas, cust, opc });
+    if (unicoDet && (!base.melhor || unicoDet.frete < base.melhor.frete)) base.melhor = { id: op.id, nome: op.nome, modal: op.modal, frete: unicoDet.frete, peso_taxado: unicoDet.peso_taxado, prazo_dias: prazo };
+  }
+  out.sem_divisao = base.melhor; // mandar tudo junto na opção mais barata
+  // 1) uma só transportadora/modal em todos os envios
+  let mesma = null;
+  porOp.forEach((x) => { const d = x.opc.divisao; if (!mesma || d.total < mesma.total - 1e-9) mesma = { id: x.op.id, nome: x.op.nome, modal: x.op.modal, k: d.k, envios: d.envios, total: d.total, prazo_dias: x.opc.prazo_dias }; });
+  // 2) cada envio na opção mais barata (pode misturar)
+  let mista = null;
+  const paraMista = porOp.concat(parciais);
+  if (paraMista.length > 1) {
+    const cm = new Array(N + 1).fill(null);
+    for (let v = 1; v <= N; v++) { let best = null; paraMista.forEach((x) => { const cc = x.cust[v]; if (cc && (!best || cc.valor < best.valor - 1e-9)) best = { valor: cc.valor, x }; }); if (best) cm[v] = best; }
+    const d = melhorDivisao(N, K, cm, o.taxa);
+    if (d) {
+      const envios = d.partes.map((v) => ({ ...cm[v].x.cust[v].det, transportadora_id: cm[v].x.op.id, nome: cm[v].x.op.nome, modal: cm[v].x.op.modal }));
+      const prazos = d.partes.map((v) => cm[v].x.opc.prazo_dias).filter((p) => p !== null && p !== undefined);
+      mista = { k: d.k, envios, total: arr2(d.total), prazo_dias: prazos.length ? Math.max(...prazos) : null, mistura: new Set(envios.map((e) => e.transportadora_id + "|" + e.modal)).size > 1 };
+    }
+  }
+  if (mesma) mesma.total = arr2(mesma.total);
+  out.mesma = mesma; out.mista = mista && mista.mistura ? mista : null;
+  // recomendação: compara com mandar tudo junto na opção mais barata
+  const cands = [mesma, out.mista].filter(Boolean);
+  const melhor = cands.length ? cands.reduce((a, z) => (z.total < a.total - 1e-9 ? z : a)) : null;
+  out.melhor = melhor ? { tipo: melhor === mesma ? "mesma" : "mista" } : null;
+  if (out.sem_divisao && melhor) {
+    const eco = arr2(out.sem_divisao.frete - melhor.total);
+    out.economia = eco; out.economia_pct = out.sem_divisao.frete > 0 ? eco / out.sem_divisao.frete : 0;
+    out.recomendacao = melhor.k > 1 && eco >= o.min ? "dividir" : melhor.k > 1 && eco > 0 ? "marginal" : "manter";
+  } else if (melhor) { out.economia = null; out.recomendacao = melhor.k > 1 ? "dividir" : "manter"; out.obs = "Nenhuma opção aceita a carga inteira num envio só: a divisão é necessária."; }
+  else out.recomendacao = "sem_cotacao";
+  return out;
+}
+
+function lerItensDivisao(rows) {
+  const itens = rows.map((l, i) => ({ linha: i + 1, ref: txt(l.ref).slice(0, 80), uf: txt(l.uf).toUpperCase(), cidade: txt(l.cidade).slice(0, 120), volumes: Math.round(numBR(l.volumes) || 0), peso: numBR(l.peso), valor: numBR(l.valor), cubagem: numBR(l.cubagem) }));
+  itens.forEach((it) => {
+    if (!UFS.has(it.uf)) it.erro = `UF inválida: "${it.uf || "vazia"}"`;
+    else if (!(it.volumes >= 1 && it.volumes <= 400)) it.erro = "Informe a quantidade de volumes (de 1 a 400).";
+    else if (!(it.peso > 0)) it.erro = "Peso inválido ou vazio.";
+    else if (it.cubagem !== null && (it.cubagem < 0 || it.cubagem > 500)) it.erro = "Cubagem inválida (use m³ do total da carga).";
+  });
+  return itens;
+}
+
+async function simularDivisao(acc, b = {}) {
+  exigirFat(acc);
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  if (!rows.length) throw erro(400, "Informe ao menos uma carga.");
+  if (rows.length > 500) throw erro(413, "Máximo de 500 cargas por simulação.");
+  const o = opcoesDivisao(b);
+  const ops = await opsDivisao(pool);
+  if (!ops.length) throw erro(409, "Nenhuma transportadora ativa com tabela de frete importada.");
+  const itens = lerItensDivisao(rows);
+  for (const it of itens) { if (!it.erro) Object.assign(it, await dividirItem(pool, ops, it, o)); }
+  const ok = itens.filter((x) => !x.erro && x.recomendacao && x.recomendacao !== "sem_cotacao");
+  const soma = (a, f) => arr2(a.reduce((s, x) => s + (f(x) || 0), 0));
+  const com = ok.filter((x) => x.sem_divisao && x.melhor);
+  const melhorTotal = (x) => (x.melhor.tipo === "mista" ? x.mista.total : x.mesma.total);
+  const resumo = {
+    linhas: itens.length, simuladas: ok.length, com_erro: itens.filter((x) => x.erro).length, sem_cotacao: itens.filter((x) => !x.erro && x.recomendacao === "sem_cotacao").length,
+    dividir: ok.filter((x) => x.recomendacao === "dividir").length, marginal: ok.filter((x) => x.recomendacao === "marginal").length, manter: ok.filter((x) => x.recomendacao === "manter").length,
+    total_sem_dividir: soma(com, (x) => x.sem_divisao.frete), total_dividindo_tudo: soma(com, (x) => melhorTotal(x)),
+    total_recomendado: soma(com, (x) => (x.recomendacao === "dividir" ? melhorTotal(x) : x.sem_divisao.frete)),
+  };
+  resumo.economia = arr2(resumo.total_sem_dividir - resumo.total_recomendado);
+  resumo.economia_pct = resumo.total_sem_dividir > 0 ? resumo.economia / resumo.total_sem_dividir : 0;
+  return { opcoes: { volume_cm: o.dim, m3_volume: o.m3_volume, max_envios: o.maxEnvios, taxa_envio: o.taxa, economia_min: o.min }, resumo, itens };
+}
+
+// recalcula uma carga com a divisão escolhida na mão (os "volumes por envio" digitados, como as células azuis da planilha)
+async function simularDivisaoManual(acc, b = {}) {
+  exigirFat(acc);
+  const o = opcoesDivisao(b);
+  const it = lerItensDivisao([{ ref: b.ref, uf: b.uf, cidade: b.cidade, volumes: b.volumes, peso: b.peso, valor: b.valor, cubagem: b.cubagem }])[0];
+  if (it.erro) throw erro(400, it.erro);
+  const envios = Array.isArray(b.envios) ? b.envios : [];
+  if (!envios.length || envios.length > 8) throw erro(400, "Informe de 1 a 8 envios.");
+  const vols = envios.map((e) => Math.round(numBR(e.volumes) || 0));
+  if (vols.some((v) => v < 0)) throw erro(400, "Volume negativo.");
+  const usados = envios.map((e, i) => ({ e, v: vols[i] })).filter((x) => x.v > 0);
+  const soma = vols.reduce((a, v) => a + v, 0);
+  if (soma !== it.volumes) return { ok: false, confere: false, soma_volumes: soma, esperado: it.volumes, motivo: "Os volumes dos envios somam " + soma + " e a carga tem " + it.volumes + "." };
+  const ops = await opsDivisao(pool);
+  const m3Total = it.cubagem && it.cubagem > 0 ? it.cubagem : it.volumes * o.m3_volume;
+  const c = { pesoVol: it.peso / it.volumes, m3Vol: m3Total / it.volumes, valorVol: (it.valor || 0) / it.volumes };
+  const cidadeNorm = semAcento(it.cidade);
+  const res = [];
+  for (const x of usados) {
+    const op = ops.find((p) => p.id === Number(x.e.transportadora_id) && p.modal === normModal(x.e.modal));
+    if (!op) { res.push({ volumes: x.v, ok: false, motivo: "Escolha a transportadora e o modal do envio." }); continue; }
+    const det = custoEnvio(op, await linhasOp(pool, op, it.uf), cidadeNorm, c, x.v);
+    res.push(det ? { ...det, ok: true, transportadora_id: op.id, nome: op.nome, modal: op.modal } : { volumes: x.v, ok: false, transportadora_id: op.id, nome: op.nome, modal: op.modal, motivo: "A tabela de " + op.nome + " não cobre esse peso para " + it.uf + "." });
+  }
+  const tudoOk = res.every((r) => r.ok);
+  const total = tudoOk ? arr2(res.reduce((a, r) => a + r.frete, 0) + Math.max(0, res.length - 1) * o.taxa) : null;
+  // comparação com mandar tudo junto na opção mais barata
+  let sem = null;
+  for (const op of ops) { const d = custoEnvio(op, await linhasOp(pool, op, it.uf), cidadeNorm, c, it.volumes); if (d && (!sem || d.frete < sem.frete)) sem = { id: op.id, nome: op.nome, modal: op.modal, frete: d.frete }; }
+  return { ok: tudoOk, confere: true, envios: res, total, taxa_envios: arr2(Math.max(0, res.length - 1) * o.taxa), sem_divisao: sem, economia: total !== null && sem ? arr2(sem.frete - total) : null, economia_pct: total !== null && sem && sem.frete > 0 ? (sem.frete - total) / sem.frete : null };
+}
+
+const VERSAO = "2026-11-05.1";
 module.exports = {
   VERSAO, lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
-  normModal, fluxoPagamento, vencimento, listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
+  normModal, fluxoPagamento, vencimento, listarNfs, detalheNf, enviarNf, editarNf, definirTransportadora, marcarColeta, marcarEntregue, voltarStatus, cancelarNf, excluirNfs, relatorio, simularLote, listarPrazos, salvarPrazos, simularDivisao, simularDivisaoManual, transportadorasLidas, vincularLidas, baixarArquivo, quadro, resumo,
 };
