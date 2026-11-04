@@ -790,6 +790,24 @@ app.get(GVR + "/relatorio/lojas", gvAuth, handle((req) => gv.relatorioLojas(req.
 app.post(GVR + "/envios", gvAuth, handle((req) => gv.registrarEnvio(req.access, req.body || {})));
 app.post(GVR + "/sincronizar", gvAuth, handle(async (req) => { const p = await gv.papelDe(req.access); gv.exigirDiretoria(p); return gv.sincronizar({ completa: req.query.completa === "1" }); }));
 app.get(GVR + "/esquema", gvAuth, handle(async (req) => { const p = await gv.papelDe(req.access); if (!p.admin) throw gv.erro(403, "Somente o administrador."); return gv.esquema(req.query.q); }));
+// ---- Acessos (login único + papel em cada módulo; só administrador) ----
+const acessos = require("./acessos/acessos");
+// carrega o acesso fresco do banco (como requireModule) e exige administrador
+const acAdmin = async (req, res, next) => {
+  try {
+    const acc = await auth.loadAccess(req.user.sub);
+    if (!acc) return res.status(401).json({ error: "Usuário não encontrado." });
+    if ((req.user.tv || 0) !== acc.token_version) return res.status(401).json({ error: "Sessão encerrada. Entre novamente." });
+    if (acc.role !== "admin") return res.status(403).json({ error: "Acesso restrito ao administrador." });
+    req.access = acc; next();
+  } catch (err) { next(err); }
+};
+const acAuth = [requireAuth, acAdmin, exigeTrocaSenha];
+app.get("/api/acessos/pessoas", acAuth, handle(() => acessos.listar()));
+app.post("/api/acessos/pessoas", acAuth, handle((req) => acessos.salvar(req.access, req.body || {})));
+app.post("/api/acessos/pessoas/senha", acAuth, handle((req) => acessos.redefinirSenha(req.access, req.body || {})));
+app.post("/api/acessos/pessoas/bloquear", acAuth, handle((req) => acessos.bloquear(req.access, req.body || {})));
+app.post("/api/acessos/pessoas/excluir", acAuth, handle((req) => acessos.excluir(req.access, req.body || {})));
 const gvSync = (completa) => gv.sincronizar({ completa }).catch((e) => { if (e.status !== 503 && e.status !== 409) console.error("[govendas] sincronização", e.message); });
 setTimeout(() => gvSync(false), 60000);
 setInterval(() => gvSync(false), 30 * 60000);
