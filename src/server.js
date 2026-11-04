@@ -819,6 +819,7 @@ const acAdmin = async (req, res, next) => {
 };
 const acAuth = [requireAuth, acAdmin, exigeTrocaSenha];
 // ---- Primeiro acesso: a pessoa pede (público) e o gestor do módulo aprova ----
+app.get("/api/auth/lojas", handle(() => solicitacoes.lojasPublicas()));
 app.post("/api/auth/primeiro-acesso", handle((req) => solicitacoes.solicitar(req.body || {}, req.ip)));
 // quem aprova = administrador ou quem o administrador marcou em Acessos (por módulo); o acesso vem fresco do banco
 const aprAuth = [requireAuth, async (req, res, next) => {
