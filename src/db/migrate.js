@@ -1446,6 +1446,25 @@ async function migrarVendasGO() {
     CREATE TABLE IF NOT EXISTS gv_meta (chave TEXT PRIMARY KEY, valor TEXT, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now());`);
 }
 
+// ---------- Performance do CD (lançamento diário por etapa: peças + pessoas) ----------
+async function migrarPerformance() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cd_perf_lancamentos (
+      data DATE NOT NULL,
+      etapa TEXT NOT NULL CHECK (etapa IN ('separacao','etiquetagem','picking','checkout','faturamento')),
+      pecas INTEGER NOT NULL CHECK (pecas >= 0),
+      pessoas INTEGER NOT NULL CHECK (pessoas >= 0),
+      obs TEXT,
+      criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      atualizado_por TEXT, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (data, etapa));
+    CREATE INDEX IF NOT EXISTS cd_perf_lanc_data_idx ON cd_perf_lancamentos (data);
+    CREATE TABLE IF NOT EXISTS cd_perf_metas (
+      etapa TEXT PRIMARY KEY CHECK (etapa IN ('separacao','etiquetagem','picking','checkout','faturamento')),
+      meta_dia INTEGER, meta_pessoa NUMERIC(10,2),
+      atualizado_por TEXT, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now());`);
+}
+
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
@@ -1459,6 +1478,7 @@ async function migrate() {
   await migrarEstoqueLojas();
   await migrarVM();
   await migrarVendasGO();
+  await migrarPerformance();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
