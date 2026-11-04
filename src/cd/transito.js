@@ -1110,15 +1110,16 @@ function opcoesDivisao(b = {}) {
   const maxEnvios = Math.min(Math.max(Math.round(numBR(b.max_envios) || 3), 2), 6);
   const taxa = Math.max(0, numBR(b.taxa_envio) || 0);
   const min = Math.max(0, b.economia_min === undefined || b.economia_min === "" || b.economia_min === null ? 200 : (numBR(b.economia_min) || 0));
-  return { dim, m3_volume: (dim.c * dim.l * dim.a) / 1e6, maxEnvios, taxa, min };
+  const mt = txt(b.modal).toLowerCase(), modal = mt === "" || mt === "todos" || mt === "ambos" ? null : normModal(mt);
+  return { dim, m3_volume: (dim.c * dim.l * dim.a) / 1e6, maxEnvios, taxa, min, modal };
 }
 
 // carrega (uma vez) as transportadoras ativas e as linhas da tabela por UF/modal
-async function opsDivisao(db) {
+async function opsDivisao(db, modal) {
   const { rows: ts } = await db.query("SELECT id::int AS id, nome, prazo_corridos, prazo_padrao, fator_cub_rod::float AS fator_cub_rod, fator_cub_aereo::float AS fator_cub_aereo, seguro_pct::float AS seguro_pct FROM cd_transportadoras WHERE ativa ORDER BY nome");
   const ops = [];
   for (const t of ts) for (const m of await modaisDaTransp(db, t.id)) ops.push({ id: t.id, nome: t.nome, modal: m, t, fator: Number(m === "aereo" ? t.fator_cub_aereo : t.fator_cub_rod) || (m === "aereo" ? FATOR_AEREO : FATOR_RODOVIARIO), cache: new Map() });
-  return ops;
+  return modal ? ops.filter((o) => o.modal === modal) : ops;
 }
 async function linhasOp(db, op, uf) {
   if (!op.cache.has(uf)) {
@@ -1247,8 +1248,8 @@ async function simularDivisao(acc, b = {}) {
   if (!rows.length) throw erro(400, "Informe ao menos uma carga.");
   if (rows.length > 500) throw erro(413, "Máximo de 500 cargas por simulação.");
   const o = opcoesDivisao(b);
-  const ops = await opsDivisao(pool);
-  if (!ops.length) throw erro(409, "Nenhuma transportadora ativa com tabela de frete importada.");
+  const ops = await opsDivisao(pool, o.modal);
+  if (!ops.length) throw erro(409, o.modal ? "Nenhuma transportadora ativa com tabela de frete " + (o.modal === "aereo" ? "aérea" : "rodoviária") + " importada." : "Nenhuma transportadora ativa com tabela de frete importada.");
   const itens = lerItensDivisao(rows);
   for (const it of itens) { if (!it.erro) Object.assign(it, await dividirItem(pool, ops, it, o)); }
   const ok = itens.filter((x) => !x.erro && x.recomendacao && x.recomendacao !== "sem_cotacao");
@@ -1263,7 +1264,7 @@ async function simularDivisao(acc, b = {}) {
   };
   resumo.economia = arr2(resumo.total_sem_dividir - resumo.total_recomendado);
   resumo.economia_pct = resumo.total_sem_dividir > 0 ? resumo.economia / resumo.total_sem_dividir : 0;
-  return { opcoes: { volume_cm: o.dim, m3_volume: o.m3_volume, max_envios: o.maxEnvios, taxa_envio: o.taxa, economia_min: o.min }, resumo, itens };
+  return { opcoes: { volume_cm: o.dim, m3_volume: o.m3_volume, max_envios: o.maxEnvios, taxa_envio: o.taxa, economia_min: o.min, modal: o.modal }, resumo, itens };
 }
 
 // recalcula uma carga com a divisão escolhida na mão (os "volumes por envio" digitados, como as células azuis da planilha)
@@ -1279,7 +1280,7 @@ async function simularDivisaoManual(acc, b = {}) {
   const usados = envios.map((e, i) => ({ e, v: vols[i] })).filter((x) => x.v > 0);
   const soma = vols.reduce((a, v) => a + v, 0);
   if (soma !== it.volumes) return { ok: false, confere: false, soma_volumes: soma, esperado: it.volumes, motivo: "Os volumes dos envios somam " + soma + " e a carga tem " + it.volumes + "." };
-  const ops = await opsDivisao(pool);
+  const ops = await opsDivisao(pool, o.modal);
   const m3Total = it.cubagem && it.cubagem > 0 ? it.cubagem : it.volumes * o.m3_volume;
   const c = { pesoVol: it.peso / it.volumes, m3Vol: m3Total / it.volumes, valorVol: (it.valor || 0) / it.volumes };
   const cidadeNorm = semAcento(it.cidade);
@@ -1298,7 +1299,7 @@ async function simularDivisaoManual(acc, b = {}) {
   return { ok: tudoOk, confere: true, envios: res, total, taxa_envios: arr2(Math.max(0, res.length - 1) * o.taxa), sem_divisao: sem, economia: total !== null && sem ? arr2(sem.frete - total) : null, economia_pct: total !== null && sem && sem.frete > 0 ? (sem.frete - total) / sem.frete : null };
 }
 
-const VERSAO = "2026-11-05.1";
+const VERSAO = "2026-11-05.2";
 module.exports = {
   VERSAO, lerXmlSaida, calcFrete, addDias, numBR,
   listarTransportadoras, salvarTransportadora, importarTabela, verTabela, limparTabela, simular,
