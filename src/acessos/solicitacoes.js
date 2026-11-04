@@ -28,6 +28,13 @@ function estourou(chave, max, ms) {
   return false;
 }
 
+/** Lojas para a pessoa escolher na tela de primeiro acesso (público: só id e nome, nunca e-mail). */
+async function lojasPublicas() {
+  if (process.env.PRIMEIRO_ACESSO === "0") return { lojas: [] };
+  const { rows } = await pool.query("SELECT id::int AS id, trim(nome) AS nome FROM ch_lojas WHERE ativa AND coalesce(trim(nome),'') <> '' ORDER BY lower(nome)");
+  return { lojas: rows };
+}
+
 /** Pedido público de primeiro acesso. Devolve só um "ok": nada aqui dá acesso. */
 async function solicitar(b = {}, ip) {
   if (process.env.PRIMEIRO_ACESSO === "0") throw erro(403, "O primeiro acesso está desativado. Fale com o administrador.");
@@ -36,6 +43,16 @@ async function solicitar(b = {}, ip) {
   if (!emailOk(email)) throw erro(400, "Informe um e-mail válido.");
   const dom = String(process.env.PRIMEIRO_ACESSO_DOMINIOS || "").split(",").map((s) => s.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
   if (dom.length && !dom.includes(email.split("@")[1])) throw erro(400, "Use o seu e-mail corporativo (" + dom.map((d) => "@" + d).join(", ") + ").");
+  // loja: escolhe uma loja do cadastro, ou "Matriz / Escritório" (sem_loja) para quem não é de loja
+  let lojaId = null, lojaNome;
+  if (b.sem_loja === true || b.sem_loja === "1") lojaNome = "Matriz / Escritório";
+  else {
+    lojaId = Number(b.loja_id) || 0;
+    if (!lojaId) throw erro(400, "Escolha a sua loja (ou Matriz / Escritório, se você não é de loja).");
+    const { rows: lj } = await pool.query("SELECT trim(nome) AS nome FROM ch_lojas WHERE id = $1 AND ativa", [lojaId]);
+    if (!lj.length) throw erro(400, "Loja não encontrada. Escolha uma loja da lista.");
+    lojaNome = lj[0].nome;
+  }
   let mods = [...new Set((Array.isArray(b.modulos) ? b.modulos : []).filter((m) => MODULOS.includes(m)))];
   if (!mods.length) throw erro(400, "Escolha o módulo em que precisa de acesso (Chamados e/ou Admissão e Rescisão).");
   if (String(b.senha || "") !== String(b.confirmar ?? b.senha)) throw erro(400, "A confirmação da senha não confere.");
@@ -59,14 +76,14 @@ async function solicitar(b = {}, ip) {
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
-    for (const m of mods) await c.query("INSERT INTO acesso_solicitacoes (email, nome, password_hash, modulo, obs, ip) VALUES ($1,$2,$3,$4,$5,$6)", [email, nome, hash, m, obs || null, ip || null]);
+    for (const m of mods) await c.query("INSERT INTO acesso_solicitacoes (email, nome, password_hash, modulo, obs, ip, loja_id, loja_nome) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [email, nome, hash, m, obs || null, ip || null, lojaId, lojaNome]);
     await c.query("COMMIT");
   } catch (e) {
     try { await c.query("ROLLBACK"); } catch (_) { /* ignora */ }
     if (e.code === "23505") throw erro(409, "Já existe um pedido aguardando aprovação para esse e-mail.");
     throw e;
   } finally { c.release(); }
-  auditoria.registrar({ usuario: email, acao: "acesso_solicitado", ip, detalhe: "Primeiro acesso · " + mods.join(", ") });
+  auditoria.registrar({ usuario: email, acao: "acesso_solicitado", ip, detalhe: "Primeiro acesso · " + mods.join(", ") + " · " + lojaNome });
   return { ok: true, modulos: mods };
 }
 
@@ -95,10 +112,10 @@ async function listar(acc) {
   const mods = await modulosQueAprova(acc);
   if (!mods.length) return { modulos_aprovo: [], pendentes: 0, itens: [], recentes: [] };
   const [it, rc, op] = await Promise.all([
-    pool.query(`SELECT s.id::int AS id, s.nome, s.email, s.modulo, s.obs, s.criado_em,
+    pool.query(`SELECT s.id::int AS id, s.nome, s.email, s.modulo, s.obs, s.loja_id::int AS loja_id, s.loja_nome, s.criado_em,
                        EXISTS (SELECT 1 FROM users u WHERE lower(u.email) = lower(s.email)) AS ja_tem_login
                   FROM acesso_solicitacoes s WHERE s.status = 'pendente' AND s.modulo = ANY($1) ORDER BY s.criado_em`, [mods]),
-    pool.query(`SELECT id::int AS id, nome, email, modulo, status, motivo, perfil, decidido_por, decidido_em
+    pool.query(`SELECT id::int AS id, nome, email, modulo, loja_nome, status, motivo, perfil, decidido_por, decidido_em
                   FROM acesso_solicitacoes WHERE status <> 'pendente' AND modulo = ANY($1) ORDER BY decidido_em DESC NULLS LAST, id DESC LIMIT 20`, [mods]),
     acessos.opcoes(),
   ]);
@@ -215,4 +232,4 @@ async function salvarAprovadores(acc, b = {}) {
   return { ok: true };
 }
 
-module.exports = { solicitar, mensagemLogin, modulosQueAprova, listar, aprovar, recusar, listarAprovadores, salvarAprovadores, MODULOS };
+module.exports = { lojasPublicas, solicitar, mensagemLogin, modulosQueAprova, listar, aprovar, recusar, listarAprovadores, salvarAprovadores, MODULOS };
