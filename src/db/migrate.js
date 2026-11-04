@@ -1429,6 +1429,23 @@ async function migrarVM() {
     INSERT INTO vm_config (chave, valor) VALUES ('limiar_aprovacao','90'),('max_nv_pct','25'),('max_reenvios','2'),('teto_dia_usd','20'),('retencao_dias','180') ON CONFLICT (chave) DO NOTHING;`);
 }
 
+// ---------- Vendas por GO (painel de acompanhamento; dados copiados da retaguarda, só leitura) ----------
+async function migrarVendasGO() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS gv_lojas (
+      cod TEXT PRIMARY KEY, nome TEXT NOT NULL, go TEXT, go_manual TEXT, gerente TEXT, cluster TEXT, uf TEXT, regiao TEXT,
+      area_m2 NUMERIC, hc_necessario INTEGER, hc_real INTEGER, custo_ocupacao NUMERIC, gerente_whatsapp TEXT,
+      ativa BOOLEAN NOT NULL DEFAULT true, atualizada_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS gv_lojas_go_idx ON gv_lojas (lower(go));
+    CREATE TABLE IF NOT EXISTS gv_vendas_dia (
+      cod TEXT NOT NULL, data DATE NOT NULL, venda NUMERIC(14,2) NOT NULL DEFAULT 0, tickets INTEGER NOT NULL DEFAULT 0, pecas INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (cod, data));
+    CREATE INDEX IF NOT EXISTS gv_vendas_dia_data_idx ON gv_vendas_dia (data);
+    CREATE TABLE IF NOT EXISTS gv_envios (
+      id BIGSERIAL PRIMARY KEY, usuario TEXT, papel TEXT, tipo TEXT NOT NULL, destino TEXT, ref TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS gv_meta (chave TEXT PRIMARY KEY, valor TEXT, atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now());`);
+}
+
 async function migrate() {
   await pool.query(SQL);
   await migrarEtapas14();
@@ -1441,6 +1458,7 @@ async function migrate() {
   await migrarAdmissaoV3();
   await migrarEstoqueLojas();
   await migrarVM();
+  await migrarVendasGO();
   await semearCores();
   await seedAdmin();
   console.log("Migração concluída.");
