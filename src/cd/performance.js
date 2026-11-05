@@ -11,6 +11,7 @@ const ETAPAS = [
   { chave: "picking", nome: "Picking" },
   { chave: "checkout", nome: "Checkout" },
   { chave: "faturamento", nome: "Faturamento" },
+  { chave: "expedicao", nome: "Expedição" },
 ];
 const CHAVES = ETAPAS.map((e) => e.chave);
 const NOME = Object.fromEntries(ETAPAS.map((e) => [e.chave, e.nome]));
@@ -75,7 +76,7 @@ async function obterDia(acc, { data } = {}) {
   };
 }
 
-// grava (ou apaga, se vier em branco) as 5 etapas do dia de uma vez
+// grava (ou apaga, se vier em branco) todas as etapas do dia de uma vez
 async function salvarDia(acc, b = {}) {
   exigirPerf(acc);
   const data = validaData(b.data);
@@ -245,6 +246,7 @@ async function dashboard(acc, b = {}) {
     kpis: {
       dias_lancados: datasLanc.length, dias_completos: completos.length, dias_sem_lancamento: Math.max(0, dias - datasLanc.length),
       pecas_faturadas: (etapas.find((e) => e.etapa === "faturamento") || {}).pecas || 0,
+      pecas_expedidas: (etapas.find((e) => e.etapa === "expedicao") || {}).pecas || 0,
       pecas_por_pessoa_geral: (() => { const t = comDados.reduce((a, e) => a + e.pecas, 0), p = comDados.reduce((a, e) => a + e.pessoas_dia, 0); return p ? r1(t / p) : null; })(),
       pessoas_dia_total: comDados.reduce((a, e) => a + e.pessoas_dia, 0),
       ultimo_lancamento_em: ultimo,
@@ -255,5 +257,5 @@ async function dashboard(acc, b = {}) {
   };
 }
 
-const VERSAO = "2026-11-06.1";
+const VERSAO = "2026-11-06.2";
 module.exports = { ETAPAS, obterDia, salvarDia, obterMetas, salvarMetas, historico, dashboard, VERSAO };
